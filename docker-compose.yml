@@ -1,0 +1,146 @@
+# Full containerised stack: portal, api, worker, and their infrastructure.
+#
+#   docker compose up -d --build
+#   open http://localhost:8080
+#
+# For day-to-day development run only the infrastructure
+# (docker-compose.infra.yml) and start the api, worker and portal from your
+# shell — the rebuild loop is far shorter.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: uae
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-uae_dev_password}
+      POSTGRES_DB: uae_einvoice
+      # Consumed by infra/postgres/init/01-app-role.sh; must match the password
+      # in DATABASE_APP_URL below or the API cannot authenticate.
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-uae_app_dev_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uae -d uae_einvoice"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+    ports:
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Object Lock can only be enabled when a bucket is created, never afterwards,
+  # so the archive bucket is provisioned by its own one-shot job.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY_ID:-minioadmin} ${S3_SECRET_ACCESS_KEY:-minioadmin} &&
+      (mc ls local/uae-einvoice-archive >/dev/null 2>&1 ||
+        mc mb --with-lock local/uae-einvoice-archive) &&
+      mc retention set --default COMPLIANCE ${S3_RETENTION_YEARS:-5}y local/uae-einvoice-archive &&
+      mc version enable local/uae-einvoice-archive
+      "
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment: &app_env
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      API_PORT: 3100
+      # What a real provider would call back on — through the portal's proxy.
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:8080}
+      # Where this system reaches its own API from inside the compose network.
+      API_INTERNAL_URL: http://api:3100
+      PORTAL_ORIGIN: ${PORTAL_ORIGIN:-http://localhost:8080}
+      DATABASE_URL: postgres://uae:${POSTGRES_PASSWORD:-uae_dev_password}@postgres:5432/uae_einvoice
+      DATABASE_APP_URL: postgres://uae_app:${APP_DB_PASSWORD:-uae_app_dev_password}@postgres:5432/uae_einvoice
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: ${S3_REGION:-me-central-1}
+      S3_BUCKET: uae-einvoice-archive
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minioadmin}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+      S3_FORCE_PATH_STYLE: "true"
+      S3_RETENTION_YEARS: ${S3_RETENTION_YEARS:-5}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET in .env}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?set JWT_REFRESH_SECRET in .env}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:?set SECRETS_ENCRYPTION_KEY in .env}
+      MFA_ISSUER: ${MFA_ISSUER:-UAE E-Invoicing}
+      ASP_DEFAULT_DRIVER: ${ASP_DEFAULT_DRIVER:-MOCK}
+      ASP_MOCK_REJECT_RATE: ${ASP_MOCK_REJECT_RATE:-0.15}
+      ASP_MOCK_LATENCY_MS: ${ASP_MOCK_LATENCY_MS:-1200}
+      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-52428800}
+      UPLOAD_MAX_ROWS: ${UPLOAD_MAX_ROWS:-20000}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["node", "node_modules/tsx/dist/cli.mjs", "src/worker.ts"]
+    depends_on:
+      api:
+        # The API owns migrations, so the worker must not start against a
+        # schema that does not exist yet.
+        condition: service_healthy
+    environment:
+      <<: *app_env
+      RUN_MIGRATIONS: "false"
+
+  portal:
+    build:
+      context: .
+      dockerfile: apps/portal/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

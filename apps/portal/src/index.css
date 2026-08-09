@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+  }
+
+  /* Arabic legal names appear throughout. Without this they render with the
+     Latin fallback and look broken next to their English counterparts. */
+  [lang='ar'],
+  .arabic {
+    font-family: 'Segoe UI', 'Tahoma', 'Arial', sans-serif;
+    direction: rtl;
+    unicode-bidi: isolate;
+  }
+}
+
+@layer components {
+  /* The staging grid's cell states. Defined here rather than inline because
+     they are referenced from several components and must stay identical —
+     a red that differs between the grid and the error sidebar reads as two
+     different severities. */
+  .cell-error {
+    @apply bg-danger-50 ring-1 ring-inset ring-danger-500;
+  }
+
+  .cell-warn {
+    @apply bg-warn-50 ring-1 ring-inset ring-warn-500;
+  }
+
+  .cell-fixed {
+    animation: flashOk 1.2s ease-out;
+  }
+}

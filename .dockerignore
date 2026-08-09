@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+dist
+**/dist
+.turbo
+**/.turbo
+.git
+.logs
+.env
+.env.local
+reference
+*.log
+coverage

@@ -155,7 +155,9 @@ export class MockAspDriver implements AspDriver {
     }
 
     const delay = Math.max(500, record.availableAt - Date.now() + 250);
-    const url = `${config().API_PUBLIC_URL}/api/v1/webhooks/asp/${tenantConfig.tenantId}`;
+    // The INTERNAL address: this callback is a loopback within the deployment,
+    // so it must not depend on the public URL being reachable from in here.
+    const url = `${config().internalApiUrl}/api/v1/webhooks/asp/${tenantConfig.tenantId}`;
 
     const timer = setTimeout(() => {
       const body = buildMockWebhookBody(

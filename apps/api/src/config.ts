@@ -19,6 +19,10 @@ const EnvSchema = z.object({
   LOG_LEVEL: z.string().default('info'),
 
   API_PORT: z.coerce.number().int().default(3000),
+  // The address this system uses to reach its own API. Differs from the public
+  // one whenever a proxy or container network sits in between; the simulated
+  // provider posts its callback here so it never has to leave the deployment.
+  API_INTERNAL_URL: z.string().optional(),
   API_PUBLIC_URL: z.string().default('http://localhost:3000'),
   PORTAL_ORIGIN: z.string().default('http://localhost:5173'),
 
@@ -74,11 +78,23 @@ function load() {
   }
 
   if (env.NODE_ENV === 'production') {
-    const weak = [env.JWT_ACCESS_SECRET, env.JWT_REFRESH_SECRET, env.SECRETS_ENCRYPTION_KEY].some(
-      (v) => v.includes('dev_only') || v.includes('change_me') || v.includes('replace_me'),
-    );
-    if (weak) {
-      throw new Error('Refusing to start in production with development secrets still in place.');
+    const placeholder = /dev_only|change_me|replace_me/i;
+
+    // The encryption key is checked DECODED as well as raw. The shipped
+    // placeholder is base64, so its text does not contain any of these markers
+    // — a raw-only check would happily start production with a key that is
+    // published in this repository.
+    const suspects = [
+      env.JWT_ACCESS_SECRET,
+      env.JWT_REFRESH_SECRET,
+      env.SECRETS_ENCRYPTION_KEY,
+      key.toString('utf8'),
+    ];
+
+    if (suspects.some((value) => placeholder.test(value))) {
+      throw new Error(
+        'Refusing to start in production with development secrets still in place. Run: node scripts/generate-secrets.mjs',
+      );
     }
   }
 
@@ -86,6 +102,7 @@ function load() {
     ...env,
     /** Runtime connections use the non-owner role so RLS is actually enforced. */
     appDatabaseUrl: env.DATABASE_APP_URL || env.DATABASE_URL,
+    internalApiUrl: env.API_INTERNAL_URL || `http://127.0.0.1:${env.API_PORT}`,
     secretsKey: key,
     isProduction: env.NODE_ENV === 'production',
     isTest: env.NODE_ENV === 'test',
