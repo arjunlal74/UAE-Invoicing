@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { loadEnv } from './env.js';
 
 /**
  * Environment configuration, validated once at boot.
@@ -51,6 +52,10 @@ const EnvSchema = z.object({
 });
 
 function load() {
+  // Done here rather than in each entrypoint so that any code path reaching
+  // config() — server, worker, migrations, seed, tests — sees the same values.
+  loadEnv();
+
   const parsed = EnvSchema.safeParse(process.env);
   if (!parsed.success) {
     const issues = parsed.error.issues

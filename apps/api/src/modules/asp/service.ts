@@ -47,6 +47,7 @@ interface AspConfigRow {
   api_endpoint: string;
   credentials_cipher: string | null;
   provider_account_id: string | null;
+  webhook_secret_hash: string | null;
   status: AspConfigResponse['status'];
   notes: string | null;
   last_tested_at: Date | null;

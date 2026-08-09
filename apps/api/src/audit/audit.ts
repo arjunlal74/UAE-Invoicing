@@ -1,4 +1,4 @@
-import { sql } from '../db/client.js';
+import { jsonb, sql } from '../db/client.js';
 import { logger } from '../logger.js';
 import type { RequestContext } from '../http/context.js';
 
@@ -90,7 +90,9 @@ export async function audit(actor: AuditActor, entry: AuditEntry): Promise<void>
         ${entry.resourceId ?? null},
         ${actor.ip ?? null}::inet,
         ${actor.userAgent ?? null},
-        ${entry.changes ? JSON.stringify(entry.changes) : null}::jsonb
+        ${entry.changes === undefined || entry.changes === null
+          ? null
+          : jsonb(sql(), entry.changes)}
       )
     `;
   } catch (err) {

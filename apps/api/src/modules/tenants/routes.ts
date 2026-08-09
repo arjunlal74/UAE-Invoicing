@@ -9,7 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit, diff } from '../../audit/audit.js';
 import { createInvite } from '../../auth/service.js';
 import { config } from '../../config.js';
-import { sql, withPlatformAccess } from '../../db/client.js';
+import { jsonb, sql, withPlatformAccess } from '../../db/client.js';
 import { requireAuth, requireContext, requirePlatform } from '../../http/context.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { logger } from '../../logger.js';
@@ -95,7 +95,7 @@ export function registerTenantRoutes(app: FastifyInstance) {
         ) VALUES (
           ${body.companyCode}, ${body.legalNameEn}, ${body.legalNameAr}, ${body.trn},
           ${body.isVatGroup}, ${body.vatGroupTrn ?? null},
-          ${JSON.stringify(body.registeredAddress)}::jsonb, 'PENDING'
+          ${jsonb(tx, body.registeredAddress)}, 'PENDING'
         )
         RETURNING id
       `;
@@ -206,7 +206,7 @@ export function registerTenantRoutes(app: FastifyInstance) {
           legal_name_ar      = ${body.legalNameAr ?? before.legal_name_ar},
           is_vat_group       = ${isVatGroup},
           vat_group_trn      = ${vatGroupTrn},
-          registered_address = ${JSON.stringify(body.registeredAddress ?? before.registered_address)}::jsonb
+          registered_address = ${jsonb(tx, body.registeredAddress ?? before.registered_address)}
         WHERE id = ${id}
       `;
 
@@ -321,9 +321,9 @@ export function registerTenantRoutes(app: FastifyInstance) {
       UPDATE tenants SET
         legal_name_en      = coalesce(${body.legalNameEn ?? null}, legal_name_en),
         legal_name_ar      = coalesce(${body.legalNameAr ?? null}, legal_name_ar),
-        registered_address = coalesce(${
-          body.registeredAddress ? JSON.stringify(body.registeredAddress) : null
-        }::jsonb, registered_address)
+        registered_address = ${
+          body.registeredAddress ? jsonb(sql(), body.registeredAddress) : sql()`registered_address`
+        }
       WHERE id = ${ctx.tenantId}
     `;
 

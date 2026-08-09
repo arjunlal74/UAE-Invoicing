@@ -1,6 +1,7 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import { config } from '../../config.js';
 import { safeEqual } from '../../lib/crypto.js';
+import { logger } from '../../logger.js';
 import type {
   AspDriver,
   AspStatusOutcome,
@@ -79,7 +80,7 @@ export class MockAspDriver implements AspDriver {
 
   async submitInvoice(
     request: AspSubmissionRequest,
-    _config: AspTenantConfig,
+    tenantConfig: AspTenantConfig,
   ): Promise<AspSubmissionOutcome> {
     const cfg = config();
 
@@ -109,7 +110,7 @@ export class MockAspDriver implements AspDriver {
     const rejected = roll < cfg.ASP_MOCK_REJECT_RATE;
     const scenario = REJECTION_SCENARIOS[Math.floor(roll * 1000) % REJECTION_SCENARIOS.length]!;
 
-    submissions.set(reference, {
+    const record: MockRecord = {
       reference,
       invoiceNumber: request.invoiceNumber,
       peppolUuid: request.peppolUuid,
@@ -120,10 +121,75 @@ export class MockAspDriver implements AspDriver {
       // reason the status polling and webhook paths exist.
       availableAt: Date.now() + cfg.ASP_MOCK_LATENCY_MS * 2,
       idempotencyKey: request.idempotencyKey,
-    });
+    };
+
+    submissions.set(reference, record);
     byIdempotencyKey.set(request.idempotencyKey, reference);
 
+    this.scheduleCallback(record, tenantConfig);
+
     return { kind: 'accepted', transmissionReference: reference, httpStatus: 202 };
+  }
+
+  /**
+   * Deliver the verdict back over HTTP, exactly as a real provider would.
+   *
+   * A simulator that only answered `getStatus` would leave the inbound webhook
+   * route — signature verification, replay de-duplication, out-of-order
+   * protection — completely unexercised until the day a real provider is
+   * connected. Posting a genuinely signed callback means that path runs on
+   * every development submission.
+   *
+   * Failures are swallowed and logged: if the callback cannot be delivered the
+   * polling sweeper still resolves the invoice, which is precisely the
+   * belt-and-braces behaviour being modelled.
+   */
+  private scheduleCallback(record: MockRecord, tenantConfig: AspTenantConfig): void {
+    const secret = tenantConfig.credentials.webhookSecret;
+    if (!secret) {
+      logger.warn(
+        { tenantId: tenantConfig.tenantId },
+        'mock provider has no webhook secret configured; verdict will arrive via polling only',
+      );
+      return;
+    }
+
+    const delay = Math.max(500, record.availableAt - Date.now() + 250);
+    const url = `${config().API_PUBLIC_URL}/api/v1/webhooks/asp/${tenantConfig.tenantId}`;
+
+    const timer = setTimeout(() => {
+      const body = buildMockWebhookBody(
+        record,
+        record.verdict === 'accepted' ? 'ACCEPTED' : 'REJECTED',
+        record.verdict === 'rejected'
+          ? { code: record.ruleCode ?? 'ASP-REJECTION', message: record.reason ?? 'Rejected' }
+          : undefined,
+      );
+
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-asp-signature': signMockWebhook(secret, body),
+        },
+        body,
+        signal: AbortSignal.timeout(10_000),
+      })
+        .then((response) => {
+          if (!response.ok) {
+            logger.warn(
+              { status: response.status, reference: record.reference },
+              'mock provider callback was not accepted',
+            );
+          }
+        })
+        .catch((err) => {
+          logger.warn({ err, reference: record.reference }, 'mock provider callback failed');
+        });
+    }, delay);
+
+    // Must not keep the worker process alive on shutdown.
+    timer.unref?.();
   }
 
   async getStatus(

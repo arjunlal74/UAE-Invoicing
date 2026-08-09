@@ -42,6 +42,23 @@ export type Sql = postgres.Sql;
 export type Tx = postgres.TransactionSql;
 
 /**
+ * Bind a value as jsonb.
+ *
+ * Always use this instead of `${JSON.stringify(value)}::jsonb`. That form looks
+ * correct and is not: postgres.js applies its own JSON serialisation on top of
+ * the already-serialised string, so the column ends up holding a jsonb *string
+ * scalar* rather than the document. Reads then return a string, and
+ * `jsonb_typeof` reports 'string' — a failure that surfaces far from its cause.
+ *
+ * The cast to `never` is here because postgres.js's JSONValue type only admits
+ * types with an index signature, which plain interfaces do not have. Confining
+ * it to this one function keeps that noise out of the call sites.
+ */
+export function jsonb(client: Sql | Tx, value: unknown) {
+  return (client as Sql).json(value as never);
+}
+
+/**
  * Run `fn` with tenant scoping applied. Every statement inside sees only rows
  * belonging to `tenantId`.
  */

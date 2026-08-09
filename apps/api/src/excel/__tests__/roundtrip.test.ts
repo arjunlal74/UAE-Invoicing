@@ -1,3 +1,4 @@
+import { recalcInvoice } from '@uae/domain';
 import ExcelJS from 'exceljs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { WorkbookParseError, parseWorkbook } from '../parse.js';
@@ -156,14 +157,17 @@ describe('round trip', () => {
     expect(first.supplierTrn).toBe(SUPPLIER_TRN);
     expect(first.buyerTrn).toBe('100384759200003');
     expect(first.lines).toHaveLength(2);
+
+    // The parser returns values as supplied; totals come from recalculation.
+    const firstTotals = recalcInvoice(first);
     // 1*5000 + 2*750 = 6500 net, VAT 325
-    expect(first.lineExtensionAmount).toBe('6500.00');
-    expect(first.vatTotalAmount).toBe('325.00');
-    expect(first.payableAmount).toBe('6825.00');
+    expect(firstTotals.lineExtensionAmount).toBe('6500.00');
+    expect(firstTotals.vatTotalAmount).toBe('325.00');
+    expect(firstTotals.payableAmount).toBe('6825.00');
 
     const second = result.invoices[1]!;
     expect(second.buyerTrn).toBe('');
-    expect(second.payableAmount).toBe('787.50');
+    expect(recalcInvoice(second).payableAmount).toBe('787.50');
   });
 
   it('records the source row of every value for cell mapping', async () => {
@@ -241,10 +245,30 @@ describe('round trip', () => {
     ]);
 
     const result = await parseWorkbook(file, { maxRows: 1000 });
-    // recalcInvoice overwrites the derived fields with correct values...
-    expect(result.invoices[0]!.lines[0]!.vatAmount).toBe('5.00');
-    // ...and the totals follow the correct figures, not the typed ones.
-    expect(result.invoices[0]!.payableAmount).toBe('105.00');
+
+    // The hand-typed figures survive parsing untouched, which is what lets
+    // validation compare them against the formula and report the discrepancy.
+    expect(result.invoices[0]!.lines[0]!.vatAmount).toBe('1');
+    expect(result.invoices[0]!.lines[0]!.lineTotal).toBe('101');
+
+    // Recalculation then produces the figures that are actually filed.
+    const recalculated = recalcInvoice(result.invoices[0]!);
+    expect(recalculated.lines[0]!.vatAmount).toBe('5.00');
+    expect(recalculated.payableAmount).toBe('105.00');
+  });
+
+  it('preserves a VAT rate that contradicts its category, for validation to catch', async () => {
+    const file = await fillTemplate([
+      {
+        header: { A: 'INV-1', B: '380', C: '2026-08-01', D: '10:00:00', J: 'Buyer', K: 'Dubai', N: '30' },
+        // Zero-rated category, but the rate column says 5%.
+        lines: [{ A: 'INV-1', B: 1, C: 'Exported Goods', E: 1, F: 'PCE', G: 2000, I: 'Z', J: 5 }],
+      },
+    ]);
+
+    const result = await parseWorkbook(file, { maxRows: 1000 });
+    expect(result.invoices[0]!.lines[0]!.vatCategory).toBe('Z');
+    expect(result.invoices[0]!.lines[0]!.vatRate).toBe('5');
   });
 
   it('rejects a workbook whose sheets are missing', async () => {
@@ -302,6 +326,6 @@ describe('round trip', () => {
     expect(result.invoices).toHaveLength(1);
     expect(result.invoices[0]!.invoiceNumber).toBe('INV-9');
     expect(result.invoices[0]!.buyerTrn).toBe('100384759200003');
-    expect(result.invoices[0]!.payableAmount).toBe('525.00');
+    expect(recalcInvoice(result.invoices[0]!).payableAmount).toBe('525.00');
   });
 });

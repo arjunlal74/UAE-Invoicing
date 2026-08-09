@@ -341,9 +341,12 @@ export async function parseWorkbook(
     });
   }
 
-  return {
-    invoices: invoices.map(recalcInvoice),
-    orphanLines,
-    warnings,
-  };
+  // Returned exactly as supplied — deliberately NOT recalculated.
+  //
+  // Recalculating here would overwrite the VAT rate and the derived amounts
+  // with correct values before validation ever saw the originals, so the rules
+  // that exist to catch a wrong rate or an unlocked formula column (BR-UAE-14,
+  // BR-UAE-06) could never fire. The caller validates this raw shape first,
+  // then stores the recalculated version for the grid to display.
+  return { invoices, orphanLines, warnings };
 }

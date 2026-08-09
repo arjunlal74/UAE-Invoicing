@@ -22,3 +22,4 @@ Thumbs.db
 # Local object-storage and db volumes if bind-mounted
 .data/
 tmp/
+.logs/
