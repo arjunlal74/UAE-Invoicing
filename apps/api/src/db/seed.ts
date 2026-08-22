@@ -17,7 +17,7 @@ import { runMigrations } from './migrate.js';
  * Refuses to run against production. Seeded accounts have known passwords.
  */
 
-const DEV_PASSWORD = 'ChangeMe_Dev_2026!';
+const DEV_PASSWORD = '123';
 
 async function seed() {
   const cfg = config();

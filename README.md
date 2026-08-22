@@ -23,7 +23,7 @@ docker compose exec -e NODE_ENV=development api \
 
 Then open **http://localhost:8080**.
 
-Every seeded account uses the password `ChangeMe_Dev_2026!`.
+Every seeded account uses the password `123`.
 
 | Account | Role | What it shows |
 |---|---|---|

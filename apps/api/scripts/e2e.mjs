@@ -11,7 +11,7 @@
 import ExcelJS from 'exceljs';
 
 const API = process.env.API_URL ?? 'http://localhost:3100';
-const PASSWORD = 'ChangeMe_Dev_2026!';
+const PASSWORD = '123';
 
 let passed = 0;
 let failed = 0;
