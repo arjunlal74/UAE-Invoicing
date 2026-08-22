@@ -1,0 +1,6 @@
+# Scripts that run inside Linux containers must keep LF endings. A Windows
+# checkout with core.autocrlf=true otherwise rewrites the shebang to `#!/bin/sh\r`
+# and the postgres entrypoint fails with "bad interpreter".
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
