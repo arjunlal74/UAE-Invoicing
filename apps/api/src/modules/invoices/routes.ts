@@ -2,7 +2,7 @@ import { InvoiceSearchQuery, SUBMITTABLE_STATUSES, type InvoiceDetail, type Invo
 import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit } from '../../audit/audit.js';
 import { withTenant } from '../../db/client.js';
-import { EDITOR_ROLES, READER_ROLES, requireContext, requireRole } from '../../http/context.js';
+import { requireContext, requirePermission } from '../../http/context.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { SUBMIT_JOB_OPTIONS, invoiceSubmitQueue } from '../../queue/queues.js';
 import { getObject, keyFromUri } from '../../storage/objectStore.js';
@@ -33,10 +33,15 @@ interface InvoiceRow {
   ubl_xml_s3_uri: string | null;
   ubl_xml_sha256: string | null;
   fta_rejection_reason: string | null;
+  approval_note: string | null;
+  approved_at: Date | null;
+  created_by_name: string | null;
+  approved_by_name: string | null;
   submitted_at: Date | null;
   cleared_at: Date | null;
   created_at: Date;
 }
+
 
 function toListItem(row: InvoiceRow): InvoiceListItem {
   return {
@@ -51,13 +56,15 @@ function toListItem(row: InvoiceRow): InvoiceListItem {
     payableAmountAed: row.payable_amount_aed,
     status: row.status,
     batchId: row.batch_upload_id,
+    createdByName: row.created_by_name,
+    approvedByName: row.approved_by_name,
     createdAt: row.created_at.toISOString(),
   };
 }
 
 export function registerInvoiceRoutes(app: FastifyInstance) {
   // --- Search --------------------------------------------------------------
-  app.get('/api/v1/invoices', { preHandler: requireRole(...READER_ROLES) }, async (request, reply) => {
+  app.get('/api/v1/invoices', { preHandler: requirePermission('invoice.read') }, async (request, reply) => {
     const ctx = requireContext(request);
     if (!ctx.tenantId) throw notFound('Tenant');
 
@@ -67,8 +74,16 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
     const result = await withTenant(ctx.tenantId, async (tx) => {
       // Full-text over the fields a finance user actually searches, with the
       // filters applied as plain predicates so the planner can use the indexes.
+      // Scalar subqueries rather than a join: invoices and users both carry a
+      // tenant_id, and every filter below names bare columns, so joining would
+      // make them ambiguous for no gain on a two-row lookup.
       const rows = await tx<InvoiceRow[]>`
-        SELECT * FROM invoices
+        SELECT *,
+               (SELECT full_name FROM users u WHERE u.id = invoices.created_by_user_id)
+                 AS created_by_name,
+               (SELECT full_name FROM users u WHERE u.id = invoices.approved_by_user_id)
+                 AS approved_by_name
+        FROM invoices
         WHERE tenant_id = ${ctx.tenantId}
           AND (${query.q ?? null}::text IS NULL OR
                to_tsvector('simple',
@@ -121,14 +136,21 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
   // --- Detail --------------------------------------------------------------
   app.get(
     '/api/v1/invoices/:id',
-    { preHandler: requireRole(...READER_ROLES) },
+    { preHandler: requirePermission('invoice.read') },
     async (request, reply) => {
       const ctx = requireContext(request);
       const { id } = request.params as { id: string };
       if (!ctx.tenantId) throw notFound('Tenant');
 
       const detail = await withTenant(ctx.tenantId, async (tx) => {
-        const rows = await tx<InvoiceRow[]>`SELECT * FROM invoices WHERE id = ${id}`;
+        const rows = await tx<InvoiceRow[]>`
+          SELECT *,
+                 (SELECT full_name FROM users u WHERE u.id = invoices.created_by_user_id)
+                   AS created_by_name,
+                 (SELECT full_name FROM users u WHERE u.id = invoices.approved_by_user_id)
+                   AS approved_by_name
+          FROM invoices WHERE id = ${id}
+        `;
         const invoice = rows[0];
         if (!invoice) throw notFound('Invoice');
 
@@ -199,6 +221,8 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
         ublXmlUri: detail.invoice.ubl_xml_s3_uri,
         ublXmlSha256: detail.invoice.ubl_xml_sha256,
         ftaRejectionReason: detail.invoice.fta_rejection_reason,
+        approvalNote: detail.invoice.approval_note,
+        approvedAt: detail.invoice.approved_at?.toISOString() ?? null,
         submittedAt: detail.invoice.submitted_at?.toISOString() ?? null,
         clearedAt: detail.invoice.cleared_at?.toISOString() ?? null,
         lines: detail.lines.map((l) => ({
@@ -246,7 +270,7 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
   // --- Generated XML -------------------------------------------------------
   app.get(
     '/api/v1/invoices/:id/xml',
-    { preHandler: requireRole(...READER_ROLES) },
+    { preHandler: requirePermission('invoice.read') },
     async (request, reply) => {
       const ctx = requireContext(request);
       const { id } = request.params as { id: string };
@@ -276,7 +300,7 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
   // --- Retry ---------------------------------------------------------------
   app.post(
     '/api/v1/invoices/:id/retry',
-    { preHandler: requireRole(...EDITOR_ROLES) },
+    { preHandler: requirePermission('invoice.submit') },
     async (request, reply) => {
       const ctx = requireContext(request);
       const { id } = request.params as { id: string };
@@ -296,11 +320,20 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
         if (row.status === 'SUBMITTED_TO_ASP') {
           throw badRequest('This invoice is already with the provider and awaiting a verdict.');
         }
+        if (row.status === 'PENDING_CFO_APPROVAL') {
+          throw badRequest('Approve this invoice from the approvals queue rather than retrying it.');
+        }
         if (!SUBMITTABLE_STATUSES.includes(row.status as never) && row.status !== 'VALIDATION_FAILED') {
           throw badRequest(`An invoice with status ${row.status} cannot be retried.`);
         }
 
-        await tx`UPDATE invoices SET status = 'VALIDATED' WHERE id = ${id}`;
+        await tx`
+          UPDATE invoices
+          SET status = 'VALIDATED',
+              approved_by_user_id = ${ctx.userId},
+              approved_at = CURRENT_TIMESTAMP
+          WHERE id = ${id}
+        `;
         return row;
       });
 

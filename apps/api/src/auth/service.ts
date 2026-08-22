@@ -3,7 +3,7 @@ import { isPlatformRole } from '@uae/contracts';
 import * as argon2 from 'argon2';
 import { authenticator } from 'otplib';
 import { config } from '../config.js';
-import { sql, withPlatformAccess } from '../db/client.js';
+import { sql, withPlatformAccess, type Sql, type Tx } from '../db/client.js';
 import { generateToken, safeEqual, sha256Hex } from '../lib/crypto.js';
 import { badRequest, forbidden, tooManyRequests, unauthorized } from '../lib/errors.js';
 import { signAccessToken } from './tokens.js';
@@ -288,11 +288,18 @@ export async function changePassword(
   await revokeAllSessions(userId);
 }
 
-export async function createInvite(userId: string): Promise<string> {
+/**
+ * Issue an invitation token for a user.
+ *
+ * Pass the surrounding transaction when the user is being created in one:
+ * without it this runs on a different pooled connection, which cannot see the
+ * uncommitted row and fails on `user_invites.user_id`.
+ */
+export async function createInvite(userId: string, client: Sql | Tx = sql()): Promise<string> {
   const { token, hash } = generateToken(32);
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60_000);
 
-  await sql()`
+  await client`
     INSERT INTO user_invites (user_id, token_hash, expires_at)
     VALUES (${userId}, ${hash}, ${expiresAt})
   `;

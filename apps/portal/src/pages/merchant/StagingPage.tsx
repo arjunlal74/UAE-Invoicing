@@ -7,7 +7,7 @@ import { ErrorSidebar } from '../../components/staging/ErrorSidebar';
 import { StagingGrid } from '../../components/staging/StagingGrid';
 import { Alert, Button, Spinner, StatusBadge, cx } from '../../components/ui';
 import { ApiError, api, queryString } from '../../lib/api';
-import { canEdit, useAuthStore } from '../../stores/auth';
+import { canEdit, canFile, useAuthStore } from '../../stores/auth';
 
 /**
  * The interactive staging grid — the reason this product exists.
@@ -20,6 +20,9 @@ export function StagingPage() {
   const { batchId = '' } = useParams();
   const user = useAuthStore((s) => s.user);
   const editable = canEdit(user);
+  // SRS v2.1 §5: only the tax approver files. Everyone else who may submit is
+  // handing the batch to them, so the button says so.
+  const filing = canFile(user);
   const queryClient = useQueryClient();
 
   const [errorsOnly, setErrorsOnly] = useState(false);
@@ -114,16 +117,21 @@ export function StagingPage() {
 
   const submit = useMutation({
     mutationFn: () =>
-      api<{ queued: number; skipped: number }>(`/api/v1/batches/${batchId}/submit`, {
-        method: 'POST',
-        body: {},
-      }),
+      api<{ queued: number; pendingApproval: number; skipped: number }>(
+        `/api/v1/batches/${batchId}/submit`,
+        { method: 'POST', body: {} },
+      ),
     onSuccess: (result) => {
+      const count = result.queued + result.pendingApproval;
       setBanner({
         kind: 'ok',
-        text: `${result.queued} invoice${result.queued === 1 ? '' : 's'} submitted. Track progress on the Invoices page — the FTA verdict usually arrives within a few minutes.`,
+        text:
+          result.queued > 0
+            ? `${result.queued} invoice${result.queued === 1 ? '' : 's'} submitted. Track progress on the Invoices page — the FTA verdict usually arrives within a few minutes.`
+            : `${count} invoice${count === 1 ? '' : 's'} sent for approval. Your tax approver will file them with the FTA.`,
       });
       queryClient.invalidateQueries({ queryKey: ['staging', batchId] });
+      queryClient.invalidateQueries({ queryKey: ['approvals'] });
     },
     onError: (err) => {
       setBanner({
@@ -255,20 +263,27 @@ export function StagingPage() {
                 {revalidate.isPending ? 'Checking…' : 'Re-validate batch'}
               </Button>
 
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={() => submit.mutate()}
-                disabled={submit.isPending || submittable === 0}
-                title={
-                  submittable === 0
-                    ? 'Every invoice either still has errors or has already been submitted.'
-                    : undefined
-                }
-              >
-                {submit.isPending ? 'Submitting…' : `Submit (${submittable})`}
-              </Button>
             </>
+          )}
+
+          {(editable || filing) && (
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => submit.mutate()}
+              disabled={submit.isPending || submittable === 0}
+              title={
+                submittable === 0
+                  ? 'Every invoice either still has errors or has already been submitted.'
+                  : undefined
+              }
+            >
+              {submit.isPending
+                ? 'Working…'
+                : filing
+                  ? `Submit to the FTA (${submittable})`
+                  : `Send for approval (${submittable})`}
+            </Button>
           )}
         </div>
       </div>

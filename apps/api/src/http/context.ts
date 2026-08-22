@@ -1,5 +1,5 @@
-import type { Role } from '@uae/contracts';
-import { isPlatformRole } from '@uae/contracts';
+import type { Permission, Role } from '@uae/contracts';
+import { ROLE_PERMISSIONS, can, canAny } from '@uae/contracts';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { forbidden, unauthorized } from '../lib/errors.js';
 import { verifyAccessToken } from '../auth/tokens.js';
@@ -11,7 +11,7 @@ export interface RequestContext {
   userId: string;
   email: string;
   role: Role;
-  /** Null for platform staff, who are not scoped to a tenant. */
+  /** Null for the global admin, who is not scoped to a tenant. */
   tenantId: string | null;
   ip: string | undefined;
   userAgent: string | undefined;
@@ -31,8 +31,8 @@ export function requireContext(request: FastifyRequest): RequestContext {
 /**
  * The tenant a merchant request operates on.
  *
- * Platform staff may act on a specific tenant by passing `?tenantId=`, which is
- * how the admin panel inspects a customer's data. Merchant users get their own
+ * The global admin may act on a specific tenant by passing `?tenantId=`, which
+ * is how the admin panel inspects a customer's data. Tenant users get their own
  * tenant and nothing else — the query parameter is ignored for them rather
  * than honoured, so a crafted URL cannot cross the boundary.
  */
@@ -63,12 +63,19 @@ export async function authenticate(request: FastifyRequest): Promise<void> {
   };
 }
 
-/** Route guard: the caller's role must be in `roles`. */
-export function requireRole(...roles: Role[]) {
+/**
+ * Route guard: the caller must hold at least one of `permissions`.
+ *
+ * Guards name capabilities rather than roles so that the SRS §5 matrix lives in
+ * one file. Several endpoints legitimately accept more than one capability —
+ * batch submission is open to whoever prepares invoices *and* to the approver
+ * who can file them outright — which is why this is an "any of" test.
+ */
+export function requirePermission(...permissions: Permission[]) {
   return async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
     await authenticate(request);
     const ctx = requireContext(request);
-    if (!roles.includes(ctx.role)) {
+    if (!canAny(ctx.role, ...permissions)) {
       throw forbidden('Your role does not allow this action.');
     }
   };
@@ -78,8 +85,18 @@ export function requirePlatform() {
   return async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
     await authenticate(request);
     const ctx = requireContext(request);
-    if (!isPlatformRole(ctx.role)) {
+    if (!can(ctx.role, 'platform.read')) {
       throw forbidden('This area is restricted to platform administrators.');
+    }
+  };
+}
+
+export function requirePartner() {
+  return async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
+    await authenticate(request);
+    const ctx = requireContext(request);
+    if (!can(ctx.role, 'partner.read')) {
+      throw forbidden('This area is restricted to channel partner administrators.');
     }
   };
 }
@@ -90,7 +107,9 @@ export function requireAuth() {
   };
 }
 
-/** Roles permitted to change staged data or submit invoices. */
-export const EDITOR_ROLES: Role[] = ['TENANT_ADMIN', 'FINANCE_USER', 'DATA_ENTRY_CLERK'];
-/** Roles permitted to read tenant data. */
-export const READER_ROLES: Role[] = [...EDITOR_ROLES, 'AUDITOR'];
+/** Throw unless the caller holds `permission`. For checks inside a handler. */
+export function assertPermission(ctx: RequestContext, permission: Permission, message?: string) {
+  if (!can(ctx.role, permission)) throw forbidden(message);
+}
+
+export { ROLE_PERMISSIONS, can, canAny };

@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { Alert, Button, Field, inputClass } from '../components/ui';
 import { ApiError, api } from '../lib/api';
-import { isPlatformUser, useAuthStore } from '../stores/auth';
+import { homePathFor, useAuthStore } from '../stores/auth';
 
 export function LoginPage() {
   const { user, accessToken, setSession } = useAuthStore();
@@ -17,7 +17,7 @@ export function LoginPage() {
   const [busy, setBusy] = useState(false);
 
   if (accessToken && user) {
-    return <Navigate to={isPlatformUser(user) ? '/admin/tenants' : '/'} replace />;
+    return <Navigate to={homePathFor(user)} replace />;
   }
 
   const submit = async (event: React.FormEvent) => {
@@ -40,7 +40,7 @@ export function LoginPage() {
       }
 
       setSession(result);
-      navigate(isPlatformUser(result.user) ? '/admin/tenants' : '/', { replace: true });
+      navigate(homePathFor(result.user), { replace: true });
     } catch (err) {
       setError(
         err instanceof ApiError ? err.message : 'Could not sign in. Please try again.',

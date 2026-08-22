@@ -1,3 +1,4 @@
+import { ROLE_LABELS } from '@uae/contracts';
 import type {
   MfaEnrolStartResponse,
   PaginatedResult,
@@ -18,13 +19,13 @@ import {
   inputClass,
 } from '../../components/ui';
 import { ApiError, api } from '../../lib/api';
-import { isTenantAdmin, useAuthStore } from '../../stores/auth';
+import { isCompanyAdmin, useAuthStore } from '../../stores/auth';
 
-const TENANT_ROLES: Role[] = ['TENANT_ADMIN', 'FINANCE_USER', 'DATA_ENTRY_CLERK', 'AUDITOR'];
+const TENANT_ROLES: Role[] = ['COMPANY_ADMIN', 'ACCOUNTANT', 'TAX_APPROVER_CFO', 'AUDITOR'];
 
 export function SettingsPage() {
   const user = useAuthStore((s) => s.user);
-  const admin = isTenantAdmin(user);
+  const admin = isCompanyAdmin(user);
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
@@ -79,7 +80,7 @@ function TaxProfile({ editable }: { editable: boolean }) {
           label="Tax Registration Number"
           hint="Your TRN identifies you to the FTA and cannot be changed here. Contact support if it is wrong."
         >
-          <input className={inputClass} value={data.trn} disabled />
+          <input className={inputClass} value={data.trn ?? 'Not applicable'} disabled />
         </Field>
 
         <Field label="Company code" hint="Used in your batch references.">
@@ -242,7 +243,7 @@ function UsersSection() {
   const queryClient = useQueryClient();
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({ email: '', fullName: '', role: 'FINANCE_USER' as Role });
+  const [form, setForm] = useState({ email: '', fullName: '', role: 'ACCOUNTANT' as Role });
 
   const { data } = useQuery({
     queryKey: ['tenant-users'],
@@ -254,7 +255,7 @@ function UsersSection() {
     onSuccess: (result) => {
       setInviteUrl(result.inviteUrl);
       setError(null);
-      setForm({ email: '', fullName: '', role: 'FINANCE_USER' });
+      setForm({ email: '', fullName: '', role: 'ACCOUNTANT' });
       queryClient.invalidateQueries({ queryKey: ['tenant-users'] });
     },
     onError: (err) =>
@@ -306,7 +307,7 @@ function UsersSection() {
                 )}
               </td>
               <td className="py-2 text-slate-600">{member.email}</td>
-              <td className="py-2 text-slate-600">{member.role.replace(/_/g, ' ').toLowerCase()}</td>
+              <td className="py-2 text-slate-600">{ROLE_LABELS[member.role]}</td>
               <td className="py-2">
                 {member.mfaEnabled ? (
                   <span className="text-xs text-ok-700">Enabled</span>
@@ -351,7 +352,7 @@ function UsersSection() {
           >
             {TENANT_ROLES.map((role) => (
               <option key={role} value={role}>
-                {role.replace(/_/g, ' ').toLowerCase()}
+                {ROLE_LABELS[role]}
               </option>
             ))}
           </select>

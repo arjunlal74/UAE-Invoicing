@@ -1,3 +1,4 @@
+import { ROLE_LABELS } from '@uae/contracts';
 import type {
   AspConfigResponse,
   AspConnectionStatus,
@@ -86,7 +87,7 @@ export function AdminTenantDetailPage() {
         <Card title="Identity" className="lg:col-span-2">
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
             <Detail label="Company code" value={tenant.companyCode} />
-            <Detail label="TRN" value={tenant.trn} mono />
+            <Detail label="TRN" value={tenant.trn ?? '—'} mono />
             <Detail label="Users" value={String(tenant.userCount)} />
             <Detail label="Invoices filed" value={String(tenant.invoiceCount)} />
             <Detail
@@ -152,7 +153,7 @@ export function AdminTenantDetailPage() {
                   <td className="py-2">{user.fullName}</td>
                   <td className="py-2 text-slate-600">{user.email}</td>
                   <td className="py-2 text-slate-600">
-                    {user.role.replace(/_/g, ' ').toLowerCase()}
+                    {ROLE_LABELS[user.role]}
                   </td>
                   <td className="py-2 text-xs">
                     {user.invitePending ? (

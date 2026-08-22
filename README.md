@@ -23,15 +23,33 @@ docker compose exec -e NODE_ENV=development api \
 
 Then open **http://localhost:8080**.
 
-| Account | Password | What it shows |
-|---|---|---|
-| `admin@platform.local` | `ChangeMe_Dev_2026!` | Admin panel — tenants, provider config, transmissions, audit |
-| `finance@albahar.local` | `ChangeMe_Dev_2026!` | An **active** merchant: upload, fix, submit |
-| `admin@gulftech.local` | `ChangeMe_Dev_2026!` | A **pending** merchant: can upload, cannot submit |
+Every seeded account uses the password `ChangeMe_Dev_2026!`.
 
-To see the whole flow: sign in as the finance user → **Upload invoices** →
+| Account | Role | What it shows |
+|---|---|---|
+| `admin@platform.local` | Host Global Admin | Admin panel — tenants, provider config, transmissions, audit |
+| `clerk@albahar.local` | Accountant | An **active** merchant: upload, fix, send for approval |
+| `finance@albahar.local` | Tax Approver / CFO | The approvals queue — the only role that can file with the FTA |
+| `auditor@albahar.local` | Compliance Auditor | Read-only view of the same merchant |
+| `admin@gulftech.local` | Company Admin | A **pending** merchant: can upload, cannot submit |
+| `partner@gulfadvisory.local` | Channel Partner Admin | Partner portal — onboard and manage sub-tenants |
+
+To see the whole flow: sign in as the **accountant** → **Upload invoices** →
 download the template → fill in a few rows (make some mistakes) → upload → fix
-the red cells → **Submit**.
+the red cells → **Send for approval**. Then sign in as the **tax approver** and
+release the batch from **Approvals**.
+
+### Roles and tenancy (SRS v2.1)
+
+Four tenancy tiers: the host, direct **enterprise tenants**, **channel
+partners**, and the **managed sub-tenants** that hang off a partner. Six roles,
+whose capabilities live in one file — `packages/contracts/src/permissions.ts` —
+which both the API guards and the portal's navigation read.
+
+The rule that shapes the workflow: **only a Tax Approver / CFO may file with the
+FTA.** An accountant's submission parks the invoices in
+`PENDING_CFO_APPROVAL`; the approver releases them, or returns them with a
+reason, which withdraws them and reopens the staged rows for correction.
 
 ## Development
 
@@ -95,7 +113,7 @@ Merchant's .xlsx
 
 | Piece | What it is |
 |---|---|
-| `apps/portal` | React + Vite SPA. Merchant and admin panels, separated by role. |
+| `apps/portal` | React + Vite SPA. Merchant, partner and admin panels, separated by role. |
 | `apps/api` | Fastify API. Also runs as the queue worker from `src/worker.ts`. |
 | `packages/domain` | Code lists, VAT maths, the validation rule catalogue, auto-fix. |
 | `packages/ubl` | PINT-AE UBL 2.1 document builder and the QR payload. |

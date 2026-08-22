@@ -1,3 +1,4 @@
+import { ROLE_LABELS } from '@uae/contracts';
 import type { PaginatedResult, Role, UserSummary } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -11,9 +12,11 @@ import {
   inputClass,
 } from '../../components/ui';
 import { ApiError, api } from '../../lib/api';
-import { useAuthStore } from '../../stores/auth';
+import { can, useAuthStore } from '../../stores/auth';
 
-const PLATFORM_ROLES: Role[] = ['PLATFORM_ADMIN', 'PLATFORM_SUPPORT'];
+// v2.1 collapses the platform tier to a single role, so this is a list of one.
+// It stays a list because the picker and the server-side check both read it.
+const PLATFORM_ROLES: Role[] = ['GLOBAL_ADMIN'];
 
 export function AdminStaffPage() {
   const user = useAuthStore((s) => s.user);
@@ -22,7 +25,7 @@ export function AdminStaffPage() {
   const [form, setForm] = useState({
     email: '',
     fullName: '',
-    role: 'PLATFORM_SUPPORT' as Role,
+    role: 'GLOBAL_ADMIN' as Role,
   });
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -38,14 +41,14 @@ export function AdminStaffPage() {
     onSuccess: (result) => {
       setInviteUrl(result.inviteUrl);
       setError(null);
-      setForm({ email: '', fullName: '', role: 'PLATFORM_SUPPORT' });
+      setForm({ email: '', fullName: '', role: 'GLOBAL_ADMIN' });
       queryClient.invalidateQueries({ queryKey: ['admin-staff'] });
     },
     onError: (err) =>
       setError(err instanceof ApiError ? err.message : 'That account could not be created.'),
   });
 
-  const canInvite = user?.role === 'PLATFORM_ADMIN';
+  const canInvite = can(user, 'platform.manage');
 
   return (
     <div className="mx-auto max-w-4xl space-y-4">
@@ -85,7 +88,7 @@ export function AdminStaffPage() {
                   </td>
                   <td className="py-2 text-slate-600">{staff.email}</td>
                   <td className="py-2 text-slate-600">
-                    {staff.role.replace(/_/g, ' ').toLowerCase()}
+                    {ROLE_LABELS[staff.role]}
                   </td>
                   <td className="py-2 text-xs">
                     {staff.mfaEnabled ? (
@@ -128,7 +131,7 @@ export function AdminStaffPage() {
               >
                 {PLATFORM_ROLES.map((role) => (
                   <option key={role} value={role}>
-                    {role.replace(/_/g, ' ').toLowerCase()}
+                    {ROLE_LABELS[role]}
                   </option>
                 ))}
               </select>

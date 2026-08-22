@@ -8,6 +8,7 @@ import {
   InvoiceTypeDb,
   Role,
   TenantStatus,
+  TenantType,
   ValidationSeverity,
 } from './enums.js';
 
@@ -92,6 +93,10 @@ export const AddressSchema = z.object({
 export type Address = z.infer<typeof AddressSchema>;
 
 export const CreateTenantRequest = z.object({
+  /** Which tier of the v2.1 hierarchy this tenant is onboarded into. */
+  tenantType: TenantType.default('ENTERPRISE_TENANT'),
+  /** Required for a managed sub-tenant, rejected for every other tier. */
+  parentTenantId: uuid.nullable().optional(),
   companyCode: z
     .string()
     .trim()
@@ -100,17 +105,26 @@ export const CreateTenantRequest = z.object({
     .regex(/^[A-Za-z0-9_-]+$/, 'Use letters, digits, hyphen and underscore only'),
   legalNameEn: z.string().trim().min(1).max(255),
   legalNameAr: z.string().trim().min(1).max(255),
-  trn,
+  trn: trn.nullable().optional(),
   isVatGroup: z.boolean().default(false),
   vatGroupTrn: trn.nullable().optional(),
   registeredAddress: AddressSchema,
   /** Optional first administrator, invited as part of onboarding. */
   adminEmail: z.string().trim().toLowerCase().email().optional(),
   adminFullName: z.string().trim().min(1).max(200).optional(),
-}).refine((v) => !v.isVatGroup || !!v.vatGroupTrn, {
-  message: 'A VAT group TRN is required when the tenant is part of a VAT group',
-  path: ['vatGroupTrn'],
-});
+})
+  .refine((v) => !v.isVatGroup || !!v.vatGroupTrn, {
+    message: 'A VAT group TRN is required when the tenant is part of a VAT group',
+    path: ['vatGroupTrn'],
+  })
+  .refine((v) => v.tenantType === 'CHANNEL_PARTNER' || v.tenantType === 'HOST' || !!v.trn, {
+    message: 'A TRN is required for a tenant that files its own invoices',
+    path: ['trn'],
+  })
+  .refine((v) => (v.tenantType === 'MANAGED_SUB_TENANT') === !!v.parentTenantId, {
+    message: 'Only a managed sub-tenant has a parent, and it must have one',
+    path: ['parentTenantId'],
+  });
 export type CreateTenantRequest = z.infer<typeof CreateTenantRequest>;
 
 export const UpdateTenantRequest = z.object({
@@ -129,10 +143,13 @@ export const UpdateTenantStatusRequest = z.object({
 
 export const TenantSummary = z.object({
   id: uuid,
+  tenantType: TenantType,
+  parentTenantId: uuid.nullable(),
+  parentName: z.string().nullable(),
   companyCode: z.string(),
   legalNameEn: z.string(),
   legalNameAr: z.string(),
-  trn: z.string(),
+  trn: z.string().nullable(),
   status: TenantStatus,
   aspStatus: AspConnectionStatus,
   invoiceCount: z.number(),
@@ -141,6 +158,7 @@ export const TenantSummary = z.object({
 export type TenantSummary = z.infer<typeof TenantSummary>;
 
 export const TenantDetail = TenantSummary.extend({
+  subTenantCount: z.number(),
   isVatGroup: z.boolean(),
   vatGroupTrn: z.string().nullable(),
   registeredAddress: AddressSchema,
@@ -330,10 +348,14 @@ export const SubmitBatchRequest = z.object({
 });
 
 export const SubmitBatchResponse = z.object({
+  /** Handed to the ASP. Non-zero only when the caller may file with the FTA. */
   queued: z.number(),
+  /** Parked in PENDING_CFO_APPROVAL for a tax approver to release. */
+  pendingApproval: z.number(),
   skipped: z.number(),
   reasons: z.array(z.object({ rowId: uuid, reason: z.string() })),
 });
+export type SubmitBatchResponse = z.infer<typeof SubmitBatchResponse>;
 
 export const AutoFixResponse = z.object({
   changed: z.number(),
@@ -378,6 +400,8 @@ export const InvoiceListItem = z.object({
   payableAmountAed: z.string(),
   status: InvoiceStatus,
   batchId: uuid.nullable(),
+  createdByName: z.string().nullable(),
+  approvedByName: z.string().nullable(),
   createdAt: z.string(),
 });
 export type InvoiceListItem = z.infer<typeof InvoiceListItem>;
@@ -412,10 +436,72 @@ export const InvoiceDetail = InvoiceListItem.extend({
   findings: z.array(ValidationFindingDto),
   transmissions: z.array(TransmissionLogDto),
   ftaRejectionReason: z.string().nullable(),
+  approvalNote: z.string().nullable(),
+  approvedAt: z.string().nullable(),
   submittedAt: z.string().nullable(),
   clearedAt: z.string().nullable(),
 });
 export type InvoiceDetail = z.infer<typeof InvoiceDetail>;
+
+// --- Approvals (SRS v2.1 §5) ------------------------------------------------
+
+/**
+ * A tax approver acting on the queue. An empty `invoiceIds` means "every
+ * invoice currently awaiting approval", which is the bulk-clearance case the
+ * SRS calls for; naming ids explicitly handles the selective one.
+ */
+export const ApprovalDecisionRequest = z.object({
+  invoiceIds: z.array(uuid).optional(),
+  note: z.string().trim().max(500).optional(),
+});
+export type ApprovalDecisionRequest = z.infer<typeof ApprovalDecisionRequest>;
+
+export const ApprovalDecisionResponse = z.object({
+  affected: z.number(),
+  skipped: z.number(),
+  reasons: z.array(z.object({ invoiceId: uuid, reason: z.string() })),
+});
+export type ApprovalDecisionResponse = z.infer<typeof ApprovalDecisionResponse>;
+
+// --- Channel partner --------------------------------------------------------
+
+export const SubTenantSummary = z.object({
+  id: uuid,
+  companyCode: z.string(),
+  legalNameEn: z.string(),
+  trn: z.string().nullable(),
+  status: TenantStatus,
+  aspStatus: AspConnectionStatus,
+  invoiceCount: z.number(),
+  userCount: z.number(),
+  createdAt: z.string(),
+});
+export type SubTenantSummary = z.infer<typeof SubTenantSummary>;
+
+export const CreateSubTenantRequest = z.object({
+  companyCode: z
+    .string()
+    .trim()
+    .min(2)
+    .max(50)
+    .regex(/^[A-Za-z0-9_-]+$/, 'Use letters, digits, hyphen and underscore only'),
+  legalNameEn: z.string().trim().min(1).max(255),
+  legalNameAr: z.string().trim().min(1).max(255),
+  trn,
+  registeredAddress: AddressSchema,
+  adminEmail: z.string().trim().toLowerCase().email(),
+  adminFullName: z.string().trim().min(1).max(200),
+});
+export type CreateSubTenantRequest = z.infer<typeof CreateSubTenantRequest>;
+
+export const PartnerOverview = z.object({
+  partnerName: z.string(),
+  subTenantCount: z.number(),
+  activeSubTenantCount: z.number(),
+  invoiceCount: z.number(),
+  acceptedInvoiceCount: z.number(),
+});
+export type PartnerOverview = z.infer<typeof PartnerOverview>;
 
 // --- Dashboard --------------------------------------------------------------
 

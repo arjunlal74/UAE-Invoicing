@@ -69,6 +69,13 @@ export async function submitInvoiceJob(job: SubmitInvoiceJob): Promise<void> {
     return;
   }
 
+  // Nothing should enqueue an unapproved invoice, but a stray job must not be
+  // the thing that files one past the approver.
+  if (invoice.status === 'PENDING_CFO_APPROVAL') {
+    log.warn('skipping submission; invoice is still awaiting tax approver sign-off');
+    return;
+  }
+
   const staged = invoice.raw_payload_json;
   if (!staged) throw new Error(`Invoice ${invoiceId} has no staged payload to render`);
 

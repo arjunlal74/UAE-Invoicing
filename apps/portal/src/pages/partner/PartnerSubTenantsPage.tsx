@@ -1,9 +1,7 @@
-import type { PaginatedResult, TenantSummary, TenantType } from '@uae/contracts';
-import { TENANT_TYPE_LABELS } from '@uae/contracts';
+import type { PaginatedResult, PartnerOverview, SubTenantSummary } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { EMIRATES } from '@uae/domain';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -18,95 +16,87 @@ import {
 import { ApiError, api, queryString } from '../../lib/api';
 
 /**
- * Tenant list and onboarding — the first screen of the admin panel, and the
- * first thing that has to work: nobody can use the product until a tenant
- * exists here.
+ * The channel partner portal (SRS v2.1 §2).
+ *
+ * A partner sees who is onboarded underneath it and how much they are filing —
+ * never the invoices themselves. The API enforces that boundary; this screen
+ * simply has nothing that would ask for them.
  */
-export function AdminTenantsPage() {
+export function PartnerSubTenantsPage() {
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');
   const [creating, setCreating] = useState(false);
 
+  const overview = useQuery({
+    queryKey: ['partner-overview'],
+    queryFn: () => api<PartnerOverview>('/api/v1/partner/overview'),
+  });
+
   const { data, isLoading } = useQuery({
-    queryKey: ['admin-tenants', search, statusFilter, typeFilter],
+    queryKey: ['partner-sub-tenants', search],
     queryFn: () =>
-      api<PaginatedResult<TenantSummary>>(
-        `/api/v1/admin/tenants${queryString({
-          q: search,
-          status: statusFilter,
-          tenantType: typeFilter,
-        })}`,
+      api<PaginatedResult<SubTenantSummary>>(
+        `/api/v1/partner/sub-tenants${queryString({ q: search })}`,
       ),
   });
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-900">Tenants</h1>
+        <div>
+          <h1 className="text-lg font-semibold text-slate-900">
+            {overview.data?.partnerName ?? 'Sub-tenants'}
+          </h1>
+          <p className="text-sm text-slate-500">
+            Companies you onboard and manage on the platform.
+          </p>
+        </div>
         <Button variant="primary" onClick={() => setCreating((v) => !v)}>
-          {creating ? 'Cancel' : 'Onboard a tenant'}
+          {creating ? 'Cancel' : 'Onboard a sub-tenant'}
         </Button>
       </div>
 
-      {creating && <CreateTenantForm onDone={() => setCreating(false)} />}
+      {overview.data && (
+        <div className="grid gap-3 sm:grid-cols-4">
+          <Stat label="Sub-tenants" value={overview.data.subTenantCount} />
+          <Stat label="Active" value={overview.data.activeSubTenantCount} />
+          <Stat label="Invoices prepared" value={overview.data.invoiceCount} />
+          <Stat label="Cleared by the FTA" value={overview.data.acceptedInvoiceCount} />
+        </div>
+      )}
+
+      {creating && <CreateSubTenantForm onDone={() => setCreating(false)} />}
 
       <Card>
-        <div className="flex flex-wrap gap-3">
-          <input
-            className={`${inputClass} max-w-xs`}
-            placeholder="Search by name, code or TRN"
-            defaultValue={search}
-            onBlur={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') setSearch((e.target as HTMLInputElement).value);
-            }}
-          />
-          <select
-            className={`${inputClass} max-w-[12rem]`}
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-          >
-            <option value="">All statuses</option>
-            <option value="PENDING">Pending</option>
-            <option value="ACTIVE">Active</option>
-            <option value="SUSPENDED">Suspended</option>
-            <option value="ARCHIVED">Archived</option>
-          </select>
-          <select
-            className={`${inputClass} max-w-[14rem]`}
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
-          >
-            <option value="">All tiers</option>
-            {(Object.keys(TENANT_TYPE_LABELS) as TenantType[]).map((type) => (
-              <option key={type} value={type}>
-                {TENANT_TYPE_LABELS[type]}
-              </option>
-            ))}
-          </select>
-        </div>
+        <input
+          className={`${inputClass} max-w-xs`}
+          placeholder="Search by name, code or TRN"
+          defaultValue={search}
+          onBlur={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') setSearch((e.target as HTMLInputElement).value);
+          }}
+        />
       </Card>
 
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         {isLoading ? (
           <div className="p-8">
-            <Spinner label="Loading tenants…" />
+            <Spinner label="Loading sub-tenants…" />
           </div>
         ) : !data || data.items.length === 0 ? (
           <EmptyState
-            title="No tenants"
-            description="Onboard your first customer to get started."
+            title="No sub-tenants yet"
+            description="Onboard your first client to start filing on their behalf."
           />
         ) : (
           <table className="w-full text-sm">
             <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
               <tr>
                 <th className="px-4 py-2 font-medium">Company</th>
-                <th className="px-4 py-2 font-medium">Tier</th>
                 <th className="px-4 py-2 font-medium">TRN</th>
                 <th className="px-4 py-2 font-medium">Account</th>
                 <th className="px-4 py-2 font-medium">Provider</th>
+                <th className="px-4 py-2 text-right font-medium">Users</th>
                 <th className="px-4 py-2 text-right font-medium">Invoices</th>
                 <th className="px-4 py-2 font-medium">Onboarded</th>
               </tr>
@@ -115,22 +105,8 @@ export function AdminTenantsPage() {
               {data.items.map((tenant) => (
                 <tr key={tenant.id} className="hover:bg-slate-50">
                   <td className="px-4 py-2">
-                    <Link
-                      to={`/admin/tenants/${tenant.id}`}
-                      className="font-medium text-brand-600 underline"
-                    >
-                      {tenant.legalNameEn}
-                    </Link>
-                    <div className="arabic text-xs text-slate-500" lang="ar">
-                      {tenant.legalNameAr}
-                    </div>
+                    <div className="font-medium text-slate-800">{tenant.legalNameEn}</div>
                     <div className="text-xs text-slate-400">{tenant.companyCode}</div>
-                  </td>
-                  <td className="px-4 py-2">
-                    <div className="text-slate-700">{TENANT_TYPE_LABELS[tenant.tenantType]}</div>
-                    {tenant.parentName && (
-                      <div className="text-xs text-slate-400">under {tenant.parentName}</div>
-                    )}
                   </td>
                   <td className="px-4 py-2 font-mono text-xs">{tenant.trn ?? '—'}</td>
                   <td className="px-4 py-2">
@@ -139,6 +115,7 @@ export function AdminTenantsPage() {
                   <td className="px-4 py-2">
                     <StatusBadge status={tenant.aspStatus} />
                   </td>
+                  <td className="px-4 py-2 text-right tabular-nums">{tenant.userCount}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{tenant.invoiceCount}</td>
                   <td className="px-4 py-2 text-slate-500">{formatDate(tenant.createdAt)}</td>
                 </tr>
@@ -151,19 +128,26 @@ export function AdminTenantsPage() {
   );
 }
 
-function CreateTenantForm({ onDone }: { onDone: () => void }) {
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="text-xs uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="mt-1 text-2xl font-semibold tabular-nums text-slate-900">{value}</div>
+    </div>
+  );
+}
+
+function CreateSubTenantForm({ onDone }: { onDone: () => void }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
 
   const [form, setForm] = useState({
-    tenantType: 'ENTERPRISE_TENANT' as TenantType,
     companyCode: '',
     legalNameEn: '',
     legalNameAr: '',
     trn: '',
     street: '',
-    city: '',
     emirate: 'Dubai',
     adminEmail: '',
     adminFullName: '',
@@ -171,46 +155,42 @@ function CreateTenantForm({ onDone }: { onDone: () => void }) {
 
   const create = useMutation({
     mutationFn: () =>
-      api<{ id: string; inviteUrl: string | null }>('/api/v1/admin/tenants', {
+      api<{ id: string; inviteUrl: string }>('/api/v1/partner/sub-tenants', {
         method: 'POST',
         body: {
-          tenantType: form.tenantType,
           companyCode: form.companyCode,
           legalNameEn: form.legalNameEn,
           legalNameAr: form.legalNameAr,
-          // A channel partner resells capacity and never appears as the seller
-          // on an invoice, so it is onboarded without a TRN of its own.
-          trn: form.tenantType === 'CHANNEL_PARTNER' ? undefined : form.trn,
-          isVatGroup: false,
+          trn: form.trn,
           registeredAddress: {
             street: form.street,
-            city: form.city || form.emirate,
+            city: form.emirate,
             emirate: form.emirate,
             postalCode: '',
             countryCode: 'AE',
           },
-          adminEmail: form.adminEmail || undefined,
-          adminFullName: form.adminFullName || undefined,
+          adminEmail: form.adminEmail,
+          adminFullName: form.adminFullName,
         },
       }),
     onSuccess: (result) => {
       setError(null);
       setInviteUrl(result.inviteUrl);
-      queryClient.invalidateQueries({ queryKey: ['admin-tenants'] });
-      if (!result.inviteUrl) onDone();
+      queryClient.invalidateQueries({ queryKey: ['partner-sub-tenants'] });
+      queryClient.invalidateQueries({ queryKey: ['partner-overview'] });
     },
     onError: (err) =>
-      setError(err instanceof ApiError ? err.message : 'That tenant could not be created.'),
+      setError(err instanceof ApiError ? err.message : 'That sub-tenant could not be created.'),
   });
 
   if (inviteUrl) {
     return (
-      <Card title="Tenant created">
-        <Alert kind="ok" title="Send this invitation to the tenant administrator">
+      <Card title="Sub-tenant created">
+        <Alert kind="ok" title="Send this invitation to their administrator">
           <p className="mt-2 break-all rounded bg-white/60 p-2 font-mono text-xs">{inviteUrl}</p>
           <p className="mt-2 text-xs">
-            The tenant starts in <strong>Pending</strong>. Configure their provider connection on
-            the tenant page, then activate them.
+            The sub-tenant starts in <strong>Pending</strong> and cannot file until the platform
+            activates their provider connection.
           </p>
         </Alert>
         <div className="mt-4">
@@ -221,7 +201,7 @@ function CreateTenantForm({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <Card title="Onboard a tenant">
+    <Card title="Onboard a sub-tenant">
       {error && (
         <div className="mb-4">
           <Alert kind="danger">{error}</Alert>
@@ -229,25 +209,6 @@ function CreateTenantForm({ onDone }: { onDone: () => void }) {
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Field
-          label="Tier"
-          hint="Managed sub-tenants are onboarded by their channel partner, not here."
-          required
-        >
-          <select
-            className={inputClass}
-            value={form.tenantType}
-            onChange={(e) => setForm({ ...form, tenantType: e.target.value as TenantType })}
-          >
-            <option value="ENTERPRISE_TENANT">
-              {TENANT_TYPE_LABELS.ENTERPRISE_TENANT} — files its own invoices
-            </option>
-            <option value="CHANNEL_PARTNER">
-              {TENANT_TYPE_LABELS.CHANNEL_PARTNER} — manages sub-tenants
-            </option>
-          </select>
-        </Field>
-
         <Field label="Company code" hint="Short identifier, used in batch references." required>
           <input
             className={inputClass}
@@ -256,20 +217,11 @@ function CreateTenantForm({ onDone }: { onDone: () => void }) {
           />
         </Field>
 
-        <Field
-          label="TRN"
-          hint={
-            form.tenantType === 'CHANNEL_PARTNER'
-              ? 'Not required for a channel partner.'
-              : '15 digits, starting with 1.'
-          }
-          required={form.tenantType !== 'CHANNEL_PARTNER'}
-        >
+        <Field label="TRN" hint="15 digits, starting with 1." required>
           <input
             className={`${inputClass} font-mono`}
             maxLength={15}
-            disabled={form.tenantType === 'CHANNEL_PARTNER'}
-            value={form.tenantType === 'CHANNEL_PARTNER' ? '' : form.trn}
+            value={form.trn}
             onChange={(e) => setForm({ ...form, trn: e.target.value.replace(/\D/g, '') })}
           />
         </Field>
@@ -313,14 +265,7 @@ function CreateTenantForm({ onDone }: { onDone: () => void }) {
           />
         </Field>
 
-        <Field
-          label="Administrator name"
-          hint={
-            form.tenantType === 'CHANNEL_PARTNER'
-              ? 'Optional — invited as the partner administrator.'
-              : 'Optional — invited as the company administrator.'
-          }
-        >
+        <Field label="Administrator name" hint="Invited as their company administrator." required>
           <input
             className={inputClass}
             value={form.adminFullName}
@@ -328,7 +273,7 @@ function CreateTenantForm({ onDone }: { onDone: () => void }) {
           />
         </Field>
 
-        <Field label="Administrator email">
+        <Field label="Administrator email" required>
           <input
             className={inputClass}
             type="email"
@@ -340,8 +285,7 @@ function CreateTenantForm({ onDone }: { onDone: () => void }) {
 
       <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
         <p className="text-xs text-slate-500">
-          The tenant is created as <strong>Pending</strong>. They can upload and correct invoices
-          immediately, but cannot submit until their provider connection is active.
+          Their invoices are metered against your master bundle once billing is switched on.
         </p>
         <Button
           variant="primary"
@@ -351,10 +295,12 @@ function CreateTenantForm({ onDone }: { onDone: () => void }) {
             !form.companyCode ||
             !form.legalNameEn ||
             !form.legalNameAr ||
-            (form.tenantType !== 'CHANNEL_PARTNER' && form.trn.length !== 15)
+            !form.adminEmail ||
+            !form.adminFullName ||
+            form.trn.length !== 15
           }
         >
-          {create.isPending ? 'Creating…' : 'Create tenant'}
+          {create.isPending ? 'Creating…' : 'Create sub-tenant'}
         </Button>
       </div>
     </Card>

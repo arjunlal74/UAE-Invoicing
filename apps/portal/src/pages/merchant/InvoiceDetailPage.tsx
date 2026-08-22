@@ -13,7 +13,7 @@ import {
   formatDateTime,
 } from '../../components/ui';
 import { ApiError, api, apiBlob, downloadBlob } from '../../lib/api';
-import { canEdit, useAuthStore } from '../../stores/auth';
+import { canFile, useAuthStore } from '../../stores/auth';
 
 export function InvoiceDetailPage() {
   const { invoiceId = '' } = useParams();
@@ -41,7 +41,7 @@ export function InvoiceDetailPage() {
   }
 
   const canRetry =
-    canEdit(user) && (data.status === 'REJECTED_BY_FTA' || data.status === 'VALIDATION_FAILED');
+    canFile(user) && (data.status === 'REJECTED_BY_FTA' || data.status === 'VALIDATION_FAILED');
 
   return (
     <div className="space-y-4">

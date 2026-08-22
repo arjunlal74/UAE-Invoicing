@@ -2,8 +2,10 @@ import {
   CreateTenantRequest,
   UpdateTenantRequest,
   UpdateTenantStatusRequest,
+  can,
   type TenantDetail,
   type TenantSummary,
+  type TenantType,
 } from '@uae/contracts';
 import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit, diff } from '../../audit/audit.js';
@@ -11,7 +13,7 @@ import { createInvite } from '../../auth/service.js';
 import { config } from '../../config.js';
 import { jsonb, sql, withPlatformAccess } from '../../db/client.js';
 import { requireAuth, requireContext, requirePlatform } from '../../http/context.js';
-import { badRequest, notFound } from '../../lib/errors.js';
+import { badRequest, forbidden, notFound } from '../../lib/errors.js';
 import { logger } from '../../logger.js';
 
 /**
@@ -25,10 +27,14 @@ import { logger } from '../../logger.js';
 
 interface TenantRow {
   id: string;
+  tenant_type: TenantType;
+  parent_tenant_id: string | null;
+  parent_name: string | null;
   company_code: string;
   legal_name_en: string;
   legal_name_ar: string;
-  trn: string;
+  // Null for a channel partner, which never files under its own TRN.
+  trn: string | null;
   is_vat_group: boolean;
   vat_group_trn: string | null;
   registered_address: unknown;
@@ -36,6 +42,7 @@ interface TenantRow {
   asp_status: TenantDetail['aspStatus'] | null;
   invoice_count: string;
   user_count?: string;
+  sub_tenant_count?: string;
   created_at: Date;
   updated_at: Date;
 }
@@ -43,6 +50,9 @@ interface TenantRow {
 function toSummary(row: TenantRow): TenantSummary {
   return {
     id: row.id,
+    tenantType: row.tenant_type,
+    parentTenantId: row.parent_tenant_id,
+    parentName: row.parent_name,
     companyCode: row.company_code,
     legalNameEn: row.legal_name_en,
     legalNameAr: row.legal_name_ar,
@@ -57,20 +67,24 @@ function toSummary(row: TenantRow): TenantSummary {
 export function registerTenantRoutes(app: FastifyInstance) {
   // --- Platform: list ------------------------------------------------------
   app.get('/api/v1/admin/tenants', { preHandler: requirePlatform() }, async (request, reply) => {
-    const query = request.query as { q?: string; status?: string };
+    const query = request.query as { q?: string; status?: string; tenantType?: string };
 
     const rows = await withPlatformAccess(
       (tx) => tx<TenantRow[]>`
         SELECT t.*,
+               p.legal_name_en AS parent_name,
                c.status AS asp_status,
                (SELECT count(*) FROM invoices i WHERE i.tenant_id = t.id) AS invoice_count
         FROM tenants t
+        LEFT JOIN tenants p ON p.id = t.parent_tenant_id
         LEFT JOIN tenant_asp_configs c ON c.tenant_id = t.id AND c.is_active
         WHERE (${query.q ?? null}::text IS NULL
                OR t.legal_name_en ILIKE ${'%' + (query.q ?? '') + '%'}
                OR t.company_code ILIKE ${'%' + (query.q ?? '') + '%'}
-               OR t.trn ILIKE ${'%' + (query.q ?? '') + '%'})
+               OR coalesce(t.trn, '') ILIKE ${'%' + (query.q ?? '') + '%'})
           AND (${query.status ?? null}::text IS NULL OR t.status::text = ${query.status ?? null})
+          AND (${query.tenantType ?? null}::text IS NULL
+               OR t.tenant_type::text = ${query.tenantType ?? null})
         ORDER BY t.created_at DESC
       `,
     );
@@ -88,12 +102,25 @@ export function registerTenantRoutes(app: FastifyInstance) {
     }
 
     const result = await withPlatformAccess(async (tx) => {
+      // The database enforces this too, but failing here produces a message
+      // the administrator can act on rather than a constraint violation.
+      if (body.parentTenantId) {
+        const parents = await tx<{ tenant_type: TenantType }[]>`
+          SELECT tenant_type FROM tenants WHERE id = ${body.parentTenantId}
+        `;
+        if (!parents[0]) throw notFound('Parent tenant');
+        if (parents[0].tenant_type !== 'CHANNEL_PARTNER') {
+          throw badRequest('A managed sub-tenant must sit under a channel partner.');
+        }
+      }
+
       const inserted = await tx<{ id: string }[]>`
         INSERT INTO tenants (
-          company_code, legal_name_en, legal_name_ar, trn,
+          tenant_type, parent_tenant_id, company_code, legal_name_en, legal_name_ar, trn,
           is_vat_group, vat_group_trn, registered_address, status
         ) VALUES (
-          ${body.companyCode}, ${body.legalNameEn}, ${body.legalNameAr}, ${body.trn},
+          ${body.tenantType}::tenant_type, ${body.parentTenantId ?? null},
+          ${body.companyCode}, ${body.legalNameEn}, ${body.legalNameAr}, ${body.trn ?? null},
           ${body.isVatGroup}, ${body.vatGroupTrn ?? null},
           ${jsonb(tx, body.registeredAddress)}, 'PENDING'
         )
@@ -113,12 +140,15 @@ export function registerTenantRoutes(app: FastifyInstance) {
 
       let inviteToken: string | null = null;
       if (body.adminEmail && body.adminFullName) {
+        // A channel partner's first user administers sub-tenants, not invoices.
+        const adminRole = body.tenantType === 'CHANNEL_PARTNER' ? 'PARTNER_ADMIN' : 'COMPANY_ADMIN';
         const users = await tx<{ id: string }[]>`
           INSERT INTO users (tenant_id, email, full_name, role, is_active)
-          VALUES (${tenantId}, ${body.adminEmail}, ${body.adminFullName}, 'TENANT_ADMIN', FALSE)
+          VALUES (${tenantId}, ${body.adminEmail}, ${body.adminFullName},
+                  ${adminRole}::user_role, FALSE)
           RETURNING id
         `;
-        inviteToken = await createInvite(users[0]!.id);
+        inviteToken = await createInvite(users[0]!.id, tx);
       }
 
       return { tenantId, inviteToken };
@@ -129,7 +159,13 @@ export function registerTenantRoutes(app: FastifyInstance) {
       resourceType: 'TENANT',
       resourceId: result.tenantId,
       tenantId: result.tenantId,
-      changes: { companyCode: body.companyCode, trn: body.trn, legalNameEn: body.legalNameEn },
+      changes: {
+        companyCode: body.companyCode,
+        tenantType: body.tenantType,
+        parentTenantId: body.parentTenantId ?? null,
+        trn: body.trn ?? null,
+        legalNameEn: body.legalNameEn,
+      },
     });
 
     // No mail transport is wired up, so the invite link is returned to the
@@ -156,10 +192,13 @@ export function registerTenantRoutes(app: FastifyInstance) {
     const rows = await withPlatformAccess(
       (tx) => tx<TenantRow[]>`
         SELECT t.*,
+               p.legal_name_en AS parent_name,
                c.status AS asp_status,
                (SELECT count(*) FROM invoices i WHERE i.tenant_id = t.id) AS invoice_count,
-               (SELECT count(*) FROM users u WHERE u.tenant_id = t.id) AS user_count
+               (SELECT count(*) FROM users u WHERE u.tenant_id = t.id) AS user_count,
+               (SELECT count(*) FROM tenants s WHERE s.parent_tenant_id = t.id) AS sub_tenant_count
         FROM tenants t
+        LEFT JOIN tenants p ON p.id = t.parent_tenant_id
         LEFT JOIN tenant_asp_configs c ON c.tenant_id = t.id AND c.is_active
         WHERE t.id = ${id}
       `,
@@ -170,6 +209,7 @@ export function registerTenantRoutes(app: FastifyInstance) {
 
     const detail: TenantDetail = {
       ...toSummary(row),
+      subTenantCount: Number(row.sub_tenant_count ?? 0),
       isVatGroup: row.is_vat_group,
       vatGroupTrn: row.vat_group_trn,
       registeredAddress: row.registered_address as TenantDetail['registeredAddress'],
@@ -280,10 +320,12 @@ export function registerTenantRoutes(app: FastifyInstance) {
     if (!ctx.tenantId) throw notFound('Tenant');
 
     const rows = await sql()<TenantRow[]>`
-      SELECT t.*, c.status AS asp_status,
+      SELECT t.*, p.legal_name_en AS parent_name, c.status AS asp_status,
              (SELECT count(*) FROM invoices i WHERE i.tenant_id = t.id) AS invoice_count,
-             (SELECT count(*) FROM users u WHERE u.tenant_id = t.id) AS user_count
+             (SELECT count(*) FROM users u WHERE u.tenant_id = t.id) AS user_count,
+             (SELECT count(*) FROM tenants s WHERE s.parent_tenant_id = t.id) AS sub_tenant_count
       FROM tenants t
+      LEFT JOIN tenants p ON p.id = t.parent_tenant_id
       LEFT JOIN tenant_asp_configs c ON c.tenant_id = t.id AND c.is_active
       WHERE t.id = ${ctx.tenantId}
     `;
@@ -293,6 +335,7 @@ export function registerTenantRoutes(app: FastifyInstance) {
 
     return reply.send({
       ...toSummary(row),
+      subTenantCount: Number(row.sub_tenant_count ?? 0),
       isVatGroup: row.is_vat_group,
       vatGroupTrn: row.vat_group_trn,
       registeredAddress: row.registered_address,
@@ -307,8 +350,8 @@ export function registerTenantRoutes(app: FastifyInstance) {
   app.patch('/api/v1/tenant/profile', { preHandler: requireAuth() }, async (request, reply) => {
     const ctx = requireContext(request);
     if (!ctx.tenantId) throw notFound('Tenant');
-    if (ctx.role !== 'TENANT_ADMIN') {
-      throw badRequest('Only a tenant administrator can change the company profile.');
+    if (!can(ctx.role, 'tenant.profile.manage')) {
+      throw forbidden('Only a company administrator can change the company profile.');
     }
 
     const body = UpdateTenantRequest.pick({

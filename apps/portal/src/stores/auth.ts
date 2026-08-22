@@ -1,4 +1,5 @@
-import type { LoginResponse, Role, SessionUser } from '@uae/contracts';
+import type { LoginResponse, Permission, SessionUser } from '@uae/contracts';
+import { can as roleCan, isPartnerRole, isPlatformRole } from '@uae/contracts';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
@@ -40,18 +41,42 @@ export const useAuthStore = create<AuthState>()(
   ),
 );
 
-const PLATFORM_ROLES: Role[] = ['PLATFORM_ADMIN', 'PLATFORM_SUPPORT'];
-const EDITOR_ROLES: Role[] = ['TENANT_ADMIN', 'FINANCE_USER', 'DATA_ENTRY_CLERK'];
+/**
+ * Screen-level capability checks.
+ *
+ * These read the same SRS §5 matrix the API enforces, so a button is hidden for
+ * exactly the roles whose request would be refused. Hiding is a courtesy, not a
+ * control — the server decides.
+ */
+export function can(user: SessionUser | null, permission: Permission): boolean {
+  return !!user && roleCan(user.role, permission);
+}
 
 export function isPlatformUser(user: SessionUser | null): boolean {
-  return !!user && PLATFORM_ROLES.includes(user.role);
+  return !!user && isPlatformRole(user.role);
 }
 
-/** Whether this user may change staged data or submit. Auditors may not. */
+export function isPartnerUser(user: SessionUser | null): boolean {
+  return !!user && isPartnerRole(user.role);
+}
+
+/** Whether this user may change staged data. Approvers and auditors may not. */
 export function canEdit(user: SessionUser | null): boolean {
-  return !!user && EDITOR_ROLES.includes(user.role);
+  return can(user, 'invoice.edit');
 }
 
-export function isTenantAdmin(user: SessionUser | null): boolean {
-  return user?.role === 'TENANT_ADMIN';
+/** Whether this user may file with the FTA. The tax approver, and only them. */
+export function canFile(user: SessionUser | null): boolean {
+  return can(user, 'invoice.submit');
+}
+
+export function isCompanyAdmin(user: SessionUser | null): boolean {
+  return can(user, 'tenant.users.manage');
+}
+
+/** Where a user lands after signing in, which differs per tier. */
+export function homePathFor(user: SessionUser | null): string {
+  if (isPlatformUser(user)) return '/admin/tenants';
+  if (isPartnerUser(user)) return '/partner/sub-tenants';
+  return '/';
 }

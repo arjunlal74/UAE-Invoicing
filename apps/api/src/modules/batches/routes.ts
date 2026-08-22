@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit } from '../../audit/audit.js';
 import { config } from '../../config.js';
 import { withTenant } from '../../db/client.js';
-import { EDITOR_ROLES, READER_ROLES, requireContext, requireRole } from '../../http/context.js';
+import { requireContext, requirePermission } from '../../http/context.js';
 import { sha256Hex } from '../../lib/crypto.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { PARSE_JOB_OPTIONS, batchParseQueue } from '../../queue/queues.js';
@@ -53,7 +53,7 @@ export function registerBatchRoutes(app: FastifyInstance) {
   // --- Upload --------------------------------------------------------------
   app.post(
     '/api/v1/batches',
-    { preHandler: requireRole(...EDITOR_ROLES) },
+    { preHandler: requirePermission('invoice.edit') },
     async (request, reply) => {
       const ctx = requireContext(request);
       const tenantId = ctx.tenantId;
@@ -152,7 +152,7 @@ export function registerBatchRoutes(app: FastifyInstance) {
   );
 
   // --- List ----------------------------------------------------------------
-  app.get('/api/v1/batches', { preHandler: requireRole(...READER_ROLES) }, async (request, reply) => {
+  app.get('/api/v1/batches', { preHandler: requirePermission('invoice.read') }, async (request, reply) => {
     const ctx = requireContext(request);
     if (!ctx.tenantId) throw notFound('Tenant');
 
@@ -182,7 +182,7 @@ export function registerBatchRoutes(app: FastifyInstance) {
   // --- Single batch --------------------------------------------------------
   app.get(
     '/api/v1/batches/:id',
-    { preHandler: requireRole(...READER_ROLES) },
+    { preHandler: requirePermission('invoice.read') },
     async (request, reply) => {
       const ctx = requireContext(request);
       const { id } = request.params as { id: string };
@@ -206,7 +206,7 @@ export function registerBatchRoutes(app: FastifyInstance) {
   // --- Download the original file -----------------------------------------
   app.get(
     '/api/v1/batches/:id/source',
-    { preHandler: requireRole(...READER_ROLES) },
+    { preHandler: requirePermission('invoice.read') },
     async (request, reply) => {
       const ctx = requireContext(request);
       const { id } = request.params as { id: string };

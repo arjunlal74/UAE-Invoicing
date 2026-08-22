@@ -9,9 +9,10 @@ import { runMigrations } from './migrate.js';
 /**
  * Development seed.
  *
- * Creates a platform administrator and two merchants: one fully active with a
- * working (mock) provider connection, and one still PENDING_REGISTRATION — so
- * the "you cannot submit yet" path is visible without having to contrive it.
+ * Covers every tier of the v2.1 hierarchy and every role, because the ones that
+ * are awkward to reach are exactly the ones worth exercising: a merchant that
+ * cannot submit yet, an accountant who cannot file, an approver who can, and a
+ * channel partner with a sub-tenant hanging off it.
  *
  * Refuses to run against production. Seeded accounts have known passwords.
  */
@@ -39,24 +40,22 @@ async function seed() {
     }
 
     // --- Platform staff ----------------------------------------------------
+    // v2.1 collapses the platform tier to a single role, so there is one
+    // account here rather than the admin/support pair v1.x seeded.
     await tx`
       INSERT INTO users (tenant_id, email, full_name, role, password_hash, is_active)
-      VALUES (NULL, 'admin@platform.local', 'Platform Administrator', 'PLATFORM_ADMIN',
-              ${passwordHash}, TRUE)
-    `;
-    await tx`
-      INSERT INTO users (tenant_id, email, full_name, role, password_hash, is_active)
-      VALUES (NULL, 'support@platform.local', 'Platform Support', 'PLATFORM_SUPPORT',
+      VALUES (NULL, 'admin@platform.local', 'Platform Administrator', 'GLOBAL_ADMIN',
               ${passwordHash}, TRUE)
     `;
 
-    // --- Active merchant ---------------------------------------------------
+    // --- Direct enterprise tenant, fully live ------------------------------
     const active = await tx<{ id: string }[]>`
       INSERT INTO tenants (
-        company_code, legal_name_en, legal_name_ar, trn, is_vat_group,
+        tenant_type, company_code, legal_name_en, legal_name_ar, trn, is_vat_group,
         registered_address, status
       ) VALUES (
-        'ALBAHAR', 'Al-Bahar Enterprises LLC', 'شركة البحار للمقاولات ذ.م.م',
+        'ENTERPRISE_TENANT', 'ALBAHAR', 'Al-Bahar Enterprises LLC',
+        'شركة البحار للمقاولات ذ.م.م',
         '100293847500003', FALSE,
         ${jsonb(tx, {
           street: 'Sheikh Zayed Road',
@@ -85,9 +84,9 @@ async function seed() {
     `;
 
     for (const [email, name, role] of [
-      ['admin@albahar.local', 'Fatima Al-Mansoori', 'TENANT_ADMIN'],
-      ['finance@albahar.local', 'Rashid Khan', 'FINANCE_USER'],
-      ['clerk@albahar.local', 'Priya Nair', 'DATA_ENTRY_CLERK'],
+      ['admin@albahar.local', 'Fatima Al-Mansoori', 'COMPANY_ADMIN'],
+      ['finance@albahar.local', 'Rashid Khan', 'TAX_APPROVER_CFO'],
+      ['clerk@albahar.local', 'Priya Nair', 'ACCOUNTANT'],
       ['auditor@albahar.local', 'James Whitfield', 'AUDITOR'],
     ] as const) {
       await tx`
@@ -96,13 +95,14 @@ async function seed() {
       `;
     }
 
-    // --- Merchant still waiting on provider registration -------------------
+    // --- Direct enterprise tenant, still waiting on registration -----------
     const pending = await tx<{ id: string }[]>`
       INSERT INTO tenants (
-        company_code, legal_name_en, legal_name_ar, trn, is_vat_group,
+        tenant_type, company_code, legal_name_en, legal_name_ar, trn, is_vat_group,
         registered_address, status
       ) VALUES (
-        'GULFTECH', 'Gulf Tech Solutions FZE', 'شركة الخليج للحلول التقنية',
+        'ENTERPRISE_TENANT', 'GULFTECH', 'Gulf Tech Solutions FZE',
+        'شركة الخليج للحلول التقنية',
         '100492817400003', FALSE,
         ${jsonb(tx, {
           street: 'Corniche Road',
@@ -129,28 +129,108 @@ async function seed() {
 
     await tx`
       INSERT INTO users (tenant_id, email, full_name, role, password_hash, is_active)
-      VALUES (${pendingId}, 'admin@gulftech.local', 'Omar Haddad', 'TENANT_ADMIN',
+      VALUES (${pendingId}, 'admin@gulftech.local', 'Omar Haddad', 'COMPANY_ADMIN',
               ${passwordHash}, TRUE)
     `;
 
-    logger.info({ activeId, pendingId }, 'seed data created');
+    // --- Channel partner ----------------------------------------------------
+    // No TRN: an advisory firm resells capacity, it does not file under its own
+    // number. The schema allows that for this tier only.
+    const partner = await tx<{ id: string }[]>`
+      INSERT INTO tenants (
+        tenant_type, company_code, legal_name_en, legal_name_ar, is_vat_group,
+        registered_address, status
+      ) VALUES (
+        'CHANNEL_PARTNER', 'GULFADV', 'Gulf Advisory Partners',
+        'شركاء الخليج الاستشاريون', FALSE,
+        ${jsonb(tx, {
+          street: 'Al Maryah Island',
+          city: 'Abu Dhabi',
+          emirate: 'Abu Dhabi',
+          postalCode: '00000',
+          countryCode: 'AE',
+        })},
+        'ACTIVE'
+      )
+      RETURNING id
+    `;
+    const partnerId = partner[0]!.id;
+
+    await tx`
+      INSERT INTO users (tenant_id, email, full_name, role, password_hash, is_active)
+      VALUES (${partnerId}, 'partner@gulfadvisory.local', 'Layla Haddad', 'PARTNER_ADMIN',
+              ${passwordHash}, TRUE)
+    `;
+
+    // --- Managed sub-tenant under that partner ------------------------------
+    const subTenant = await tx<{ id: string }[]>`
+      INSERT INTO tenants (
+        tenant_type, parent_tenant_id, company_code, legal_name_en, legal_name_ar,
+        trn, is_vat_group, registered_address, status
+      ) VALUES (
+        'MANAGED_SUB_TENANT', ${partnerId}, 'DESERTLOG', 'Desert Logistics LLC',
+        'الصحراء للخدمات اللوجستية ذ.م.م',
+        '100583920100003', FALSE,
+        ${jsonb(tx, {
+          street: 'Jebel Ali Industrial Area',
+          city: 'Dubai',
+          emirate: 'Dubai',
+          postalCode: '00000',
+          countryCode: 'AE',
+        })},
+        'ACTIVE'
+      )
+      RETURNING id
+    `;
+    const subTenantId = subTenant[0]!.id;
+
+    await tx`
+      INSERT INTO tenant_asp_configs (
+        tenant_id, provider_type, display_name, api_endpoint,
+        credentials_cipher, webhook_secret_hash, provider_account_id, status, notes
+      ) VALUES (
+        ${subTenantId}, 'MOCK', 'Simulated Accredited Provider', '',
+        ${encryptSecret(JSON.stringify({ apiKey: 'mock-api-key', webhookSecret }))},
+        ${sha256Hex(webhookSecret)},
+        'MOCK-ACCT-0002', 'ACTIVE',
+        'Simulated provider, shared settings with the partner book.'
+      )
+    `;
+
+    for (const [email, name, role] of [
+      ['admin@desertlog.local', 'Yusuf Rahman', 'COMPANY_ADMIN'],
+      ['cfo@desertlog.local', 'Aisha Belhoul', 'TAX_APPROVER_CFO'],
+    ] as const) {
+      await tx`
+        INSERT INTO users (tenant_id, email, full_name, role, password_hash, is_active)
+        VALUES (${subTenantId}, ${email}, ${name}, ${role}::user_role, ${passwordHash}, TRUE)
+      `;
+    }
+
+    logger.info({ activeId, pendingId, partnerId, subTenantId }, 'seed data created');
   });
 
   const banner = `
 ────────────────────────────────────────────────────────────────────
   Seed complete. All accounts use the password: ${DEV_PASSWORD}
 
-  PLATFORM ADMIN     admin@platform.local
-  PLATFORM SUPPORT   support@platform.local
+  HOST GLOBAL ADMIN    admin@platform.local
 
-  Al-Bahar Enterprises (ACTIVE — can submit)
-    TENANT ADMIN     admin@albahar.local
-    FINANCE USER     finance@albahar.local
-    DATA ENTRY       clerk@albahar.local
-    AUDITOR          auditor@albahar.local
+  Al-Bahar Enterprises — enterprise tenant, ACTIVE
+    COMPANY ADMIN      admin@albahar.local
+    TAX APPROVER/CFO   finance@albahar.local     (the only one who can file)
+    ACCOUNTANT         clerk@albahar.local       (prepares, cannot file)
+    AUDITOR            auditor@albahar.local
 
-  Gulf Tech Solutions (PENDING — upload only, cannot submit)
-    TENANT ADMIN     admin@gulftech.local
+  Gulf Tech Solutions — enterprise tenant, PENDING (upload only)
+    COMPANY ADMIN      admin@gulftech.local
+
+  Gulf Advisory Partners — channel partner
+    PARTNER ADMIN      partner@gulfadvisory.local
+
+  Desert Logistics — managed sub-tenant of Gulf Advisory, ACTIVE
+    COMPANY ADMIN      admin@desertlog.local
+    TAX APPROVER/CFO   cfo@desertlog.local
 
   Mock provider webhook secret: ${webhookSecret}
 ────────────────────────────────────────────────────────────────────

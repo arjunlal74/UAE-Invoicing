@@ -209,8 +209,8 @@ export function registerAdminRoutes(app: FastifyInstance) {
 
   /** Tenant-scoped audit log, for a merchant's own auditor role. */
   app.get('/api/v1/tenant/audit', async (request, reply) => {
-    const { requireRole } = await import('../../http/context.js');
-    await requireRole('TENANT_ADMIN', 'AUDITOR')(request, reply);
+    const { requirePermission } = await import('../../http/context.js');
+    await requirePermission('audit.read')(request, reply);
 
     const ctx = requireContext(request);
     if (!ctx.tenantId) throw notFound('Tenant');

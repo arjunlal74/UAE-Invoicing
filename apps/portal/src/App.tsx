@@ -9,6 +9,8 @@ import { AdminStaffPage } from './pages/admin/AdminStaffPage';
 import { AdminTenantDetailPage } from './pages/admin/AdminTenantDetailPage';
 import { AdminTenantsPage } from './pages/admin/AdminTenantsPage';
 import { AdminTransmissionsPage } from './pages/admin/AdminTransmissionsPage';
+import { PartnerSubTenantsPage } from './pages/partner/PartnerSubTenantsPage';
+import { ApprovalsPage } from './pages/merchant/ApprovalsPage';
 import { BatchesPage } from './pages/merchant/BatchesPage';
 import { DashboardPage } from './pages/merchant/DashboardPage';
 import { InvoiceDetailPage } from './pages/merchant/InvoiceDetailPage';
@@ -16,7 +18,7 @@ import { InvoicesPage } from './pages/merchant/InvoicesPage';
 import { SettingsPage } from './pages/merchant/SettingsPage';
 import { StagingPage } from './pages/merchant/StagingPage';
 import { UploadPage } from './pages/merchant/UploadPage';
-import { isPlatformUser, useAuthStore } from './stores/auth';
+import { can as storeCan, homePathFor, isPartnerUser, isPlatformUser, useAuthStore } from './stores/auth';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -33,17 +35,39 @@ const queryClient = new QueryClient({
   },
 });
 
-function RequireAuth({ children, platform }: { children: JSX.Element; platform?: boolean }) {
+/**
+ * v2.1 has three panels, not two, so the guard asks which one a route belongs
+ * to and sends anyone else to their own home. A user who lands on the wrong URL
+ * has not done anything wrong, so they get redirected rather than an error.
+ */
+type Area = 'tenant' | 'platform' | 'partner';
+
+function areaOf(user: ReturnType<typeof useAuthStore.getState>['user']): Area {
+  if (isPlatformUser(user)) return 'platform';
+  if (isPartnerUser(user)) return 'partner';
+  return 'tenant';
+}
+
+function RequireAuth({ children, area = 'tenant' }: { children: JSX.Element; area?: Area }) {
   const user = useAuthStore((s) => s.user);
   const token = useAuthStore((s) => s.accessToken);
 
   if (!token || !user) return <Navigate to="/login" replace />;
+  if (areaOf(user) !== area) return <Navigate to={homePathFor(user)} replace />;
 
-  // A merchant reaching an admin URL is sent to their own home rather than
-  // shown a permission error — they did not do anything wrong.
-  if (platform && !isPlatformUser(user)) return <Navigate to="/" replace />;
-  if (!platform && isPlatformUser(user)) return <Navigate to="/admin/tenants" replace />;
+  return children;
+}
 
+/** A tenant route that additionally needs a capability, such as the CFO queue. */
+function RequirePermission({
+  children,
+  permission,
+}: {
+  children: JSX.Element;
+  permission: Parameters<typeof storeCan>[1];
+}) {
+  const user = useAuthStore((s) => s.user);
+  if (!storeCan(user, permission)) return <Navigate to="/" replace />;
   return children;
 }
 
@@ -69,12 +93,31 @@ export function App() {
           <Route path="/invoices" element={<InvoicesPage />} />
           <Route path="/invoices/:invoiceId" element={<InvoiceDetailPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route
+            path="/approvals"
+            element={
+              <RequirePermission permission="invoice.submit">
+                <ApprovalsPage />
+              </RequirePermission>
+            }
+          />
+        </Route>
+
+        {/* Channel partner */}
+        <Route
+          element={
+            <RequireAuth area="partner">
+              <AppLayout />
+            </RequireAuth>
+          }
+        >
+          <Route path="/partner/sub-tenants" element={<PartnerSubTenantsPage />} />
         </Route>
 
         {/* Platform admin */}
         <Route
           element={
-            <RequireAuth platform>
+            <RequireAuth area="platform">
               <AppLayout />
             </RequireAuth>
           }

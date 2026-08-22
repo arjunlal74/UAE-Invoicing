@@ -75,15 +75,31 @@ async function main() {
   });
   check('rejects a wrong password', badLogin.status === 401, `got ${badLogin.status}`);
 
+  // SRS v2.1 §5 splits preparation from filing, so the run needs both: the
+  // accountant does everything up to submission, and only the tax approver can
+  // release the batch to the FTA.
   const login = await api('/api/v1/auth/login', {
+    method: 'POST',
+    body: { email: 'clerk@albahar.local', password: PASSWORD },
+  });
+  check('signs in an accountant', login.status === 200 && !!login.body.accessToken);
+  const token = login.body.accessToken;
+
+  const cfoLogin = await api('/api/v1/auth/login', {
     method: 'POST',
     body: { email: 'finance@albahar.local', password: PASSWORD },
   });
-  check('signs in a finance user', login.status === 200 && !!login.body.accessToken);
-  const token = login.body.accessToken;
+  check('signs in a tax approver', cfoLogin.status === 200 && !!cfoLogin.body.accessToken);
+  const cfoToken = cfoLogin.body.accessToken;
+
+  const auditorLogin = await api('/api/v1/auth/login', {
+    method: 'POST',
+    body: { email: 'auditor@albahar.local', password: PASSWORD },
+  });
+  const auditorToken = auditorLogin.body.accessToken;
 
   const me = await api('/api/v1/auth/me', { token });
-  check('returns the session user', me.body?.email === 'finance@albahar.local');
+  check('returns the session user', me.body?.email === 'clerk@albahar.local');
   check('scopes the user to their tenant', me.body?.tenantName === 'Al-Bahar Enterprises LLC');
 
   const noAuth = await api('/api/v1/invoices');
@@ -99,6 +115,40 @@ async function main() {
 
   const adminAttempt = await api('/api/v1/admin/tenants', { token });
   check('a merchant cannot reach the admin panel', adminAttempt.status === 403, `got ${adminAttempt.status}`);
+
+  section('2b. Role boundaries (SRS v2.1 §5)');
+
+  const auditorEdit = await api('/api/v1/batches', {
+    method: 'POST',
+    token: auditorToken,
+    formData: (() => { const f = new FormData(); f.append('file', new Blob(['x']), 'a.xlsx'); return f; })(),
+  });
+  check('an auditor cannot upload', auditorEdit.status === 403, `got ${auditorEdit.status}`);
+
+  const auditorRead = await api('/api/v1/invoices', { token: auditorToken });
+  check('but an auditor can read invoices', auditorRead.status === 200, `got ${auditorRead.status}`);
+
+  const accountantApproval = await api('/api/v1/approvals/approve', {
+    method: 'POST',
+    token,
+    body: {},
+  });
+  check(
+    'an accountant cannot approve their own work',
+    accountantApproval.status === 403,
+    `got ${accountantApproval.status}`,
+  );
+
+  const approverEdit = await api('/api/v1/batches', {
+    method: 'POST',
+    token: cfoToken,
+    formData: (() => { const f = new FormData(); f.append('file', new Blob(['x']), 'a.xlsx'); return f; })(),
+  });
+  check(
+    'a tax approver files but does not prepare',
+    approverEdit.status === 403,
+    `got ${approverEdit.status}`,
+  );
 
   section('3. Template download');
 
@@ -264,13 +314,28 @@ async function main() {
   const readyBatch = await api(`/api/v1/batches/${batchId}`, { token });
   check('all four rows are now valid', readyBatch.body?.validRecords === 4, `valid=${readyBatch.body?.validRecords}`);
 
-  section('9. Submit');
+  section('9. Submit for approval, then file');
 
   const submit = await api(`/api/v1/batches/${batchId}/submit`, { method: 'POST', token, body: {} });
-  check('queues every valid invoice', submit.status === 200 && submit.body.queued === 4, JSON.stringify(submit.body));
+  check('the accountant sends every valid invoice for approval', submit.status === 200 && submit.body.pendingApproval === 4, JSON.stringify(submit.body));
+  check('and nothing reaches the FTA yet', submit.body?.queued === 0, JSON.stringify(submit.body));
 
   const resubmit = await api(`/api/v1/batches/${batchId}/submit`, { method: 'POST', token, body: {} });
-  check('a second submit queues nothing', resubmit.body?.queued === 0, JSON.stringify(resubmit.body));
+  check('a second submit sends nothing', resubmit.body?.pendingApproval === 0, JSON.stringify(resubmit.body));
+
+  const queue = await api('/api/v1/invoices?status=PENDING_CFO_APPROVAL&pageSize=50', { token: cfoToken });
+  check('the approver sees the queue', queue.body?.total === 4, `total=${queue.body?.total}`);
+  check('the queue names who prepared each invoice', queue.body?.items?.every((i) => i.createdByName === 'Priya Nair'));
+
+  const approve = await api('/api/v1/approvals/approve', {
+    method: 'POST',
+    token: cfoToken,
+    body: { note: 'Reviewed against the August ledger.' },
+  });
+  check('the approver releases all four', approve.status === 200 && approve.body.affected === 4, JSON.stringify(approve.body));
+
+  const emptyQueue = await api('/api/v1/invoices?status=PENDING_CFO_APPROVAL', { token: cfoToken });
+  check('the queue empties', emptyQueue.body?.total === 0, `total=${emptyQueue.body?.total}`);
 
   section('10. Transmission and clearance');
 
@@ -294,6 +359,8 @@ async function main() {
   );
 
   const detail = await api(`/api/v1/invoices/${cleared[0].id}`, { token });
+  check('the filed invoice records its approver', detail.body?.approvedByName === 'Rashid Khan', detail.body?.approvedByName);
+  check('and the approval note', /August ledger/.test(detail.body?.approvalNote ?? ''), detail.body?.approvalNote);
   check('invoice detail loads', detail.status === 200);
   check('XML was generated and archived', !!detail.body?.ublXmlUri);
   check('XML digest was recorded', detail.body?.ublXmlSha256?.length === 64);
@@ -306,6 +373,71 @@ async function main() {
   check('archived XML is retrievable', xml.status === 200);
   check('XML is a PINT-AE UBL invoice', xmlText.includes('urn:peppol:pint:billing-1@ae-1'));
   check('XML carries the supplier TRN', xmlText.includes('100293847500003'));
+
+  section('10b. Returning an invoice to its preparer');
+
+  // Rejection withdraws the invoice rather than marking it failed, because it
+  // never left the building. That has to free the invoice number too, or the
+  // corrected resubmission would collide with the row it replaces.
+  const retryBook = new ExcelJS.Workbook();
+  await retryBook.xlsx.load(template.buffer);
+  const retryHeader = retryBook.getWorksheet('Invoice_Header');
+  const retryLines = retryBook.getWorksheet('Invoice_Line_Items');
+  retryHeader.getCell('A2').value = 'E2E-RET-001';
+  retryHeader.getCell('B2').value = '380';
+  retryHeader.getCell('C2').value = today;
+  retryHeader.getCell('D2').value = '11:00:00';
+  retryHeader.getCell('I2').value = '100384759200003';
+  retryHeader.getCell('J2').value = 'Returned Goods Co';
+  retryHeader.getCell('K2').value = 'Dubai';
+  retryHeader.getCell('N2').value = '30';
+  retryLines.getCell('A2').value = 'E2E-RET-001';
+  retryLines.getCell('B2').value = 1;
+  retryLines.getCell('C2').value = 'Disputed Consulting';
+  retryLines.getCell('E2').value = 1;
+  retryLines.getCell('F2').value = 'PCE';
+  retryLines.getCell('G2').value = 900;
+  retryLines.getCell('I2').value = 'S';
+
+  const retryBuffer = Buffer.from(await retryBook.xlsx.writeBuffer());
+  const retryForm = new FormData();
+  retryForm.append('file', new Blob([retryBuffer]), 'e2e-return.xlsx');
+  const returnUpload = await api('/api/v1/batches', { method: 'POST', token, formData: retryForm });
+  check('the accountant uploads a second batch', returnUpload.status === 202, `${returnUpload.status} ${JSON.stringify(returnUpload.body)}`);
+  const returnBatchId = returnUpload.body?.id;
+
+  await waitFor('the second batch to parse', async () => {
+    const r = await api(`/api/v1/batches/${returnBatchId}`, { token });
+    return r.body?.status && !['UPLOADED', 'PARSING'].includes(r.body.status) ? r.body : null;
+  });
+
+  const sentForApproval = await api(`/api/v1/batches/${returnBatchId}/submit`, { method: 'POST', token, body: {} });
+  check('and sends it for approval', sentForApproval.body?.pendingApproval === 1, JSON.stringify(sentForApproval.body));
+
+  const rejectNoNote = await api('/api/v1/approvals/reject', { method: 'POST', token: cfoToken, body: {} });
+  check('rejection without a reason is refused', rejectNoNote.status === 400, `got ${rejectNoNote.status}`);
+
+  const rejected = await api('/api/v1/approvals/reject', {
+    method: 'POST',
+    token: cfoToken,
+    body: { note: 'The consulting line is disputed — confirm the rate first.' },
+  });
+  check('the approver returns it', rejected.status === 200 && rejected.body.affected === 1, JSON.stringify(rejected.body));
+
+  const afterReject = await api(`/api/v1/batches/${returnBatchId}/staging?pageSize=10`, { token });
+  const reopened = afterReject.body?.rows?.[0];
+  check('the staged row reopens for correction', reopened?.invoiceId === null, JSON.stringify(reopened?.invoiceId));
+  check('and is still submittable', reopened?.submittable === true);
+
+  const resent = await api(`/api/v1/batches/${returnBatchId}/submit`, { method: 'POST', token, body: {} });
+  check(
+    'so the corrected invoice can be sent again under the same number',
+    resent.body?.pendingApproval === 1,
+    JSON.stringify(resent.body),
+  );
+
+  const cleanup = await api('/api/v1/approvals/approve', { method: 'POST', token: cfoToken, body: {} });
+  check('and approved on the second pass', cleanup.body?.affected === 1, JSON.stringify(cleanup.body));
 
   section('11. Isolation of the archived data');
 
@@ -369,7 +501,14 @@ async function main() {
   check('platform admin signs in', !!adminToken);
 
   const tenants = await api('/api/v1/admin/tenants', { token: adminToken });
-  check('admin lists every tenant', tenants.body?.items?.length === 2, `count=${tenants.body?.items?.length}`);
+  check('admin lists every tenant', tenants.body?.items?.length === 4, `count=${tenants.body?.items?.length}`);
+  check(
+    'admin sees the tenancy tiers',
+    new Set(tenants.body?.items?.map((t) => t.tenantType)).size === 3,
+    JSON.stringify(tenants.body?.items?.map((t) => t.tenantType)),
+  );
+  const subTenantRow = tenants.body?.items?.find((t) => t.companyCode === 'DESERTLOG');
+  check('and which partner a sub-tenant sits under', subTenantRow?.parentName === 'Gulf Advisory Partners', subTenantRow?.parentName);
 
   const monitor = await api('/api/v1/admin/transmissions?onlyProblems=true', { token: adminToken });
   check('transmission monitor loads', monitor.status === 200);
@@ -379,13 +518,56 @@ async function main() {
   const actions = new Set(auditLog.body?.items?.map((i) => i.action));
   check('audit recorded the upload', actions.has('BATCH_UPLOADED'));
   check('audit recorded the inline cell edit', actions.has('STAGING_ROW_EDITED'));
-  check('audit recorded the submission', actions.has('BATCH_SUBMITTED'));
+  check('audit recorded the hand-off for approval', actions.has('BATCH_SENT_FOR_APPROVAL'));
+  check('audit recorded the approval', actions.has('INVOICES_APPROVED'));
   check('audit recorded the clearance verdict', actions.has('INVOICE_STATUS_CHANGED'));
 
   const aspConfig = await api(`/api/v1/admin/tenants/${tenants.body.items.find((t) => t.companyCode === 'ALBAHAR').id}/asp-config`, { token: adminToken });
   check('admin can read the ASP configuration', aspConfig.status === 200);
   check('credentials are never returned', aspConfig.body?.credentials === undefined);
   check('but their presence is reported', aspConfig.body?.hasCredentials === true);
+
+  section('15. Channel partner portal');
+
+  const partnerLogin = await api('/api/v1/auth/login', {
+    method: 'POST',
+    body: { email: 'partner@gulfadvisory.local', password: PASSWORD },
+  });
+  const partnerToken = partnerLogin.body.accessToken;
+  check('partner admin signs in', !!partnerToken);
+
+  const partnerOverview = await api('/api/v1/partner/overview', { token: partnerToken });
+  check('partner sees their roll-up', partnerOverview.status === 200);
+  check('counting their sub-tenants', partnerOverview.body?.subTenantCount === 1, JSON.stringify(partnerOverview.body));
+
+  const subTenants = await api('/api/v1/partner/sub-tenants', { token: partnerToken });
+  check('partner lists their sub-tenants', subTenants.body?.items?.length === 1, `count=${subTenants.body?.items?.length}`);
+  check('and only their own', subTenants.body?.items?.[0]?.companyCode === 'DESERTLOG');
+
+  const partnerAdminPanel = await api('/api/v1/admin/tenants', { token: partnerToken });
+  check('a partner cannot reach the admin panel', partnerAdminPanel.status === 403, `got ${partnerAdminPanel.status}`);
+
+  const partnerInvoices = await api('/api/v1/invoices', { token: partnerToken });
+  check("a partner cannot read a sub-tenant's invoices", partnerInvoices.status === 403, `got ${partnerInvoices.status}`);
+
+  const merchantPartnerPortal = await api('/api/v1/partner/sub-tenants', { token });
+  check('a merchant cannot reach the partner portal', merchantPartnerPortal.status === 403, `got ${merchantPartnerPortal.status}`);
+
+  const newSubTenant = await api('/api/v1/partner/sub-tenants', {
+    method: 'POST',
+    token: partnerToken,
+    body: {
+      companyCode: `E2ESUB${Date.now().toString().slice(-6)}`,
+      legalNameEn: 'E2E Onboarded Client LLC',
+      legalNameAr: 'عميل تجريبي ذ.م.م',
+      trn: '100777888900003',
+      registeredAddress: { street: 'Test Road', city: 'Dubai', emirate: 'Dubai', postalCode: '', countryCode: 'AE' },
+      adminEmail: `e2e-sub-${Date.now()}@example.local`,
+      adminFullName: 'E2E Sub Admin',
+    },
+  });
+  check('partner onboards a sub-tenant', newSubTenant.status === 201, `${newSubTenant.status} ${JSON.stringify(newSubTenant.body)}`);
+  check('and gets an invitation link for its administrator', /accept-invite\?token=/.test(newSubTenant.body?.inviteUrl ?? ''));
 
   console.log(`\n${'='.repeat(60)}`);
   console.log(`  ${passed} passed, ${failed} failed`);

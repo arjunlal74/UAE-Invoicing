@@ -1,6 +1,7 @@
+import { ROLE_LABELS } from '@uae/contracts';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
-import { isPlatformUser, useAuthStore } from '../stores/auth';
+import { can, isPartnerUser, isPlatformUser, useAuthStore } from '../stores/auth';
 import { StatusBadge, cx } from './ui';
 
 interface NavItem {
@@ -10,10 +11,15 @@ interface NavItem {
   end?: boolean;
 }
 
-const MERCHANT_NAV: NavItem[] = [
+/**
+ * Navigation is built from the same capability matrix the API enforces, so a
+ * role never sees a link to a screen its requests would be refused.
+ */
+const MERCHANT_NAV: (NavItem & { needs?: Parameters<typeof can>[1] })[] = [
   { to: '/', label: 'Dashboard', end: true },
-  { to: '/upload', label: 'Upload invoices' },
+  { to: '/upload', label: 'Upload invoices', needs: 'invoice.edit' },
   { to: '/batches', label: 'Batches' },
+  { to: '/approvals', label: 'Approvals', needs: 'invoice.submit' },
   { to: '/invoices', label: 'Invoices' },
   { to: '/settings', label: 'Settings' },
 ];
@@ -25,6 +31,8 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/staff', label: 'Staff' },
 ];
 
+const PARTNER_NAV: NavItem[] = [{ to: '/partner/sub-tenants', label: 'Sub-tenants' }];
+
 export function AppLayout() {
   const user = useAuthStore((s) => s.user);
   const refreshToken = useAuthStore((s) => s.refreshToken);
@@ -32,7 +40,13 @@ export function AppLayout() {
   const navigate = useNavigate();
 
   const platform = isPlatformUser(user);
-  const nav = platform ? ADMIN_NAV : MERCHANT_NAV;
+  const partner = isPartnerUser(user);
+
+  const nav = platform
+    ? ADMIN_NAV
+    : partner
+      ? PARTNER_NAV
+      : MERCHANT_NAV.filter((item) => !item.needs || can(user, item.needs));
 
   const signOut = async () => {
     // Best effort: the server-side revoke matters, but a network failure must
@@ -56,7 +70,8 @@ export function AppLayout() {
                 UAE
               </span>
               <span className="text-sm font-semibold">
-                E-Invoicing {platform ? 'Administration' : 'Portal'}
+                E-Invoicing{' '}
+                {platform ? 'Administration' : partner ? 'Partner Portal' : 'Portal'}
               </span>
             </div>
 
@@ -83,7 +98,7 @@ export function AppLayout() {
             <div className="text-right leading-tight">
               <div className="font-medium">{user?.fullName}</div>
               <div className="text-xs text-white/70">
-                {user?.tenantName ?? 'Platform'} · {user?.role.replace(/_/g, ' ').toLowerCase()}
+                {user?.tenantName ?? 'Platform'} · {user ? ROLE_LABELS[user.role] : ''}
               </div>
             </div>
             <button
@@ -98,7 +113,7 @@ export function AppLayout() {
 
       {/* A merchant whose account is not yet live needs to know before they
           spend an afternoon preparing invoices they cannot submit. */}
-      {!platform && user?.tenantStatus && user.tenantStatus !== 'ACTIVE' && (
+      {!platform && !partner && user?.tenantStatus && user.tenantStatus !== 'ACTIVE' && (
         <div className="border-b border-warn-200 bg-warn-50 px-4 py-2">
           <div className="mx-auto flex max-w-[1600px] items-center gap-2 text-sm text-warn-700">
             <StatusBadge status={user.tenantStatus} />

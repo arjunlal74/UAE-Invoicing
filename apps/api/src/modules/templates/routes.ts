@@ -1,7 +1,7 @@
 import { ALL_RULES } from '@uae/domain';
 import type { FastifyInstance } from 'fastify';
 import { withTenant } from '../../db/client.js';
-import { READER_ROLES, requireAuth, requireContext, requireRole } from '../../http/context.js';
+import { requireAuth, requireContext, requirePermission } from '../../http/context.js';
 import { notFound } from '../../lib/errors.js';
 import { buildTemplate } from '../../excel/template.js';
 
@@ -13,7 +13,7 @@ export function registerTemplateRoutes(app: FastifyInstance) {
    */
   app.get(
     '/api/v1/templates/invoice-template.xlsx',
-    { preHandler: requireRole(...READER_ROLES) },
+    { preHandler: requirePermission('invoice.read') },
     async (request, reply) => {
       const ctx = requireContext(request);
       if (!ctx.tenantId) throw notFound('Tenant');

@@ -1,6 +1,7 @@
 import {
   PatchStagedRowRequest,
   SubmitBatchRequest,
+  can,
   type StagedRow,
 } from '@uae/contracts';
 import {
@@ -18,7 +19,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit } from '../../audit/audit.js';
 import { jsonb, withTenant, type Tx } from '../../db/client.js';
-import { EDITOR_ROLES, READER_ROLES, requireContext, requireRole } from '../../http/context.js';
+import { requireContext, requirePermission } from '../../http/context.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { SUBMIT_JOB_OPTIONS, invoiceSubmitQueue } from '../../queue/queues.js';
 import { BATCH_SELECT, toBatchSummary, type BatchRow } from '../batches/routes.js';
@@ -76,7 +77,7 @@ export function registerStagingRoutes(app: FastifyInstance) {
   // --- The grid's data -----------------------------------------------------
   app.get(
     '/api/v1/batches/:id/staging',
-    { preHandler: requireRole(...READER_ROLES) },
+    { preHandler: requirePermission('invoice.read') },
     async (request, reply) => {
       const ctx = requireContext(request);
       const { id } = request.params as { id: string };
@@ -126,7 +127,7 @@ export function registerStagingRoutes(app: FastifyInstance) {
   // --- Inline cell edit ----------------------------------------------------
   app.patch(
     '/api/v1/batches/:id/staging/:rowId',
-    { preHandler: requireRole(...EDITOR_ROLES) },
+    { preHandler: requirePermission('invoice.edit') },
     async (request, reply) => {
       const ctx = requireContext(request);
       const { id, rowId } = request.params as { id: string; rowId: string };
@@ -237,7 +238,7 @@ export function registerStagingRoutes(app: FastifyInstance) {
   // --- Re-validate the whole batch ----------------------------------------
   app.post(
     '/api/v1/batches/:id/revalidate',
-    { preHandler: requireRole(...EDITOR_ROLES) },
+    { preHandler: requirePermission('invoice.edit') },
     async (request, reply) => {
       const ctx = requireContext(request);
       const { id } = request.params as { id: string };
@@ -289,7 +290,7 @@ export function registerStagingRoutes(app: FastifyInstance) {
   // --- Auto-fix common defaults -------------------------------------------
   app.post(
     '/api/v1/batches/:id/autofix',
-    { preHandler: requireRole(...EDITOR_ROLES) },
+    { preHandler: requirePermission('invoice.edit') },
     async (request, reply) => {
       const ctx = requireContext(request);
       const { id } = request.params as { id: string };
@@ -361,7 +362,7 @@ export function registerStagingRoutes(app: FastifyInstance) {
   // --- Delete a staged row -------------------------------------------------
   app.delete(
     '/api/v1/batches/:id/staging/:rowId',
-    { preHandler: requireRole(...EDITOR_ROLES) },
+    { preHandler: requirePermission('invoice.edit') },
     async (request, reply) => {
       const ctx = requireContext(request);
       const { id, rowId } = request.params as { id: string; rowId: string };
@@ -390,13 +391,17 @@ export function registerStagingRoutes(app: FastifyInstance) {
   // --- Submit --------------------------------------------------------------
   app.post(
     '/api/v1/batches/:id/submit',
-    { preHandler: requireRole(...EDITOR_ROLES) },
+    { preHandler: requirePermission('invoice.submit_for_approval', 'invoice.submit') },
     async (request, reply) => {
       const ctx = requireContext(request);
       const { id } = request.params as { id: string };
       if (!ctx.tenantId) throw notFound('Tenant');
 
       const body = SubmitBatchRequest.parse(request.body ?? {});
+
+      // SRS v2.1 §5: the tax approver is the only role that may file. Everyone
+      // else's submission prepares the invoices and stops at the approval gate.
+      const files = can(ctx.role, 'invoice.submit');
 
       const outcome = await withTenant(ctx.tenantId, async (tx) => {
         const tenants = await tx<{ status: string }[]>`
@@ -445,7 +450,7 @@ export function registerStagingRoutes(app: FastifyInstance) {
               po_reference, preceding_invoice_id, payment_means,
               line_extension_amount, tax_exclusive_amount, tax_inclusive_amount,
               vat_total_amount, payable_amount, payable_amount_aed,
-              status, raw_payload_json
+              status, created_by_user_id, approved_by_user_id, approved_at, raw_payload_json
             ) VALUES (
               ${ctx.tenantId}, ${id}, ${row.id}, 'EXCEL_UPLOAD', ${invoice.sourceRow},
               ${invoice.invoiceNumber},
@@ -459,7 +464,11 @@ export function registerStagingRoutes(app: FastifyInstance) {
               ${invoice.lineExtensionAmount}, ${invoice.taxExclusiveAmount},
               ${invoice.taxInclusiveAmount}, ${invoice.vatTotalAmount},
               ${invoice.payableAmount}, ${invoice.payableAmountAed},
-              'VALIDATED', ${jsonb(tx, invoice)}
+              ${files ? 'VALIDATED' : 'PENDING_CFO_APPROVAL'}::invoice_status,
+              ${ctx.userId},
+              ${files ? ctx.userId : null},
+              ${files ? new Date() : null},
+              ${jsonb(tx, invoice)}
             )
             RETURNING id
           `;
@@ -497,25 +506,30 @@ export function registerStagingRoutes(app: FastifyInstance) {
       });
 
       // Enqueued after the transaction commits. Doing it inside would let a
-      // worker pick up an invoice id that a rollback then erased.
-      for (const item of outcome.queued) {
-        await invoiceSubmitQueue().add(
-          'submit',
-          { invoiceId: item.invoiceId, tenantId: ctx.tenantId, actorUserId: ctx.userId },
-          { ...SUBMIT_JOB_OPTIONS, jobId: `submit-${item.invoiceId}` },
-        );
+      // worker pick up an invoice id that a rollback then erased. Nothing is
+      // enqueued at all when the caller cannot file: those rows wait for an
+      // approver, who enqueues them from the approvals queue.
+      if (files) {
+        for (const item of outcome.queued) {
+          await invoiceSubmitQueue().add(
+            'submit',
+            { invoiceId: item.invoiceId, tenantId: ctx.tenantId, actorUserId: ctx.userId },
+            { ...SUBMIT_JOB_OPTIONS, jobId: `submit-${item.invoiceId}` },
+          );
+        }
       }
 
       await audit(actorFromContext(ctx), {
-        action: 'BATCH_SUBMITTED',
+        action: files ? 'BATCH_SUBMITTED' : 'BATCH_SENT_FOR_APPROVAL',
         resourceType: 'BATCH',
         resourceId: id,
         tenantId: ctx.tenantId,
-        changes: { queued: outcome.queued.length, skipped: outcome.skipped },
+        changes: { count: outcome.queued.length, skipped: outcome.skipped },
       });
 
       return reply.send({
-        queued: outcome.queued.length,
+        queued: files ? outcome.queued.length : 0,
+        pendingApproval: files ? 0 : outcome.queued.length,
         skipped: outcome.skipped,
         reasons: outcome.reasons,
       });

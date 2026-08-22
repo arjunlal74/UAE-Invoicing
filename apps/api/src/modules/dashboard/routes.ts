@@ -1,7 +1,7 @@
 import type { InvoiceStatus } from '@uae/contracts';
 import type { FastifyInstance } from 'fastify';
 import { withTenant } from '../../db/client.js';
-import { READER_ROLES, requireContext, requireRole } from '../../http/context.js';
+import { requireContext, requirePermission } from '../../http/context.js';
 import { notFound } from '../../lib/errors.js';
 import { BATCH_SELECT, toBatchSummary, type BatchRow } from '../batches/routes.js';
 
@@ -12,7 +12,7 @@ import { BATCH_SELECT, toBatchSummary, type BatchRow } from '../batches/routes.j
  * needs-attention counts come first and the pretty chart is secondary.
  */
 export function registerDashboardRoutes(app: FastifyInstance) {
-  app.get('/api/v1/dashboard', { preHandler: requireRole(...READER_ROLES) }, async (request, reply) => {
+  app.get('/api/v1/dashboard', { preHandler: requirePermission('invoice.read') }, async (request, reply) => {
     const ctx = requireContext(request);
     if (!ctx.tenantId) throw notFound('Tenant');
 

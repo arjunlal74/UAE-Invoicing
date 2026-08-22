@@ -2,6 +2,7 @@ import {
   InviteUserRequest,
   PLATFORM_ROLES,
   TENANT_ROLES,
+  can,
   type Role,
   type UserSummary,
 } from '@uae/contracts';
@@ -65,12 +66,14 @@ export function registerUserRoutes(app: FastifyInstance) {
   app.post('/api/v1/tenant/users', { preHandler: requireAuth() }, async (request, reply) => {
     const ctx = requireContext(request);
     if (!ctx.tenantId) throw notFound('Tenant');
-    if (ctx.role !== 'TENANT_ADMIN') {
-      throw forbidden('Only a tenant administrator can invite users.');
+    if (!can(ctx.role, 'tenant.users.manage')) {
+      throw forbidden('Only a company administrator can invite users.');
     }
 
     const body = InviteUserRequest.parse(request.body);
-    // A merchant admin must not be able to mint themselves a platform role.
+    // A company admin must not be able to mint themselves a platform or
+    // partner role. PARTNER_ADMIN is excluded here as well as the platform
+    // roles: it is granted by onboarding a channel partner, not by invitation.
     if (!TENANT_ROLES.includes(body.role)) {
       throw badRequest('That role cannot be assigned within a tenant.');
     }
@@ -105,7 +108,9 @@ export function registerUserRoutes(app: FastifyInstance) {
       const { id } = request.params as { id: string };
 
       if (!ctx.tenantId) throw notFound('Tenant');
-      if (ctx.role !== 'TENANT_ADMIN') throw forbidden('Only a tenant administrator can do that.');
+      if (!can(ctx.role, 'tenant.users.manage')) {
+        throw forbidden('Only a company administrator can do that.');
+      }
       if (id === ctx.userId) throw badRequest('You cannot deactivate your own account.');
 
       const rows = await sql()<{ id: string; role: Role }[]>`
@@ -137,7 +142,7 @@ export function registerUserRoutes(app: FastifyInstance) {
       const ctx = requireContext(request);
       const { id } = request.params as { id: string };
 
-      if (!ctx.tenantId || ctx.role !== 'TENANT_ADMIN') throw forbidden();
+      if (!ctx.tenantId || !can(ctx.role, 'tenant.users.manage')) throw forbidden();
 
       const rows = await sql()<{ id: string; password_hash: string | null }[]>`
         SELECT id, password_hash FROM users WHERE id = ${id} AND tenant_id = ${ctx.tenantId}
@@ -160,8 +165,8 @@ export function registerUserRoutes(app: FastifyInstance) {
 
   app.post('/api/v1/admin/staff', { preHandler: requirePlatform() }, async (request, reply) => {
     const ctx = requireContext(request);
-    if (ctx.role !== 'PLATFORM_ADMIN') {
-      throw forbidden('Only a platform administrator can create staff accounts.');
+    if (!can(ctx.role, 'platform.manage')) {
+      throw forbidden('Only a global administrator can create staff accounts.');
     }
 
     const body = InviteUserRequest.parse(request.body);
