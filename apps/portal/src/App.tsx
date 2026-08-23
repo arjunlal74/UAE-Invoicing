@@ -5,6 +5,7 @@ import { ApiError } from './lib/api';
 import { AcceptInvitePage } from './pages/AcceptInvitePage';
 import { LoginPage } from './pages/LoginPage';
 import { AdminAuditPage } from './pages/admin/AdminAuditPage';
+import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
 import { AdminMailPage } from './pages/admin/AdminMailPage';
 import { AdminStaffPage } from './pages/admin/AdminStaffPage';
 import { AdminTenantDetailPage } from './pages/admin/AdminTenantDetailPage';
@@ -123,6 +124,7 @@ export function App() {
             </RequireAuth>
           }
         >
+          <Route path="/admin" element={<AdminDashboardPage />} />
           <Route path="/admin/tenants" element={<AdminTenantsPage />} />
           <Route path="/admin/tenants/:tenantId" element={<AdminTenantDetailPage />} />
           <Route path="/admin/transmissions" element={<AdminTransmissionsPage />} />

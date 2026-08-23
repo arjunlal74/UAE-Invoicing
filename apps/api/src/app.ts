@@ -6,6 +6,7 @@ import { config } from './config.js';
 import { sql } from './db/client.js';
 import { registerErrorHandler } from './lib/errors.js';
 import { logger } from './logger.js';
+import { registerAdminDashboardRoutes } from './modules/admin/dashboard.js';
 import { registerAdminRoutes } from './modules/admin/routes.js';
 import { registerApprovalRoutes } from './modules/approvals/routes.js';
 import { registerAspRoutes } from './modules/asp/routes.js';
@@ -92,6 +93,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerDashboardRoutes(app);
   registerMailRoutes(app);
   registerAdminRoutes(app);
+  registerAdminDashboardRoutes(app);
   registerWebhookRoutes(app);
 
   return app;

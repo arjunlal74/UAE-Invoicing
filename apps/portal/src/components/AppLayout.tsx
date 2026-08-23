@@ -25,6 +25,8 @@ const MERCHANT_NAV: (NavItem & { needs?: Parameters<typeof can>[1] })[] = [
 ];
 
 const ADMIN_NAV: NavItem[] = [
+  // Exact matching, or every /admin/* route would light this up as well.
+  { to: '/admin', label: 'Dashboard', end: true },
   { to: '/admin/tenants', label: 'Tenants' },
   { to: '/admin/transmissions', label: 'Transmissions' },
   { to: '/admin/audit', label: 'Audit log' },

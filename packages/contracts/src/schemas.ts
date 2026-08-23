@@ -522,6 +522,67 @@ export const DashboardResponse = z.object({
 });
 export type DashboardResponse = z.infer<typeof DashboardResponse>;
 
+/**
+ * The platform operator's landing page.
+ *
+ * Deliberately not the merchant dashboard with wider filters: an operator asks
+ * "is anything broken across all tenants, and is anyone stuck waiting on me?",
+ * which is a different question from "did my invoices clear?".
+ */
+export const AdminDashboardResponse = z.object({
+  tenants: z.object({
+    total: z.number(),
+    byStatus: z.record(TenantStatus, z.number()),
+    byType: z.record(TenantType, z.number()),
+  }),
+  users: z.object({
+    total: z.number(),
+    active: z.number(),
+    pendingInvites: z.number(),
+  }),
+  invoices: z.object({
+    total: z.number(),
+    byStatus: z.record(InvoiceStatus, z.number()),
+    last30Days: z.number(),
+    clearedValueAed: z.string(),
+  }),
+  needsAttention: z.object({
+    stuckTransmissions: z.number(),
+    rejectedByFta: z.number(),
+    validationFailed: z.number(),
+    tenantsPendingActivation: z.number(),
+    aspNotConfigured: z.number(),
+    pendingInvites: z.number(),
+    failedMail: z.number(),
+    /** False until an outgoing account exists; invitations are not sent. */
+    mailConfigured: z.boolean(),
+  }),
+  last30DaysTrend: z.array(
+    z.object({ date: z.string(), submitted: z.number(), accepted: z.number(), rejected: z.number() }),
+  ),
+  topTenants: z.array(
+    z.object({
+      tenantId: uuid,
+      tenantName: z.string(),
+      status: TenantStatus,
+      invoices: z.number(),
+      accepted: z.number(),
+      rejected: z.number(),
+      valueAed: z.string(),
+    }),
+  ),
+  recentActivity: z.array(
+    z.object({
+      id: z.string(),
+      action: z.string(),
+      actorName: z.string().nullable(),
+      tenantName: z.string().nullable(),
+      createdAt: z.string(),
+    }),
+  ),
+});
+export type AdminDashboardResponse = z.infer<typeof AdminDashboardResponse>;
+
 // --- Admin monitoring -------------------------------------------------------
 
 export const TransmissionMonitorQuery = z.object({

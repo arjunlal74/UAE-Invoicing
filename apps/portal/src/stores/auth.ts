@@ -76,7 +76,7 @@ export function isCompanyAdmin(user: SessionUser | null): boolean {
 
 /** Where a user lands after signing in, which differs per tier. */
 export function homePathFor(user: SessionUser | null): string {
-  if (isPlatformUser(user)) return '/admin/tenants';
+  if (isPlatformUser(user)) return '/admin';
   if (isPartnerUser(user)) return '/partner/sub-tenants';
   return '/';
 }
