@@ -12,6 +12,7 @@ import { registerAspRoutes } from './modules/asp/routes.js';
 import { registerBatchRoutes } from './modules/batches/routes.js';
 import { registerDashboardRoutes } from './modules/dashboard/routes.js';
 import { registerInvoiceRoutes } from './modules/invoices/routes.js';
+import { registerMailRoutes } from './modules/mail/routes.js';
 import { registerPartnerRoutes } from './modules/partners/routes.js';
 import { registerStagingRoutes } from './modules/staging/routes.js';
 import { registerTemplateRoutes } from './modules/templates/routes.js';
@@ -89,6 +90,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerApprovalRoutes(app);
   registerPartnerRoutes(app);
   registerDashboardRoutes(app);
+  registerMailRoutes(app);
   registerAdminRoutes(app);
   registerWebhookRoutes(app);
 

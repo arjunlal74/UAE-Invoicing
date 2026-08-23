@@ -3,6 +3,7 @@ import {
   UpdateTenantRequest,
   UpdateTenantStatusRequest,
   can,
+  type Role,
   type TenantDetail,
   type TenantSummary,
   type TenantType,
@@ -15,6 +16,7 @@ import { jsonb, sql, withPlatformAccess } from '../../db/client.js';
 import { requireAuth, requireContext, requirePlatform } from '../../http/context.js';
 import { badRequest, forbidden, notFound } from '../../lib/errors.js';
 import { logger } from '../../logger.js';
+import { queueInvitation } from '../../mail/outbox.js';
 
 /**
  * Tenant management — the admin panel's core.
@@ -139,6 +141,8 @@ export function registerTenantRoutes(app: FastifyInstance) {
       `;
 
       let inviteToken: string | null = null;
+      let inviteUserId: string | null = null;
+      let inviteRole: Role | null = null;
       if (body.adminEmail && body.adminFullName) {
         // A channel partner's first user administers sub-tenants, not invoices.
         const adminRole = body.tenantType === 'CHANNEL_PARTNER' ? 'PARTNER_ADMIN' : 'COMPANY_ADMIN';
@@ -149,9 +153,11 @@ export function registerTenantRoutes(app: FastifyInstance) {
           RETURNING id
         `;
         inviteToken = await createInvite(users[0]!.id, tx);
+        inviteUserId = users[0]!.id;
+        inviteRole = adminRole;
       }
 
-      return { tenantId, inviteToken };
+      return { tenantId, inviteToken, inviteUserId, inviteRole };
     });
 
     await audit(actorFromContext(ctx), {
@@ -168,21 +174,32 @@ export function registerTenantRoutes(app: FastifyInstance) {
       },
     });
 
-    // No mail transport is wired up, so the invite link is returned to the
-    // admin to pass on. Replace with an email send when SES/SMTP is chosen.
+    // The link is returned as well as e-mailed. Mail can be delayed or
+    // filtered, and the administrator onboarding the tenant is the one who
+    // gets asked why the first sign-in never happened.
+    let inviteUrl: string | null = null;
+    let emailed = false;
+    let emailMessage: string | null = null;
+
     if (result.inviteToken) {
-      logger.info(
-        { tenantId: result.tenantId, inviteUrl: `${config().PORTAL_ORIGIN}/accept-invite?token=${result.inviteToken}` },
-        'tenant admin invite created',
-      );
+      inviteUrl = `${config().PORTAL_ORIGIN}/accept-invite?token=${result.inviteToken}`;
+
+      const mail = await queueInvitation({
+        to: body.adminEmail!,
+        fullName: body.adminFullName!,
+        role: result.inviteRole ?? 'COMPANY_ADMIN',
+        inviteUrl,
+        organisation: body.legalNameEn,
+        userId: result.inviteUserId,
+        tenantId: result.tenantId,
+      });
+
+      emailed = mail.queued;
+      emailMessage = mail.reason ?? null;
+      logger.info({ tenantId: result.tenantId, emailed }, 'tenant admin invite created');
     }
 
-    return reply.status(201).send({
-      id: result.tenantId,
-      inviteUrl: result.inviteToken
-        ? `${config().PORTAL_ORIGIN}/accept-invite?token=${result.inviteToken}`
-        : null,
-    });
+    return reply.status(201).send({ id: result.tenantId, inviteUrl, emailed, emailMessage });
   });
 
   // --- Platform: detail ----------------------------------------------------

@@ -18,6 +18,7 @@ import { config } from '../config.js';
 export const QUEUE_PARSE = 'batch-parse';
 export const QUEUE_SUBMIT = 'invoice-submit';
 export const QUEUE_POLL = 'status-poll';
+export const QUEUE_MAIL = 'mail-send';
 
 export interface ParseBatchJob {
   batchId: string;
@@ -29,6 +30,15 @@ export interface SubmitInvoiceJob {
   invoiceId: string;
   tenantId: string;
   actorUserId: string | null;
+}
+
+export interface SendMailJob {
+  /** Row in mail_deliveries this job is fulfilling. */
+  deliveryId: string;
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
 }
 
 export interface PollStatusJob {
@@ -52,6 +62,7 @@ export function redis(): IORedis {
 let parseQueue: Queue<ParseBatchJob> | null = null;
 let submitQueue: Queue<SubmitInvoiceJob> | null = null;
 let pollQueue: Queue<PollStatusJob> | null = null;
+let mailQueue: Queue<SendMailJob> | null = null;
 
 export function batchParseQueue(): Queue<ParseBatchJob> {
   parseQueue ??= new Queue<ParseBatchJob>(QUEUE_PARSE, { connection: redis() });
@@ -96,13 +107,32 @@ export function aspBackoff(attemptsMade: number): number {
   return base + jitter;
 }
 
+export function sendMailQueue(): Queue<SendMailJob> {
+  mailQueue ??= new Queue<SendMailJob>(QUEUE_MAIL, { connection: redis() });
+  return mailQueue;
+}
+
+/**
+ * Mail retries are patient but finite. A greylisting server rejects the first
+ * attempt on purpose and accepts a minute later, so giving up after one try
+ * would lose invitations to a working configuration; retrying for hours after a
+ * hard rejection only delays the moment the administrator finds out.
+ */
+export const MAIL_JOB_OPTIONS: JobsOptions = {
+  attempts: 4,
+  backoff: { type: 'exponential', delay: 30_000 },
+  removeOnComplete: { age: 86_400, count: 1_000 },
+  removeOnFail: { age: 604_800 },
+};
+
 export async function closeQueues(): Promise<void> {
   await Promise.all([
     parseQueue?.close(),
     submitQueue?.close(),
     pollQueue?.close(),
+    mailQueue?.close(),
   ]);
-  parseQueue = submitQueue = pollQueue = null;
+  parseQueue = submitQueue = pollQueue = mailQueue = null;
   if (connection) {
     connection.disconnect();
     connection = null;

@@ -9,6 +9,7 @@ import {
 import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit } from '../../audit/audit.js';
 import { createInvite, revokeAllSessions } from '../../auth/service.js';
+import { queueInvitation } from '../../mail/outbox.js';
 import { config } from '../../config.js';
 import { sql } from '../../db/client.js';
 import { requireAuth, requireContext, requirePlatform } from '../../http/context.js';
@@ -88,6 +89,20 @@ export function registerUserRoutes(app: FastifyInstance) {
     const token = await createInvite(userId);
     const inviteUrl = `${config().PORTAL_ORIGIN}/accept-invite?token=${token}`;
 
+    const organisation = await sql()<{ legal_name_en: string }[]>`
+      SELECT legal_name_en FROM tenants WHERE id = ${ctx.tenantId}
+    `;
+
+    const mail = await queueInvitation({
+      to: body.email,
+      fullName: body.fullName,
+      role: body.role,
+      inviteUrl,
+      organisation: organisation[0]?.legal_name_en ?? null,
+      userId,
+      tenantId: ctx.tenantId,
+    });
+
     await audit(actorFromContext(ctx), {
       action: 'USER_INVITED',
       resourceType: 'USER',
@@ -96,8 +111,17 @@ export function registerUserRoutes(app: FastifyInstance) {
       changes: { email: body.email, role: body.role },
     });
 
-    logger.info({ userId, inviteUrl }, 'user invite created');
-    return reply.status(201).send({ id: userId, inviteUrl });
+    logger.info({ userId, emailed: mail.queued }, 'user invite created');
+
+    // The link is still returned even when the e-mail went out. Mail can be
+    // delayed or filtered, and the administrator who created the account is the
+    // one who gets asked why it never arrived.
+    return reply.status(201).send({
+      id: userId,
+      inviteUrl,
+      emailed: mail.queued,
+      emailMessage: mail.reason ?? null,
+    });
   });
 
   app.post(
@@ -144,14 +168,34 @@ export function registerUserRoutes(app: FastifyInstance) {
 
       if (!ctx.tenantId || !can(ctx.role, 'tenant.users.manage')) throw forbidden();
 
-      const rows = await sql()<{ id: string; password_hash: string | null }[]>`
-        SELECT id, password_hash FROM users WHERE id = ${id} AND tenant_id = ${ctx.tenantId}
+      const rows = await sql()<
+        { id: string; email: string; full_name: string; role: Role; password_hash: string | null }[]
+      >`
+        SELECT id, email, full_name, role, password_hash
+        FROM users WHERE id = ${id} AND tenant_id = ${ctx.tenantId}
       `;
-      if (!rows[0]) throw notFound('User');
-      if (rows[0].password_hash) throw badRequest('That user has already accepted their invitation.');
+      const user = rows[0];
+      if (!user) throw notFound('User');
+      if (user.password_hash) throw badRequest('That user has already accepted their invitation.');
 
       const token = await createInvite(id);
-      return reply.send({ inviteUrl: `${config().PORTAL_ORIGIN}/accept-invite?token=${token}` });
+      const inviteUrl = `${config().PORTAL_ORIGIN}/accept-invite?token=${token}`;
+
+      const organisation = await sql()<{ legal_name_en: string }[]>`
+        SELECT legal_name_en FROM tenants WHERE id = ${ctx.tenantId}
+      `;
+
+      const mail = await queueInvitation({
+        to: user.email,
+        fullName: user.full_name,
+        role: user.role,
+        inviteUrl,
+        organisation: organisation[0]?.legal_name_en ?? null,
+        userId: id,
+        tenantId: ctx.tenantId,
+      });
+
+      return reply.send({ inviteUrl, emailed: mail.queued, emailMessage: mail.reason ?? null });
     },
   );
 
@@ -182,6 +226,16 @@ export function registerUserRoutes(app: FastifyInstance) {
 
     const userId = rows[0]!.id;
     const token = await createInvite(userId);
+    const inviteUrl = `${config().PORTAL_ORIGIN}/accept-invite?token=${token}`;
+
+    const mail = await queueInvitation({
+      to: body.email,
+      fullName: body.fullName,
+      role: body.role,
+      inviteUrl,
+      organisation: 'the E-Invoicing platform team',
+      userId,
+    });
 
     await audit(actorFromContext(ctx), {
       action: 'USER_INVITED',
@@ -192,7 +246,9 @@ export function registerUserRoutes(app: FastifyInstance) {
 
     return reply.status(201).send({
       id: userId,
-      inviteUrl: `${config().PORTAL_ORIGIN}/accept-invite?token=${token}`,
+      inviteUrl,
+      emailed: mail.queued,
+      emailMessage: mail.reason ?? null,
     });
   });
 

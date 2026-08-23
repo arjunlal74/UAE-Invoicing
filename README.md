@@ -182,6 +182,35 @@ exists and reports that clearly rather than failing obscurely.
 | `UNIQUE (tenant_id, is_active)` on ASP configs | Partial unique index over active rows | The SRS constraint also caps a tenant at one *inactive* config, so provider history is impossible and a second switch fails. |
 | Streaming Excel parse | Buffered `xlsx.load()` | ExcelJS's streaming reader fails non-deterministically (measured 6 failures in 8 identical runs). Memory is bounded by the upload and row caps instead. |
 
+## Outgoing mail
+
+Invitations are e-mailed when an outgoing account is configured, and fall back
+to the copy-the-link behaviour when one is not — the link is always returned to
+the administrator as well, because mail can be delayed or filtered.
+
+Configure it at **Admin → Mail → Add account**. The wizard asks for a name,
+address and password and works the server out: it matches known providers,
+falls back to the domain's MX records, then tries the conventional hostnames,
+confirming each guess by actually signing in. **Manual setup** takes the host,
+port, encryption and credentials directly, for a relay that DNS cannot lead it
+to.
+
+The stack ships a local inbox so the whole flow can be exercised without a real
+mailbox and without any message escaping to a real address:
+
+| Field | Value |
+|---|---|
+| Outgoing server | `mailpit` (containers) or `localhost` (local dev) |
+| Port | 1025 |
+| Encryption | None |
+| Authentication | Off |
+
+Read what it captures at **http://localhost:8025**.
+
+The SMTP password is encrypted at rest with the same AES-256-GCM key as ASP
+credentials, and never leaves the API — the portal is told only whether a
+password is set.
+
 ## Ports
 
 | Service | Container stack | Local development |
@@ -191,6 +220,7 @@ exists and reports that clearly rather than failing obscurely.
 | Postgres | internal | 5442 |
 | Redis | internal | 6389 |
 | MinIO console | 9001 | 9001 |
+| Mailpit (dev inbox) | 8025 | 8025 |
 
 Non-default host ports are deliberate — 5432, 6379 and 3000 are usually already
 taken on a developer machine.

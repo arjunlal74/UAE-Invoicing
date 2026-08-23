@@ -29,6 +29,7 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/transmissions', label: 'Transmissions' },
   { to: '/admin/audit', label: 'Audit log' },
   { to: '/admin/staff', label: 'Staff' },
+  { to: '/admin/mail', label: 'Mail' },
 ];
 
 const PARTNER_NAV: NavItem[] = [{ to: '/partner/sub-tenants', label: 'Sub-tenants' }];

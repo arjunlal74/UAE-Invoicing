@@ -130,6 +130,26 @@ services:
       <<: *app_env
       RUN_MIGRATIONS: "false"
 
+  # A local inbox. Nothing configured against it can reach the internet, so an
+  # administrator can walk the whole invitation flow — configure the account,
+  # send a test, invite a user, read what arrived — without a real mailbox and
+  # without a stray message escaping to a real address.
+  #
+  # In the mail settings screen use: host `mailpit`, port 1025, no encryption,
+  # authentication off. Read what it captures at http://localhost:8025.
+  mailpit:
+    image: axllent/mailpit:latest
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    ports:
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   portal:
     build:
       context: .

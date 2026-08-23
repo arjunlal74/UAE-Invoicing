@@ -288,6 +288,9 @@ export async function changePassword(
   await revokeAllSessions(userId);
 }
 
+/** How long an invitation stays usable. Quoted in the e-mail that carries it. */
+export const INVITE_TTL_DAYS = 7;
+
 /**
  * Issue an invitation token for a user.
  *
@@ -297,7 +300,7 @@ export async function changePassword(
  */
 export async function createInvite(userId: string, client: Sql | Tx = sql()): Promise<string> {
   const { token, hash } = generateToken(32);
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60_000);
+  const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60_000);
 
   await client`
     INSERT INTO user_invites (user_id, token_hash, expires_at)

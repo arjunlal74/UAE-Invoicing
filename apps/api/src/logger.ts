@@ -17,6 +17,8 @@ const REDACTED_KEYS = new Set([
   'passwordHash',
   'password_hash',
   'token',
+  'inviteUrl',
+  'inviteToken',
   'accessToken',
   'refreshToken',
   'authorization',

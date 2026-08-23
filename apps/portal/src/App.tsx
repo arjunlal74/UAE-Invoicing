@@ -5,6 +5,7 @@ import { ApiError } from './lib/api';
 import { AcceptInvitePage } from './pages/AcceptInvitePage';
 import { LoginPage } from './pages/LoginPage';
 import { AdminAuditPage } from './pages/admin/AdminAuditPage';
+import { AdminMailPage } from './pages/admin/AdminMailPage';
 import { AdminStaffPage } from './pages/admin/AdminStaffPage';
 import { AdminTenantDetailPage } from './pages/admin/AdminTenantDetailPage';
 import { AdminTenantsPage } from './pages/admin/AdminTenantsPage';
@@ -127,6 +128,7 @@ export function App() {
           <Route path="/admin/transmissions" element={<AdminTransmissionsPage />} />
           <Route path="/admin/audit" element={<AdminAuditPage />} />
           <Route path="/admin/staff" element={<AdminStaffPage />} />
+          <Route path="/admin/mail" element={<AdminMailPage />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

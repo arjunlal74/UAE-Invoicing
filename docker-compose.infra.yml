@@ -76,6 +76,24 @@ services:
       "
     restart: "no"
 
+  # Local inbox for development. The api and worker run on the host in this
+  # setup, so SMTP is published too: host `localhost`, port 1025, no
+  # encryption, authentication off. Read what it captures at http://localhost:8025.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: uae-mailpit
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
 volumes:
   postgres_data:
   redis_data:

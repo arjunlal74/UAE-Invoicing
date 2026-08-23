@@ -6,6 +6,7 @@ import {
 import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit } from '../../audit/audit.js';
 import { createInvite } from '../../auth/service.js';
+import { queueInvitation } from '../../mail/outbox.js';
 import { config } from '../../config.js';
 import { jsonb, withPlatformAccess } from '../../db/client.js';
 import { requireContext, requirePartner } from '../../http/context.js';
@@ -193,7 +194,11 @@ export function registerPartnerRoutes(app: FastifyInstance) {
           RETURNING id
         `;
 
-        return { subTenantId, inviteToken: await createInvite(users[0]!.id, tx) };
+        return {
+          subTenantId,
+          inviteUserId: users[0]!.id,
+          inviteToken: await createInvite(users[0]!.id, tx),
+        };
       });
 
       await audit(actorFromContext(ctx), {
@@ -210,9 +215,28 @@ export function registerPartnerRoutes(app: FastifyInstance) {
       });
 
       const inviteUrl = `${config().PORTAL_ORIGIN}/accept-invite?token=${result.inviteToken}`;
-      logger.info({ subTenantId: result.subTenantId, inviteUrl }, 'sub-tenant admin invite created');
 
-      return reply.status(201).send({ id: result.subTenantId, inviteUrl });
+      const mail = await queueInvitation({
+        to: body.adminEmail,
+        fullName: body.adminFullName,
+        role: 'COMPANY_ADMIN',
+        inviteUrl,
+        organisation: body.legalNameEn,
+        userId: result.inviteUserId,
+        tenantId: result.subTenantId,
+      });
+
+      logger.info(
+        { subTenantId: result.subTenantId, emailed: mail.queued },
+        'sub-tenant admin invite created',
+      );
+
+      return reply.status(201).send({
+        id: result.subTenantId,
+        inviteUrl,
+        emailed: mail.queued,
+        emailMessage: mail.reason ?? null,
+      });
     },
   );
 }

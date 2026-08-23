@@ -588,4 +588,130 @@ export type PaginatedResult<T> = {
   pageSize: number;
 };
 
+// --- Outgoing mail ----------------------------------------------------------
+
+export const MailEncryption = z.enum(['NONE', 'STARTTLS', 'SSL']);
+export type MailEncryption = z.infer<typeof MailEncryption>;
+
+export const MAIL_ENCRYPTION_LABELS: Record<MailEncryption, string> = {
+  NONE: 'None (unencrypted)',
+  STARTTLS: 'STARTTLS',
+  SSL: 'SSL/TLS',
+};
+
+/** Step one of the wizard: work the server out from an address and a password. */
+export const MailAutodiscoverRequest = z.object({
+  email: z.string().trim().toLowerCase().email(),
+  password: z.string().default(''),
+});
+export type MailAutodiscoverRequest = z.infer<typeof MailAutodiscoverRequest>;
+
+export const MailProbeAttempt = z.object({
+  host: z.string(),
+  port: z.number(),
+  encryption: MailEncryption,
+  username: z.string(),
+  ok: z.boolean(),
+  message: z.string(),
+});
+export type MailProbeAttempt = z.infer<typeof MailProbeAttempt>;
+
+export const MailAutodiscoverResult = z.object({
+  found: z.boolean(),
+  provider: z
+    .object({ key: z.string(), label: z.string(), note: z.string().optional() })
+    .nullable(),
+  settings: z
+    .object({
+      host: z.string(),
+      port: z.number(),
+      encryption: MailEncryption,
+      username: z.string(),
+      authRequired: z.boolean(),
+    })
+    .nullable(),
+  suggestion: z
+    .object({
+      host: z.string(),
+      port: z.number(),
+      encryption: MailEncryption,
+      username: z.string(),
+    })
+    .nullable(),
+  message: z.string(),
+  attempts: z.array(MailProbeAttempt),
+});
+export type MailAutodiscoverResult = z.infer<typeof MailAutodiscoverResult>;
+
+export const UpsertMailAccountRequest = z.object({
+  displayName: z.string().trim().min(1, 'Enter the name recipients should see.'),
+  fromAddress: z.string().trim().toLowerCase().email(),
+  replyTo: z.string().trim().toLowerCase().email().optional().or(z.literal('')),
+  host: z.string().trim().min(1, 'Enter the outgoing mail server.'),
+  port: z.coerce.number().int().min(1).max(65535),
+  encryption: MailEncryption,
+  authRequired: z.boolean().default(true),
+  username: z.string().trim().optional(),
+  /**
+   * Omitted on an edit that does not change the password. Absent and empty are
+   * therefore different: absent keeps what is stored, empty clears it.
+   */
+  password: z.string().optional(),
+  providerKey: z.string().optional(),
+  makeDefault: z.boolean().default(true),
+  isActive: z.boolean().default(true),
+});
+export type UpsertMailAccountRequest = z.infer<typeof UpsertMailAccountRequest>;
+
+/** Test settings that have not been saved yet, straight from the manual form. */
+export const TestMailSettingsRequest = z.object({
+  host: z.string().trim().min(1),
+  port: z.coerce.number().int().min(1).max(65535),
+  encryption: MailEncryption,
+  authRequired: z.boolean().default(true),
+  username: z.string().trim().optional(),
+  password: z.string().optional(),
+  /** When set, a stored password is reused for an account being edited. */
+  accountId: uuid.optional(),
+});
+export type TestMailSettingsRequest = z.infer<typeof TestMailSettingsRequest>;
+
+export const SendTestMailRequest = z.object({
+  to: z.string().trim().toLowerCase().email(),
+});
+export type SendTestMailRequest = z.infer<typeof SendTestMailRequest>;
+
+export const MailAccountSummary = z.object({
+  id: uuid,
+  displayName: z.string(),
+  fromAddress: z.string(),
+  replyTo: z.string().nullable(),
+  host: z.string(),
+  port: z.number(),
+  encryption: MailEncryption,
+  authRequired: z.boolean(),
+  username: z.string().nullable(),
+  hasPassword: z.boolean(),
+  providerKey: z.string().nullable(),
+  isDefault: z.boolean(),
+  isActive: z.boolean(),
+  lastTestedAt: z.string().nullable(),
+  lastTestOk: z.boolean().nullable(),
+  lastTestResult: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type MailAccountSummary = z.infer<typeof MailAccountSummary>;
+
+export const MailDeliveryItem = z.object({
+  id: uuid,
+  kind: z.string(),
+  toAddress: z.string(),
+  subject: z.string(),
+  status: z.string(),
+  error: z.string().nullable(),
+  createdAt: z.string(),
+  sentAt: z.string().nullable(),
+});
+export type MailDeliveryItem = z.infer<typeof MailDeliveryItem>;
+
 export { INVOICE_NUMBER_PATTERN };

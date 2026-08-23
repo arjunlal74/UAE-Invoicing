@@ -3,10 +3,12 @@ import { config } from './config.js';
 import { closeDb } from './db/client.js';
 import { parseBatchJob } from './jobs/parseBatch.js';
 import { pollStatusJob } from './jobs/pollStatus.js';
+import { sendMailJob } from './jobs/sendMail.js';
 import { submitInvoiceJob } from './jobs/submitInvoice.js';
 import { logger } from './logger.js';
 import './modules/asp/service.js'; // registers the ASP drivers
 import {
+  QUEUE_MAIL,
   QUEUE_PARSE,
   QUEUE_POLL,
   QUEUE_SUBMIT,
@@ -16,6 +18,7 @@ import {
   statusPollQueue,
   type ParseBatchJob,
   type PollStatusJob,
+  type SendMailJob,
   type SubmitInvoiceJob,
 } from './queue/queues.js';
 
@@ -50,6 +53,14 @@ async function main() {
     },
   );
 
+  // Mail is IO-bound and low-volume, but a provider that throttles will hold
+  // each connection open — a narrow lane keeps that from occupying the process.
+  const mailWorker = new Worker<SendMailJob>(
+    QUEUE_MAIL,
+    async (job) => sendMailJob(job.data),
+    { connection, concurrency: 3 },
+  );
+
   const pollWorker = new Worker<PollStatusJob>(
     QUEUE_POLL,
     async () => pollStatusJob(),
@@ -60,6 +71,7 @@ async function main() {
     ['parse', parseWorker],
     ['submit', submitWorker],
     ['poll', pollWorker],
+    ['mail', mailWorker],
   ] as const) {
     worker.on('failed', (job, err) => {
       logger.error(
@@ -90,7 +102,12 @@ async function main() {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'worker shutting down');
     try {
-      await Promise.all([parseWorker.close(), submitWorker.close(), pollWorker.close()]);
+      await Promise.all([
+        parseWorker.close(),
+        submitWorker.close(),
+        pollWorker.close(),
+        mailWorker.close(),
+      ]);
       await closeQueues();
       await closeDb();
       process.exit(0);
