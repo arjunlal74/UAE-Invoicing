@@ -3,6 +3,7 @@ export * from './money.js';
 export * from './types.js';
 export * from './sheets.js';
 export * from './calc.js';
+export * from './creditNote.js';
 export * from './autofix.js';
 export * from './validation/catalog.js';
 export * from './validation/validate.js';

@@ -46,9 +46,42 @@ export type AspSubmissionOutcome =
   /** Transient. The job should be retried. */
   | { kind: 'retryable'; reason: string; httpStatus?: number; retryAfterMs?: number; raw?: unknown };
 
+/**
+ * A Peppol ApplicationResponse on its way out (SRS v2.7 §12.3).
+ *
+ * The AP desk's verdict on a supplier's invoice travels the same network as an
+ * invoice does, so it goes through the same driver — but it is a different
+ * document with a different recipient, which is why it is not squeezed into
+ * `submitInvoice`.
+ */
+export interface AspResponseRequest {
+  idempotencyKey: string;
+  responseUuid: string;
+  /** The invoice the response is about. */
+  invoiceNumber: string;
+  /** The supplier's participant identifier — where the response is going. */
+  recipientTrn: string | null;
+  responseCode: string;
+  reasonCode: string | null;
+  responseXml: string;
+}
+
+export type AspResponseOutcome =
+  | { kind: 'sent'; transmissionReference: string; httpStatus?: number; raw?: unknown }
+  | { kind: 'rejected'; reason: string; httpStatus?: number; raw?: unknown }
+  | { kind: 'retryable'; reason: string; httpStatus?: number; raw?: unknown };
+
 export type AspStatusOutcome =
   | { kind: 'pending' }
-  | { kind: 'accepted'; clearedAt: string; receipt?: string; raw?: unknown }
+  | {
+      kind: 'accepted';
+      clearedAt: string;
+      receipt?: string;
+      /** SRS v2.7 §10.6: the FTA Invoice Reference Number. */
+      irn?: string;
+      cryptographicStamp?: string;
+      raw?: unknown;
+    }
   | { kind: 'rejected'; reason: string; ruleCode?: string; raw?: unknown }
   | { kind: 'unknown'; reason: string };
 
@@ -62,6 +95,11 @@ export interface AspWebhookEvent {
   reason?: string;
   ruleCode?: string;
   receipt?: string;
+  /** §10.6: the clearance identifier, captured onto the invoice. */
+  irn?: string;
+  cryptographicStamp?: string;
+  /** Peppol Message Level Status, when the provider reports one. */
+  mlsStatus?: string;
   occurredAt?: string;
 }
 
@@ -74,6 +112,19 @@ export interface AspDriver {
   ): Promise<AspSubmissionOutcome>;
 
   getStatus(transmissionReference: string, config: AspTenantConfig): Promise<AspStatusOutcome>;
+
+  /**
+   * Transmit an ApplicationResponse to the party that issued the invoice.
+   *
+   * Optional on the interface: a Phase 1 provider that only carries invoices is
+   * a real possibility, and the AP desk still has to work against it — the
+   * verdict is recorded locally and the transmission is reported as unsupported
+   * rather than silently succeeding.
+   */
+  sendResponse?(
+    request: AspResponseRequest,
+    config: AspTenantConfig,
+  ): Promise<AspResponseOutcome>;
 
   /**
    * Verify a webhook came from the provider. Returning false must cause the

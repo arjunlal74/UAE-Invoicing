@@ -2,11 +2,17 @@ import { EMIRATES, INVOICE_NUMBER_PATTERN, TRN_PATTERN } from '@uae/domain';
 import { z } from 'zod';
 import { StrongPassword } from './password.js';
 import {
+  ApPostingStatus,
   AspConnectionStatus,
   AspProviderType,
   BatchStatus,
+  ErpSyncStatus,
+  InvoiceDirection,
   InvoiceStatus,
   InvoiceTypeDb,
+  RejectionReasonCode,
+  ResponseStatusCode,
+  ReversalMode,
   Role,
   TenantStatus,
   TenantType,
@@ -420,6 +426,14 @@ export const AutoFixResponse = z.object({
 
 export const InvoiceSearchQuery = z.object({
   q: z.string().trim().max(200).optional(),
+  /**
+   * Which module's pile of documents to search (SRS v2.7 §1.2).
+   *
+   * Defaulted rather than optional: an unfiltered search would mix a tenant's
+   * own sales invoices with the bills their suppliers sent them, and every
+   * caller of this endpoint means one or the other.
+   */
+  direction: InvoiceDirection.default('OUTBOUND_SALES_AR'),
   status: InvoiceStatus.optional(),
   type: InvoiceTypeDb.optional(),
   buyerTrn: z.string().trim().optional(),
@@ -435,6 +449,7 @@ export type InvoiceSearchQuery = z.infer<typeof InvoiceSearchQuery>;
 
 export const InvoiceListItem = z.object({
   id: uuid,
+  direction: InvoiceDirection,
   invoiceNumber: z.string(),
   invoiceType: InvoiceTypeDb,
   issueDate: z.string(),
@@ -447,6 +462,10 @@ export const InvoiceListItem = z.object({
   batchId: uuid.nullable(),
   createdByName: z.string().nullable(),
   approvedByName: z.string().nullable(),
+  /** §11: set the moment a buyer returns RE or UQ, cleared by a credit note. */
+  isCommercialDispute: z.boolean(),
+  disputeResolved: z.boolean(),
+  ftaIrn: z.string().nullable(),
   createdAt: z.string(),
 });
 export type InvoiceListItem = z.infer<typeof InvoiceListItem>;
@@ -462,6 +481,27 @@ export const TransmissionLogDto = z.object({
   attempt: z.number(),
   createdAt: z.string(),
 });
+
+/**
+ * One entry in the bidirectional Peppol Invoice Response log (SRS v2.7 §11).
+ *
+ * Lives here rather than alongside the rest of the v2.7 contracts because
+ * `InvoiceDetail` embeds it, and `arap.ts` builds on `schemas.ts` rather than
+ * the other way round.
+ */
+export const InvoiceResponseDto = z.object({
+  id: uuid,
+  responseDirection: z.enum(['INBOUND_FROM_BUYER', 'OUTBOUND_TO_SUPPLIER']),
+  responseCode: ResponseStatusCode,
+  statusReasonCode: RejectionReasonCode.nullable(),
+  isTechnical: z.boolean(),
+  comments: z.string().nullable(),
+  createdByName: z.string().nullable(),
+  transmittedAt: z.string().nullable(),
+  transmissionError: z.string().nullable(),
+  receivedAt: z.string(),
+});
+export type InvoiceResponseDto = z.infer<typeof InvoiceResponseDto>;
 
 export const InvoiceDetail = InvoiceListItem.extend({
   peppolUuid: z.string(),
@@ -485,6 +525,41 @@ export const InvoiceDetail = InvoiceListItem.extend({
   approvedAt: z.string().nullable(),
   submittedAt: z.string().nullable(),
   clearedAt: z.string().nullable(),
+
+  // --- v2.7 -----------------------------------------------------------------
+  /** §10.6 clearance identifiers, captured from the ASP's verdict. */
+  ftaCryptographicStamp: z.string().nullable(),
+  mlsStatus: z.string().nullable(),
+  /** §8.2 preceding-document linkage on a 381/383. */
+  referencedInvoiceId: uuid.nullable(),
+  referencedInvoiceNumber: z.string().nullable(),
+  referencedFtaIrn: z.string().nullable(),
+  creditNoteReasonCode: RejectionReasonCode.nullable(),
+  creditNoteReversalMode: ReversalMode.nullable(),
+  creditNoteNotes: z.string().nullable(),
+  /** §11 dispute state, projected from the response log below. */
+  latestResponseCode: ResponseStatusCode.nullable(),
+  latestResponseReasonCode: RejectionReasonCode.nullable(),
+  latestResponseComment: z.string().nullable(),
+  disputeOpenedAt: z.string().nullable(),
+  disputeResolvedAt: z.string().nullable(),
+  correctiveCreditNoteId: uuid.nullable(),
+  /** Set on the invoice a credit note was raised against. */
+  correctiveCreditNoteNumber: z.string().nullable(),
+  /** §12 inbound-only fields; null on an AR document. */
+  supplierId: uuid.nullable(),
+  supplierName: z.string().nullable(),
+  supplierIsProvisional: z.boolean(),
+  poReference: z.string().nullable(),
+  grnReference: z.string().nullable(),
+  apPostingStatus: ApPostingStatus,
+  apReviewedByName: z.string().nullable(),
+  apReviewedAt: z.string().nullable(),
+  customerId: uuid.nullable(),
+  erpReverseSyncStatus: ErpSyncStatus,
+  erpReverseSyncedAt: z.string().nullable(),
+  /** The full bidirectional IMR log for this document (§11 / §12.3). */
+  responses: z.array(InvoiceResponseDto),
 });
 export type InvoiceDetail = z.infer<typeof InvoiceDetail>;
 

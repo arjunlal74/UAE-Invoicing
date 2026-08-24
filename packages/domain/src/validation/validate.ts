@@ -123,6 +123,14 @@ export function validateInvoice(
   // --- Type ----------------------------------------------------------------
   const typeCode = invoice.invoiceType?.trim() as InvoiceTypeCode;
   const typeSpec = INVOICE_TYPES[typeCode];
+  /**
+   * A credit or debit note reverses value rather than creating it, so its line
+   * amounts are negative (SRS v2.7 §8.1). The sign rules below therefore have
+   * to be read the other way round for these documents: a positive unit price
+   * on a 381 would *increase* what the buyer owes, which is precisely the
+   * mistake worth catching.
+   */
+  const isReversal = typeSpec?.requiresPrecedingInvoice === true;
   if (!typeSpec) {
     push(
       RULES.INVOICE_TYPE_INVALID,
@@ -265,7 +273,7 @@ export function validateInvoice(
   }
 
   for (const line of invoice.lines) {
-    findings.push(...validateLine(line, input, seenLineNumbers));
+    findings.push(...validateLine(line, input, seenLineNumbers, isReversal));
   }
 
   // --- Invoice-level arithmetic --------------------------------------------
@@ -336,6 +344,7 @@ function validateLine(
   line: StagedLine,
   original: StagedInvoice,
   seenLineNumbers: Map<string, number>,
+  isReversal: boolean,
 ): ValidationFinding[] {
   const out: ValidationFinding[] = [];
   const row = line.sourceRow;
@@ -371,6 +380,17 @@ function validateLine(
   const price = toDecimal(line.unitPrice);
   if (price === null) {
     push(RULES.LINE_UNIT_PRICE_INVALID, `Unit price '${line.unitPrice}' is not a number.`, 'unitPrice');
+  } else if (isReversal) {
+    // The sign is inverted for a reversal, and zero credits nothing at all.
+    if (price.greaterThan(0)) {
+      push(
+        RULES.LINE_UNIT_PRICE_INVALID,
+        'A credit note line must carry a negative amount — it reduces what the buyer owes.',
+        'unitPrice',
+      );
+    } else if (price.isZero()) {
+      push(RULES.LINE_UNIT_PRICE_INVALID, 'This credit line reverses nothing.', 'unitPrice');
+    }
   } else if (price.lessThan(0)) {
     push(RULES.LINE_UNIT_PRICE_INVALID, 'Unit price cannot be negative.', 'unitPrice');
   }
@@ -405,16 +425,26 @@ function validateLine(
 
   const discount = toDecimal(line.lineDiscount);
   if (discount !== null && qty !== null && price !== null) {
-    const gross = qty.times(price);
-    if (discount.greaterThan(gross)) {
+    // On a reversal both the line value and any discount carried over from the
+    // original document are negative, so the comparison is made on magnitudes.
+    const gross = isReversal ? qty.times(price).abs() : qty.times(price);
+    const magnitude = isReversal ? discount.abs() : discount;
+    if (magnitude.greaterThan(gross)) {
       push(
         RULES.LINE_DISCOUNT_EXCEEDS,
-        `Discount ${discount.toFixed(2)} is greater than the line value ${gross.toFixed(2)}.`,
+        `Discount ${magnitude.toFixed(2)} is greater than the line value ${gross.toFixed(2)}.`,
         'lineDiscount',
       );
     }
-    if (discount.lessThan(0)) {
+    if (!isReversal && discount.lessThan(0)) {
       push(RULES.LINE_DISCOUNT_EXCEEDS, 'Discount cannot be negative.', 'lineDiscount');
+    }
+    if (isReversal && discount.greaterThan(0)) {
+      push(
+        RULES.LINE_DISCOUNT_EXCEEDS,
+        'A discount reversed on a credit note must itself be negative.',
+        'lineDiscount',
+      );
     }
   }
 

@@ -55,11 +55,45 @@ export interface SupplierParty {
   countryCode?: string;
 }
 
+/**
+ * Buyer detail beyond what the staged row carries.
+ *
+ * The spreadsheet channel only ever knew the buyer's name, TRN and emirate. A
+ * document composed in the in-app builder is drawn from the Customer Master
+ * Directory (SRS v2.7 §6) and can therefore fill the whole party block, which
+ * is what PINT wants and what a buyer's own AP desk reconciles against.
+ */
+export interface BuyerParty {
+  street?: string | null;
+  building?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
+  contactName?: string | null;
+  contactEmail?: string | null;
+  contactPhone?: string | null;
+}
+
+/** The document a credit or debit note corrects (SRS v2.7 §8.2 feature 2). */
+export interface PrecedingDocument {
+  invoiceNumber: string;
+  issueDate?: string | null;
+  /** The FTA clearance IRN of the original, embedded for legal auditability. */
+  ftaIrn?: string | null;
+}
+
 export interface BuildInvoiceOptions {
   invoice: StagedInvoice;
   supplier: SupplierParty;
+  buyer?: BuyerParty | null;
   /** Stable document UUID, persisted on the invoice row. */
   peppolUuid: string;
+  /**
+   * Set on a 381/383. Overrides the free-text `precedingInvoiceId` the
+   * spreadsheet channel carries, because only this form has the IRN.
+   */
+  preceding?: PrecedingDocument | null;
+  /** Free-text explanation, emitted as cbc:Note. §8.1's "Credit Note Notes". */
+  note?: string | null;
   customizationId?: string;
   profileId?: string;
   /** Injected so generation is deterministic and reproducible in tests. */
@@ -97,6 +131,14 @@ export function buildInvoiceXml(options: BuildInvoiceOptions): string {
   doc.ele('cbc:IssueDate').txt(invoice.issueDate);
   doc.ele('cbc:IssueTime').txt(invoice.issueTime);
   doc.ele('cbc:InvoiceTypeCode').txt(invoice.invoiceType);
+
+  // cbc:Note sits between InvoiceTypeCode and DocumentCurrencyCode in the UBL
+  // 2.1 sequence. Placing it anywhere else fails XSD validation even though the
+  // content is correct.
+  if (options.note?.trim()) {
+    doc.ele('cbc:Note').txt(options.note.trim());
+  }
+
   doc.ele('cbc:DocumentCurrencyCode').txt(currency);
   doc.ele('cbc:TaxCurrencyCode').txt('AED');
 
@@ -104,16 +146,25 @@ export function buildInvoiceXml(options: BuildInvoiceOptions): string {
     doc.ele('cac:OrderReference').ele('cbc:ID').txt(invoice.poReference).up();
   }
 
-  // Credit and debit notes must point at the document they adjust.
-  if (typeSpec?.requiresPrecedingInvoice && invoice.precedingInvoiceId?.trim()) {
-    doc
-      .ele('cac:BillingReference')
-      .ele('cac:InvoiceDocumentReference')
-      .ele('cbc:ID')
-      .txt(invoice.precedingInvoiceId)
-      .up()
-      .up()
-      .up();
+  // Credit and debit notes must point at the document they adjust. §8.2 makes
+  // this the legal linkage: without cac:BillingReference the note is not a
+  // correction of anything, and a UAE VAT audit has no way to tie the reversed
+  // output tax back to the supply it reverses.
+  const precedingNumber =
+    options.preceding?.invoiceNumber?.trim() || invoice.precedingInvoiceId?.trim();
+  if (typeSpec?.requiresPrecedingInvoice && precedingNumber) {
+    const reference = doc.ele('cac:BillingReference').ele('cac:InvoiceDocumentReference');
+    reference.ele('cbc:ID').txt(precedingNumber).up();
+    if (options.preceding?.issueDate) {
+      reference.ele('cbc:IssueDate').txt(options.preceding.issueDate).up();
+    }
+    // The clearance IRN of the original, carried as the referenced document's
+    // UUID — the identifier the FTA itself issued and the one an auditor will
+    // search on.
+    if (options.preceding?.ftaIrn) {
+      reference.ele('cbc:UUID').txt(options.preceding.ftaIrn).up();
+    }
+    reference.up().up();
   }
 
   // --- Supplier ------------------------------------------------------------
@@ -163,8 +214,14 @@ export function buildInvoiceXml(options: BuildInvoiceOptions): string {
     buyerParty.ele('cbc:EndpointID', { schemeID: UAE_TRN_SCHEME_ID }).txt(invoice.buyerTrn).up();
   }
 
+  const buyer = options.buyer;
   const buyerAddress = buyerParty.ele('cac:PostalAddress');
-  buyerAddress.ele('cbc:CityName').txt(invoice.buyerEmirate ?? '').up();
+  if (buyer?.street) buyerAddress.ele('cbc:StreetName').txt(buyer.street).up();
+  if (buyer?.building) {
+    buyerAddress.ele('cbc:AdditionalStreetName').txt(buyer.building).up();
+  }
+  buyerAddress.ele('cbc:CityName').txt(buyer?.city || invoice.buyerEmirate || '').up();
+  if (buyer?.postalCode) buyerAddress.ele('cbc:PostalZone').txt(buyer.postalCode).up();
   buyerAddress.ele('cbc:CountrySubentity').txt(invoice.buyerEmirate ?? '').up();
   buyerAddress.ele('cac:Country').ele('cbc:IdentificationCode').txt('AE').up().up();
   buyerAddress.up();
@@ -189,6 +246,17 @@ export function buildInvoiceXml(options: BuildInvoiceOptions): string {
     .txt(invoice.buyerName)
     .up()
     .up();
+
+  // §6 maps the directory's contact fields to cac:Contact. Emitted only when
+  // there is something to put in it — an empty Contact element is a PINT error.
+  if (buyer?.contactName || buyer?.contactEmail || buyer?.contactPhone) {
+    const contact = buyerParty.ele('cac:Contact');
+    if (buyer.contactName) contact.ele('cbc:Name').txt(buyer.contactName).up();
+    if (buyer.contactPhone) contact.ele('cbc:Telephone').txt(buyer.contactPhone).up();
+    if (buyer.contactEmail) contact.ele('cbc:ElectronicMail').txt(buyer.contactEmail).up();
+    contact.up();
+  }
+
   buyerParty.up().up();
 
   // --- Payment means -------------------------------------------------------

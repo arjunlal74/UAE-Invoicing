@@ -5,9 +5,12 @@ import { config } from '../config.js';
 /**
  * Job queues.
  *
- * Two queues, deliberately separate: parsing is CPU-bound and tenant-facing
- * (a user is watching a progress bar), while submission is IO-bound, retried
- * over hours, and must not be starved by a large upload.
+ * Separated by workload rather than by feature: parsing is CPU-bound and
+ * tenant-facing (a user is watching a progress bar), while submission is
+ * IO-bound, retried over hours, and must not be starved by a large upload.
+ * v2.7 adds the AP module's outbound verdicts, which are IO-bound like
+ * submissions but far lower volume and much less urgent — a lane of their own
+ * keeps them from queueing behind a month-end filing run.
  *
  * BullMQ rather than the SRS's RabbitMQ/Kafka: the 500 invoices/sec figure in
  * the spec assumes programmatic ERP ingestion, which v1 does not have. The job
@@ -19,6 +22,7 @@ export const QUEUE_PARSE = 'batch-parse';
 export const QUEUE_SUBMIT = 'invoice-submit';
 export const QUEUE_POLL = 'status-poll';
 export const QUEUE_MAIL = 'mail-send';
+export const QUEUE_RESPONSE = 'response-send';
 
 export interface ParseBatchJob {
   batchId: string;
@@ -46,6 +50,20 @@ export interface PollStatusJob {
   reason: 'sweep';
 }
 
+/**
+ * Transmit one AP verdict to the supplier who issued the invoice (§12.3).
+ *
+ * Queued rather than sent inline so that a supplier whose access point is down
+ * does not leave an AP clerk staring at a spinner. The verdict is already
+ * recorded and binding on our side by the time this runs; delivery is the part
+ * that can be retried.
+ */
+export interface SendResponseJob {
+  responseId: string;
+  invoiceId: string;
+  tenantId: string;
+}
+
 let connection: IORedis | null = null;
 
 export function redis(): IORedis {
@@ -63,6 +81,7 @@ let parseQueue: Queue<ParseBatchJob> | null = null;
 let submitQueue: Queue<SubmitInvoiceJob> | null = null;
 let pollQueue: Queue<PollStatusJob> | null = null;
 let mailQueue: Queue<SendMailJob> | null = null;
+let responseQueue: Queue<SendResponseJob> | null = null;
 
 export function batchParseQueue(): Queue<ParseBatchJob> {
   parseQueue ??= new Queue<ParseBatchJob>(QUEUE_PARSE, { connection: redis() });
@@ -112,6 +131,22 @@ export function sendMailQueue(): Queue<SendMailJob> {
   return mailQueue;
 }
 
+export function responseSendQueue(): Queue<SendResponseJob> {
+  responseQueue ??= new Queue<SendResponseJob>(QUEUE_RESPONSE, { connection: redis() });
+  return responseQueue;
+}
+
+/**
+ * A commercial verdict is not urgent to the second but must eventually arrive,
+ * so this retries longer and more gently than an invoice submission does.
+ */
+export const RESPONSE_JOB_OPTIONS: JobsOptions = {
+  attempts: 5,
+  backoff: { type: 'exponential', delay: 60_000 },
+  removeOnComplete: { age: 86_400, count: 2_000 },
+  removeOnFail: { age: 604_800 },
+};
+
 /**
  * Mail retries are patient but finite. A greylisting server rejects the first
  * attempt on purpose and accepts a minute later, so giving up after one try
@@ -131,8 +166,10 @@ export async function closeQueues(): Promise<void> {
     submitQueue?.close(),
     pollQueue?.close(),
     mailQueue?.close(),
+    responseQueue?.close(),
   ]);
   parseQueue = submitQueue = pollQueue = mailQueue = null;
+  responseQueue = null;
   if (connection) {
     connection.disconnect();
     connection = null;

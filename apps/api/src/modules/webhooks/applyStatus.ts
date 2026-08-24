@@ -22,6 +22,10 @@ export interface StatusUpdate {
   reason?: string;
   ruleCode?: string;
   receipt?: string;
+  /** SRS v2.7 §10.6 — the clearance identifiers, captured onto the invoice. */
+  irn?: string;
+  cryptographicStamp?: string;
+  mlsStatus?: string;
   source: 'webhook' | 'poll';
 }
 
@@ -43,11 +47,23 @@ export async function applyStatusUpdate(update: StatusUpdate): Promise<StatusApp
     // provider may echo back its own reference, our UUID, or the invoice
     // number, and we should not depend on which.
     const rows = await tx<
-      { id: string; tenant_id: string; status: InvoiceStatus; invoice_number: string }[]
+      {
+        id: string;
+        tenant_id: string;
+        status: InvoiceStatus;
+        invoice_number: string;
+        invoice_type: string;
+        referenced_invoice_id: string | null;
+      }[]
     >`
-      SELECT i.id, i.tenant_id, i.status, i.invoice_number
+      SELECT i.id, i.tenant_id, i.status, i.invoice_number, i.invoice_type::text AS invoice_type,
+             i.referenced_invoice_id
       FROM invoices i
       WHERE i.tenant_id = ${update.tenantId}
+        -- Clearance verdicts only ever concern documents we filed. A purchase
+        -- invoice arrived already cleared; a provider callback that matched one
+        -- would be re-opening someone else's settled document.
+        AND i.direction = 'OUTBOUND_SALES_AR'
         AND (
           (${update.invoiceId ?? null}::uuid IS NOT NULL AND i.id = ${update.invoiceId ?? null}::uuid)
           OR (${update.peppolUuid ?? null}::uuid IS NOT NULL AND i.peppol_uuid = ${update.peppolUuid ?? null}::uuid)
@@ -82,13 +98,42 @@ export async function applyStatusUpdate(update: StatusUpdate): Promise<StatusApp
       return { applied: false, invoiceId: invoice.id, reason: 'already applied' };
     }
 
+    const accepted = update.verdict === 'ACCEPTED';
+
     await tx`
       UPDATE invoices SET
         status               = ${nextStatus}::invoice_status,
-        fta_rejection_reason = ${update.verdict === 'REJECTED' ? (update.reason ?? 'Rejected') : null},
-        cleared_at           = ${update.verdict === 'ACCEPTED' ? new Date() : null}
+        fta_rejection_reason = ${accepted ? null : (update.reason ?? 'Rejected')},
+        cleared_at           = ${accepted ? new Date() : null},
+        -- §10.6. coalesce rather than overwrite: a later status poll that has
+        -- no IRN in it must not erase the one the webhook already delivered.
+        fta_irn              = coalesce(${update.irn ?? null}, fta_irn),
+        fta_cryptographic_stamp = coalesce(${update.cryptographicStamp ?? null}, fta_cryptographic_stamp),
+        mls_status           = coalesce(${update.mlsStatus ?? null}, mls_status),
+        -- §10.6 reverse push: a cleared document owes its IRN back to whichever
+        -- system produced it.
+        erp_reverse_sync_status = CASE
+          WHEN ${accepted} AND source_channel <> 'MANUAL_IN_APP_ENTRY'
+            THEN 'PENDING'::erp_sync_status
+          ELSE erp_reverse_sync_status
+        END
       WHERE id = ${invoice.id}
     `;
+
+    // §8.2 feature 7 — automated dispute closure. A credit note that clears
+    // settles the invoice it references: the output tax is reversed, so the
+    // document stops appearing on the §13.2 non-compliance report.
+    if (accepted && invoice.referenced_invoice_id) {
+      await tx`
+        UPDATE invoices SET
+          dispute_resolved          = TRUE,
+          dispute_resolved_at       = CURRENT_TIMESTAMP,
+          corrective_credit_note_id = ${invoice.id}
+        WHERE id = ${invoice.referenced_invoice_id}
+          AND is_commercial_dispute
+          AND NOT dispute_resolved
+      `;
+    }
 
     await tx`
       UPDATE transmission_logs SET
@@ -113,10 +158,6 @@ export async function applyStatusUpdate(update: StatusUpdate): Promise<StatusApp
     }
 
     if (archived) {
-      await tx`
-        UPDATE invoices SET qr_code_data = coalesce(qr_code_data, qr_code_data)
-        WHERE id = ${invoice.id}
-      `;
       logger.info({ invoiceId: invoice.id, uri: archived.uri }, 'clearance receipt archived');
     }
 
@@ -132,6 +173,7 @@ export async function applyStatusUpdate(update: StatusUpdate): Promise<StatusApp
           to: nextStatus,
           reason: update.reason ?? null,
           ruleCode: update.ruleCode ?? null,
+          ftaIrn: update.irn ?? null,
           source: update.source,
         },
       },

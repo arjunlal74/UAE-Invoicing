@@ -36,7 +36,10 @@ export async function pollStatusJob(): Promise<{ checked: number; resolved: numb
       FROM invoices i
       LEFT JOIN transmission_logs l
         ON l.invoice_id = i.id AND l.transmission_reference IS NOT NULL
-      WHERE i.status = 'SUBMITTED_TO_ASP'
+      -- Outbound only: a purchase invoice arrived already cleared, so there is
+      -- no provider verdict outstanding on it to poll for.
+      WHERE i.direction = 'OUTBOUND_SALES_AR'
+        AND i.status = 'SUBMITTED_TO_ASP'
         AND i.submitted_at < now() - (${SILENT_AFTER_MINUTES} * interval '1 minute')
       ORDER BY i.id, l.created_at DESC
       LIMIT ${BATCH_LIMIT}

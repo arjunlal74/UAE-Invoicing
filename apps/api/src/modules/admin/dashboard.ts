@@ -42,7 +42,9 @@ export function registerAdminDashboardRoutes(app: FastifyInstance) {
       `;
 
       const invoicesByStatus = await tx<CountRow[]>`
-        SELECT status::text AS key, count(*)::text AS count FROM invoices GROUP BY status
+        SELECT status::text AS key, count(*)::text AS count FROM invoices
+        WHERE direction = 'OUTBOUND_SALES_AR'
+        GROUP BY status
       `;
 
       const invoiceTotals = await tx<{ last30: string; cleared_value: string }[]>`
@@ -51,6 +53,9 @@ export function registerAdminDashboardRoutes(app: FastifyInstance) {
           coalesce(sum(payable_amount_aed) FILTER (WHERE status = 'ACCEPTED_BY_FTA'), 0)::text
             AS cleared_value
         FROM invoices
+        -- The platform bills for what tenants file. Inbound purchase invoices
+        -- are received rather than filed and belong to a different figure.
+        WHERE direction = 'OUTBOUND_SALES_AR'
       `;
 
       const attention = await tx<{
@@ -64,10 +69,14 @@ export function registerAdminDashboardRoutes(app: FastifyInstance) {
           -- Handed to the provider but silent for an hour: the case a human has
           -- to look at. Same threshold as the Transmissions monitor.
           (SELECT count(*) FROM invoices
-            WHERE status = 'SUBMITTED_TO_ASP'
+            WHERE direction = 'OUTBOUND_SALES_AR'
+              AND status = 'SUBMITTED_TO_ASP'
               AND submitted_at < now() - interval '1 hour')::text AS stuck,
-          (SELECT count(*) FROM invoices WHERE status = 'REJECTED_BY_FTA')::text AS rejected,
-          (SELECT count(*) FROM invoices WHERE status = 'VALIDATION_FAILED')::text
+          (SELECT count(*) FROM invoices
+            WHERE direction = 'OUTBOUND_SALES_AR' AND status = 'REJECTED_BY_FTA')::text
+            AS rejected,
+          (SELECT count(*) FROM invoices
+            WHERE direction = 'OUTBOUND_SALES_AR' AND status = 'VALIDATION_FAILED')::text
             AS validation_failed,
           (SELECT count(*) FROM tenants WHERE status = 'PENDING')::text AS tenants_pending,
           -- A tenant whose provider connection is not live cannot file, however

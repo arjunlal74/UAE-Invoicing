@@ -76,7 +76,7 @@ export function registerTenantRoutes(app: FastifyInstance) {
         SELECT t.*,
                p.legal_name_en AS parent_name,
                c.status AS asp_status,
-               (SELECT count(*) FROM invoices i WHERE i.tenant_id = t.id) AS invoice_count
+               (SELECT count(*) FROM invoices i WHERE i.tenant_id = t.id AND i.direction = 'OUTBOUND_SALES_AR') AS invoice_count
         FROM tenants t
         LEFT JOIN tenants p ON p.id = t.parent_tenant_id
         LEFT JOIN tenant_asp_configs c ON c.tenant_id = t.id AND c.is_active
@@ -212,7 +212,7 @@ export function registerTenantRoutes(app: FastifyInstance) {
         SELECT t.*,
                p.legal_name_en AS parent_name,
                c.status AS asp_status,
-               (SELECT count(*) FROM invoices i WHERE i.tenant_id = t.id) AS invoice_count,
+               (SELECT count(*) FROM invoices i WHERE i.tenant_id = t.id AND i.direction = 'OUTBOUND_SALES_AR') AS invoice_count,
                (SELECT count(*) FROM users u WHERE u.tenant_id = t.id) AS user_count,
                (SELECT count(*) FROM tenants s WHERE s.parent_tenant_id = t.id) AS sub_tenant_count
         FROM tenants t
@@ -339,7 +339,7 @@ export function registerTenantRoutes(app: FastifyInstance) {
 
     const rows = await sql()<TenantRow[]>`
       SELECT t.*, p.legal_name_en AS parent_name, c.status AS asp_status,
-             (SELECT count(*) FROM invoices i WHERE i.tenant_id = t.id) AS invoice_count,
+             (SELECT count(*) FROM invoices i WHERE i.tenant_id = t.id AND i.direction = 'OUTBOUND_SALES_AR') AS invoice_count,
              (SELECT count(*) FROM users u WHERE u.tenant_id = t.id) AS user_count,
              (SELECT count(*) FROM tenants s WHERE s.parent_tenant_id = t.id) AS sub_tenant_count
       FROM tenants t

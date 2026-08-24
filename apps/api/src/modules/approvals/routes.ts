@@ -38,6 +38,9 @@ async function loadQueue(
     SELECT id, invoice_number, status, staging_row_id
     FROM invoices
     WHERE tenant_id = ${tenantId}
+      -- The approval gate is an outbound control (SRS §16). A purchase invoice
+      -- named explicitly by id must not be swept into it.
+      AND direction = 'OUTBOUND_SALES_AR'
       AND (${invoiceIds ?? null}::uuid[] IS NULL OR id = ANY(${invoiceIds ?? null}::uuid[]))
       AND (${invoiceIds ?? null}::uuid[] IS NOT NULL OR status = 'PENDING_CFO_APPROVAL')
     ORDER BY created_at

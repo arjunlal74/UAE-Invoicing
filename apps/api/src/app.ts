@@ -8,6 +8,12 @@ import { registerErrorHandler } from './lib/errors.js';
 import { logger } from './logger.js';
 import { registerAdminDashboardRoutes } from './modules/admin/dashboard.js';
 import { registerAdminRoutes } from './modules/admin/routes.js';
+import { registerApRoutes } from './modules/ap/routes.js';
+import { registerArBuilderRoutes } from './modules/ar/builder.js';
+import { registerDirectoryRoutes } from './modules/directories/routes.js';
+import { registerMeteringRoutes } from './modules/metering/routes.js';
+import { registerModuleDashboardRoutes } from './modules/dashboard/module.js';
+import { registerReportRoutes } from './modules/reports/routes.js';
 import { registerApprovalRoutes } from './modules/approvals/routes.js';
 import { registerAspRoutes } from './modules/asp/routes.js';
 import { registerBatchRoutes } from './modules/batches/routes.js';
@@ -91,6 +97,16 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerApprovalRoutes(app);
   registerPartnerRoutes(app);
   registerDashboardRoutes(app);
+
+  // SRS v2.7 — the two modules. Registered as a block so the split is visible
+  // here rather than only in the URL space.
+  registerDirectoryRoutes(app);
+  registerArBuilderRoutes(app);
+  registerApRoutes(app);
+  registerReportRoutes(app);
+  registerMeteringRoutes(app);
+  registerModuleDashboardRoutes(app);
+
   registerMailRoutes(app);
   registerAdminRoutes(app);
   registerAdminDashboardRoutes(app);

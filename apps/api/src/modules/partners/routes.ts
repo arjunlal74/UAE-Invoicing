@@ -82,12 +82,16 @@ export function registerPartnerRoutes(app: FastifyInstance) {
         SELECT p.legal_name_en AS partner_name,
                count(s.id)::text AS sub_tenant_count,
                count(s.id) FILTER (WHERE s.status = 'ACTIVE')::text AS active_sub_tenant_count,
+               -- Outbound only: a partner's roll-up is about what their clients
+               -- have filed, which is also what draws down the master bundle.
                (SELECT count(*) FROM invoices i
-                 WHERE i.tenant_id IN (
-                   SELECT id FROM tenants WHERE parent_tenant_id = p.id
-                 ))::text AS invoice_count,
+                 WHERE i.direction = 'OUTBOUND_SALES_AR'
+                   AND i.tenant_id IN (
+                     SELECT id FROM tenants WHERE parent_tenant_id = p.id
+                   ))::text AS invoice_count,
                (SELECT count(*) FROM invoices i
-                 WHERE i.status = 'ACCEPTED_BY_FTA'
+                 WHERE i.direction = 'OUTBOUND_SALES_AR'
+                   AND i.status = 'ACCEPTED_BY_FTA'
                    AND i.tenant_id IN (
                      SELECT id FROM tenants WHERE parent_tenant_id = p.id
                    ))::text AS accepted_invoice_count
@@ -124,7 +128,7 @@ export function registerPartnerRoutes(app: FastifyInstance) {
         (tx) => tx<SubTenantRow[]>`
           SELECT t.id, t.company_code, t.legal_name_en, t.trn, t.status, t.created_at,
                  c.status AS asp_status,
-                 (SELECT count(*) FROM invoices i WHERE i.tenant_id = t.id) AS invoice_count,
+                 (SELECT count(*) FROM invoices i WHERE i.tenant_id = t.id AND i.direction = 'OUTBOUND_SALES_AR') AS invoice_count,
                  (SELECT count(*) FROM users u WHERE u.tenant_id = t.id) AS user_count
           FROM tenants t
           LEFT JOIN tenant_asp_configs c ON c.tenant_id = t.id AND c.is_active

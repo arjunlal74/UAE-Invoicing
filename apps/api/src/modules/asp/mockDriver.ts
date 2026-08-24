@@ -4,6 +4,8 @@ import { safeEqual } from '../../lib/crypto.js';
 import { logger } from '../../logger.js';
 import type {
   AspDriver,
+  AspResponseOutcome,
+  AspResponseRequest,
   AspStatusOutcome,
   AspSubmissionOutcome,
   AspSubmissionRequest,
@@ -38,6 +40,8 @@ interface MockRecord {
   ruleCode?: string;
   availableAt: number;
   idempotencyKey: string;
+  /** SRS v2.7 §10.6: the clearance identifier a real FTA node issues. */
+  irn: string;
 }
 
 /**
@@ -46,6 +50,14 @@ interface MockRecord {
  */
 const submissions = new Map<string, MockRecord>();
 const byIdempotencyKey = new Map<string, string>();
+
+/**
+ * How many times a given submission has drawn the simulated timeout.
+ *
+ * Needed because the draw itself is deterministic per idempotency key; without
+ * a counter the "transient" failure would repeat on every retry forever.
+ */
+const transientFailures = new Map<string, number>();
 
 const REJECTION_SCENARIOS = [
   {
@@ -95,15 +107,27 @@ export class MockAspDriver implements AspDriver {
 
     const roll = hashToUnitInterval(request.idempotencyKey);
 
-    // A small slice of attempts fail transiently, so the retry path is exercised
-    // in development rather than first meeting reality in production.
+    // A small slice of submissions fail transiently, so the retry path is
+    // exercised in development rather than first meeting reality in production.
+    //
+    // The failure has to actually clear on retry, and that needs a counter: the
+    // roll is derived from the idempotency key, which is deliberately stable
+    // across attempts, so a bare `roll > 0.97` is a *permanent* property of that
+    // invoice. It failed every attempt and dead-lettered — exercising the
+    // give-up path and never the recover-from-a-blip path this is here for.
     if (roll > 0.97) {
-      return {
-        kind: 'retryable',
-        reason: 'Simulated provider timeout',
-        httpStatus: 504,
-        retryAfterMs: 30_000,
-      };
+      const attempts = (transientFailures.get(request.idempotencyKey) ?? 0) + 1;
+      transientFailures.set(request.idempotencyKey, attempts);
+
+      if (attempts === 1) {
+        return {
+          kind: 'retryable',
+          reason: 'Simulated provider timeout',
+          httpStatus: 504,
+          retryAfterMs: 30_000,
+        };
+      }
+      // Second attempt onwards: the blip is over, fall through and accept.
     }
 
     const reference = `mock_tx_${randomUUID().replace(/-/g, '').slice(0, 20)}`;
@@ -121,6 +145,10 @@ export class MockAspDriver implements AspDriver {
       // reason the status polling and webhook paths exist.
       availableAt: Date.now() + cfg.ASP_MOCK_LATENCY_MS * 2,
       idempotencyKey: request.idempotencyKey,
+      // Shaped like the identifiers in the SRS wireframes (irn_uae_…) and
+      // derived from the idempotency key, so a retried submission is issued the
+      // same IRN rather than a second one.
+      irn: `irn_uae_${hashToUnitInterval(request.idempotencyKey).toFixed(14).slice(2)}`,
     };
 
     submissions.set(reference, record);
@@ -129,6 +157,42 @@ export class MockAspDriver implements AspDriver {
     this.scheduleCallback(record, tenantConfig);
 
     return { kind: 'accepted', transmissionReference: reference, httpStatus: 202 };
+  }
+
+  /**
+   * Carry an ApplicationResponse to the supplier (SRS v2.7 §12.3).
+   *
+   * The simulator accepts every response it is handed. That is deliberate: a
+   * commercial verdict is not something a network can refuse on the buyer's
+   * behalf, and modelling a rejection here would invent a failure mode the AP
+   * desk has no way to act on.
+   */
+  async sendResponse(
+    request: AspResponseRequest,
+    _tenantConfig: AspTenantConfig,
+  ): Promise<AspResponseOutcome> {
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(config().ASP_MOCK_LATENCY_MS, 1_500)),
+    );
+
+    const existing = byIdempotencyKey.get(request.idempotencyKey);
+    if (existing) {
+      return { kind: 'sent', transmissionReference: existing, httpStatus: 200 };
+    }
+
+    const reference = `mock_rsp_${randomUUID().replace(/-/g, '').slice(0, 20)}`;
+    byIdempotencyKey.set(request.idempotencyKey, reference);
+
+    logger.debug(
+      {
+        invoiceNumber: request.invoiceNumber,
+        responseCode: request.responseCode,
+        reasonCode: request.reasonCode,
+      },
+      'mock provider accepted an application response',
+    );
+
+    return { kind: 'sent', transmissionReference: reference, httpStatus: 202 };
   }
 
   /**
@@ -209,6 +273,7 @@ export class MockAspDriver implements AspDriver {
         kind: 'accepted',
         clearedAt: new Date(record.availableAt).toISOString(),
         receipt: this.buildReceipt(record),
+        irn: record.irn,
       };
     }
 
@@ -264,6 +329,8 @@ export class MockAspDriver implements AspDriver {
         invoice_number?: string;
         status?: string;
         receipt?: string;
+        irn?: string;
+        mls_status?: string;
         occurred_at?: string;
         error_details?: { code?: string; message?: string }[];
       };
@@ -289,6 +356,8 @@ export class MockAspDriver implements AspDriver {
       reason: error?.message,
       ruleCode: error?.code,
       receipt: data.receipt,
+      irn: data.irn,
+      mlsStatus: data.mls_status,
       occurredAt: data.occurred_at,
     };
   }
@@ -304,7 +373,7 @@ export class MockAspDriver implements AspDriver {
 
 /** Build the webhook body the mock provider would post, used by the simulator. */
 export function buildMockWebhookBody(
-  record: { reference: string; peppolUuid: string; invoiceNumber: string },
+  record: { reference: string; peppolUuid: string; invoiceNumber: string; irn?: string },
   verdict: 'ACCEPTED' | 'REJECTED',
   detail?: { code: string; message: string },
 ): string {
@@ -316,6 +385,10 @@ export function buildMockWebhookBody(
       peppol_uuid: record.peppolUuid,
       invoice_number: record.invoiceNumber,
       status: verdict === 'ACCEPTED' ? 'ACCEPTED_BY_FTA' : 'REJECTED_BY_FTA',
+      // §10.6: a real provider returns the clearance identifier and the Peppol
+      // message-level status alongside the verdict.
+      irn: verdict === 'ACCEPTED' ? record.irn : undefined,
+      mls_status: verdict === 'ACCEPTED' ? 'DELIVERED' : 'FAILED',
       occurred_at: new Date().toISOString(),
       error_details: detail ? [detail] : undefined,
     },

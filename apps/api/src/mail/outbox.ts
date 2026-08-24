@@ -1,3 +1,10 @@
+import {
+  REASON_CODE_LABELS,
+  RESPONSE_CODE_LABELS,
+  type RejectionReasonCode,
+  type ResponseStatusCode,
+} from '@uae/contracts';
+import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { MAIL_JOB_OPTIONS, sendMailQueue } from '../queue/queues.js';
 import { defaultAccount, recordQueued, type MailKind } from './service.js';
@@ -5,8 +12,11 @@ import {
   renderAccountLocked,
   renderActivationDirect,
   renderActivationManaged,
+  renderDisputeAlert,
+  renderInboundPurchaseInvoice,
   renderPasswordChanged,
   renderPasswordReset,
+  renderQuotaThreshold,
   type RenderedMail,
 } from './templates.js';
 
@@ -139,6 +149,106 @@ export async function queuePasswordChanged(params: {
       companyName: params.companyName,
       changedAt: params.changedAt,
       ip: params.ip,
+    }),
+    { userId: params.userId, tenantId: params.tenantId },
+  );
+}
+
+/**
+ * Template E — a buyer disputed one of our cleared sales invoices (§5.5).
+ *
+ * The link goes straight to the credit note builder with the invoice already
+ * named, which is §8.2's "1-Click Launch from Dispute Alerts": the recipient
+ * arrives at a form that is already populated rather than at a search box.
+ */
+export async function queueDisputeAlert(params: {
+  to: string;
+  contactName: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  buyerName: string;
+  ftaIrn: string | null;
+  responseCode: ResponseStatusCode;
+  reasonCode: RejectionReasonCode | null;
+  comments: string | null;
+  userId?: string | null;
+  tenantId?: string | null;
+}): Promise<QueueResult> {
+  return enqueue(
+    'DISPUTE_ALERT',
+    params.to,
+    renderDisputeAlert({
+      invoiceNumber: params.invoiceNumber,
+      buyerName: params.buyerName,
+      ftaIrn: params.ftaIrn,
+      responseStatus: `${params.responseCode} — ${RESPONSE_CODE_LABELS[params.responseCode]}`,
+      reasonCode: params.reasonCode,
+      reasonLabel: params.reasonCode ? REASON_CODE_LABELS[params.reasonCode] : null,
+      comments: params.comments,
+      creditNoteUrl: `${config().PORTAL_ORIGIN}/ar/credit-notes/new?invoiceId=${params.invoiceId}`,
+    }),
+    { userId: params.userId, tenantId: params.tenantId },
+  );
+}
+
+/** Template F — a supplier's invoice arrived in the AP desk (§5.6). */
+export async function queueInboundPurchaseInvoice(params: {
+  to: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  supplierName: string;
+  supplierTrn: string | null;
+  ftaIrn: string | null;
+  totalAmount: string;
+  vatAmount: string;
+  currency: string;
+  isNewSupplier: boolean;
+  userId?: string | null;
+  tenantId?: string | null;
+}): Promise<QueueResult> {
+  return enqueue(
+    'INBOUND_INVOICE',
+    params.to,
+    renderInboundPurchaseInvoice({
+      supplierName: params.supplierName,
+      supplierTrn: params.supplierTrn,
+      invoiceNumber: params.invoiceNumber,
+      ftaIrn: params.ftaIrn,
+      totalAmount: params.totalAmount,
+      vatAmount: params.vatAmount,
+      currency: params.currency,
+      isNewSupplier: params.isNewSupplier,
+      deskUrl: `${config().PORTAL_ORIGIN}/ap/inbox/${params.invoiceId}`,
+    }),
+    { userId: params.userId, tenantId: params.tenantId },
+  );
+}
+
+/** §15 — the 80/90/100% bundle threshold alert. */
+export async function queueQuotaThreshold(params: {
+  to: string;
+  contactName: string;
+  companyName: string;
+  threshold: number;
+  purchasedUnits: number;
+  consumedUnits: number;
+  remainingUnits: number;
+  hardCap: boolean;
+  userId?: string | null;
+  tenantId?: string | null;
+}): Promise<QueueResult> {
+  return enqueue(
+    'QUOTA_ALERT',
+    params.to,
+    renderQuotaThreshold({
+      contactName: params.contactName,
+      companyName: params.companyName,
+      threshold: params.threshold,
+      purchasedUnits: params.purchasedUnits,
+      consumedUnits: params.consumedUnits,
+      remainingUnits: params.remainingUnits,
+      hardCap: params.hardCap,
+      balanceUrl: `${config().PORTAL_ORIGIN}/settings/usage`,
     }),
     { userId: params.userId, tenantId: params.tenantId },
   );

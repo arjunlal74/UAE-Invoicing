@@ -207,6 +207,98 @@ async function seed() {
       `;
     }
 
+    // ======================================================================
+    // SRS v2.7 — the two modules
+    // ======================================================================
+    // Enough data on the live tenant that both desks are worth opening: buyers
+    // to invoice, a supplier whose bill is waiting, and the prepaid capacity
+    // that lets any of it be filed.
+
+    // --- §6 Customer Master Directory (AR) --------------------------------
+    for (const customer of [
+      {
+        code: 'CUST-001',
+        nameEn: 'Emirates Trading Co',
+        nameAr: 'شركة الإمارات للتجارة',
+        type: 'B2B',
+        trn: '100384759200003',
+        emirate: 'Dubai',
+        street: 'Al-Maktoum Street, Deira',
+        email: 'accounts@emiratestrading.ae',
+      },
+      {
+        code: 'CUST-002',
+        nameEn: 'Northern Gulf Contracting LLC',
+        nameAr: 'الخليج الشمالي للمقاولات ذ.م.م',
+        type: 'B2B',
+        trn: '100671928300003',
+        emirate: 'Sharjah',
+        street: 'Industrial Area 12',
+        email: 'ap@northerngulf.ae',
+      },
+      {
+        code: 'CUST-003',
+        nameEn: 'Walk-in retail customer',
+        nameAr: null,
+        // §6: a B2C party has no TRN, which is what makes their document a 388.
+        type: 'B2C',
+        trn: null,
+        emirate: 'Dubai',
+        street: 'Point of sale',
+        email: null,
+      },
+    ] as const) {
+      await tx`
+        INSERT INTO customers (
+          tenant_id, customer_code, customer_name_en, customer_name_ar, customer_type,
+          trn, emirate, street_address, contact_email, default_payment_means
+        ) VALUES (
+          ${activeId}, ${customer.code}, ${customer.nameEn}, ${customer.nameAr},
+          ${customer.type}::party_type, ${customer.trn}, ${customer.emirate},
+          ${customer.street}, ${customer.email}, '30'
+        )
+      `;
+    }
+
+    // --- §12.1 Supplier Master Directory (AP) ------------------------------
+    await tx`
+      INSERT INTO suppliers (
+        tenant_id, supplier_code, supplier_name_en, supplier_name_ar, trn, emirate,
+        street_address, bank_name, bank_iban, payment_terms_days, contact_email
+      ) VALUES (
+        ${activeId}, 'SUP-001', 'Gulf Tech Solutions FZE', 'شركة الخليج للحلول التقنية',
+        '100492817400003', 'Abu Dhabi', 'Corniche Road',
+        'First Abu Dhabi Bank', 'AE070331234567890123456', 30, 'billing@gulftech.ae'
+      )
+    `;
+
+    // --- §15 prepaid data bundles ------------------------------------------
+    // The direct tenant buys from the host; the partner buys a master pool and
+    // carves a slice out of it for its client. That two-tier arrangement is the
+    // one worth having in the seed, because it is the one the dual-deduction
+    // logic exists for and the one nobody would set up by hand to test.
+    await tx`
+      INSERT INTO data_bundles (tenant_id, reference, purchased_units, consumed_units, notes)
+      VALUES (${activeId}, 'BNDL-ALBAHAR-2026', 10000, 0,
+              'Annual prepaid capacity sold directly by the host.')
+    `;
+
+    const masterBundle = await tx<{ id: string }[]>`
+      INSERT INTO data_bundles (tenant_id, reference, purchased_units, consumed_units, notes)
+      VALUES (${partnerId}, 'BNDL-GULFADV-MASTER', 100000, 0,
+              'Channel partner master pool. Sub-tenant slices are carved from this.')
+      RETURNING id
+    `;
+
+    await tx`
+      INSERT INTO data_bundles (
+        tenant_id, parent_bundle_id, reference, purchased_units, consumed_units, notes
+      ) VALUES (
+        ${subTenantId}, ${masterBundle[0]!.id}, 'BNDL-DESERTLOG-2026', 5000, 0,
+        'Slice allocated by Gulf Advisory Partners. Consumption is also deducted from their master pool.'
+      )
+    `;
+
     logger.info({ activeId, pendingId, partnerId, subTenantId }, 'seed data created');
   });
 
@@ -231,6 +323,10 @@ async function seed() {
   Desert Logistics — managed sub-tenant of Gulf Advisory, ACTIVE
     COMPANY ADMIN      admin@desertlog.local
     TAX APPROVER/CFO   cfo@desertlog.local
+
+  Al-Bahar also has 3 customers (AR), 1 supplier (AP) and a 10,000-document
+  bundle. Gulf Advisory holds a 100,000 master pool with a 5,000 slice carved
+  out for Desert Logistics, so sub-tenant filings deduct from both.
 
   Mock provider webhook secret: ${webhookSecret}
 ────────────────────────────────────────────────────────────────────

@@ -16,6 +16,17 @@ import { AdminTenantDetailPage } from './pages/admin/AdminTenantDetailPage';
 import { AdminTenantsPage } from './pages/admin/AdminTenantsPage';
 import { AdminTransmissionsPage } from './pages/admin/AdminTransmissionsPage';
 import { PartnerSubTenantsPage } from './pages/partner/PartnerSubTenantsPage';
+import { ApOverviewPage } from './pages/ap/ApOverviewPage';
+import { ApInboxPage } from './pages/ap/InboxPage';
+import { SuppliersPage } from './pages/ap/SuppliersPage';
+import { CreditNoteBuilderPage } from './pages/ar/CreditNoteBuilderPage';
+import { CustomersPage } from './pages/ar/CustomersPage';
+import { DisputesPage } from './pages/ar/DisputesPage';
+import { DraftsPage } from './pages/ar/DraftsPage';
+import { InvoiceBuilderPage } from './pages/ar/InvoiceBuilderPage';
+import { AnalyticsPage } from './pages/reports/AnalyticsPage';
+import { ReportLibraryPage } from './pages/reports/ReportLibraryPage';
+import { UsagePage } from './pages/settings/UsagePage';
 import { ApprovalsPage } from './pages/merchant/ApprovalsPage';
 import { BatchesPage } from './pages/merchant/BatchesPage';
 import { DashboardPage } from './pages/merchant/DashboardPage';
@@ -101,6 +112,7 @@ export function App() {
             </RequireAuth>
           }
         >
+          {/* --- Module 1: Outbound sales (AR) --------------------------- */}
           <Route path="/" element={<DashboardPage />} />
           <Route path="/upload" element={<UploadPage />} />
           <Route path="/batches" element={<BatchesPage />} />
@@ -117,6 +129,109 @@ export function App() {
             }
           />
 
+          <Route
+            path="/ar/new-invoice"
+            element={
+              <RequirePermission permission="invoice.edit">
+                <InvoiceBuilderPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/ar/drafts"
+            element={
+              <RequirePermission permission="invoice.edit">
+                <DraftsPage />
+              </RequirePermission>
+            }
+          />
+          {/* One builder serves both create and edit; which document it is
+              editing comes from the payload, not from a second component. */}
+          <Route
+            path="/ar/drafts/:draftId"
+            element={
+              <RequirePermission permission="invoice.edit">
+                <InvoiceBuilderPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/ar/credit-notes/new"
+            element={
+              <RequirePermission permission="invoice.edit">
+                <CreditNoteBuilderPage />
+              </RequirePermission>
+            }
+          />
+          <Route path="/ar/disputes" element={<DisputesPage />} />
+          <Route
+            path="/ar/customers"
+            element={
+              <RequirePermission permission="directory.read">
+                <CustomersPage />
+              </RequirePermission>
+            }
+          />
+
+          {/* --- Module 2: Inbound purchases (AP) ------------------------ */}
+          <Route
+            path="/ap"
+            element={
+              <RequirePermission permission="ap.read">
+                <ApOverviewPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/ap/inbox"
+            element={
+              <RequirePermission permission="ap.read">
+                <ApInboxPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/ap/inbox/:invoiceId"
+            element={
+              <RequirePermission permission="ap.read">
+                <ApInboxPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/ap/suppliers"
+            element={
+              <RequirePermission permission="directory.read">
+                <SuppliersPage />
+              </RequirePermission>
+            }
+          />
+
+          {/* --- Cross-module ------------------------------------------- */}
+          <Route
+            path="/reports"
+            element={
+              <RequirePermission permission="reports.read">
+                <AnalyticsPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/reports/library"
+            element={
+              <RequirePermission permission="reports.read">
+                <ReportLibraryPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/settings/usage"
+            element={
+              <RequirePermission permission="billing.read">
+                <UsagePage />
+              </RequirePermission>
+            }
+          />
         </Route>
 
         {/* Available to every signed-in role */}

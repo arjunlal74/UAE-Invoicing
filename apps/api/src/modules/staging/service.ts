@@ -35,20 +35,32 @@ export async function buildValidationContext(
   tx: Tx,
   tenantId: string,
   invoiceNumbers: string[],
+  /**
+   * A document that is being validated against itself — an in-app draft holds
+   * its own number in `invoices` from the moment it is first saved, and without
+   * this it would report itself as a duplicate on every keystroke.
+   */
+  options?: { excludeInvoiceId?: string | null },
 ): Promise<ValidationContext> {
   const tenants = await tx<{ trn: string }[]>`
     SELECT trn FROM tenants WHERE id = ${tenantId}
   `;
 
   const candidates = [...new Set(invoiceNumbers.filter(Boolean))];
+  const exclude = options?.excludeInvoiceId ?? null;
   const existing = candidates.length
     ? await tx<{ invoice_number: string }[]>`
         SELECT invoice_number FROM invoices
         WHERE tenant_id = ${tenantId}
+          -- Numbering series are per module: our INV-0001 and a supplier's
+          -- INV-0001 are different documents and neither blocks the other.
+          AND direction = 'OUTBOUND_SALES_AR'
           AND invoice_number = ANY(${candidates}::text[])
           -- A rejected invoice may legitimately be corrected and re-filed, so
-          -- it must not count as a blocking duplicate.
-          AND status <> 'REJECTED_BY_FTA'
+          -- it must not count as a blocking duplicate. Nor may a draft, which
+          -- has not been filed with anyone yet.
+          AND status NOT IN ('REJECTED_BY_FTA', 'DRAFT')
+          AND (${exclude}::uuid IS NULL OR id <> ${exclude}::uuid)
       `
     : [];
 

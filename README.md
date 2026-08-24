@@ -1,14 +1,26 @@
 # UAE FTA E-Invoicing Middleware
 
-A multi-tenant platform that takes invoices from UAE businesses as **Excel
-uploads**, validates them against UAE tax rules, converts them to UAE PINT /
-UBL 2.1 XML, transmits them through an Accredited Service Provider (ASP) to the
-Federal Tax Authority, and archives everything immutably for the statutory
-retention period.
+A multi-tenant platform that sits between a UAE business and the Federal Tax
+Authority's e-invoicing network, in **both directions**.
 
-The product is the bit in the middle: a merchant uploads the spreadsheet they
-already have, sees exactly which cells are wrong and why, fixes them in the
-browser, and submits only what is clean.
+**Module 1 — Outbound sales (AR).** Takes the invoices a tenant issues, from an
+Excel upload, an ERP connector or the in-app builder; validates them against UAE
+tax rules; converts them to UAE PINT / UBL 2.1 XML; transmits them through an
+Accredited Service Provider to the FTA; and then tracks what the *buyer* says
+about them, up to and including the corrective credit note that settles a
+dispute.
+
+**Module 2 — Inbound purchases (AP).** Receives the cleared invoices a tenant's
+suppliers send them, matches each one to a purchase order, and lets the accounts
+payable desk accept, query or reject it — returning a signed Peppol response to
+the supplier and releasing the input tax for claim.
+
+The product is the bit in the middle. On the way out: a merchant uploads or
+types the invoice, sees exactly which cells are wrong and why, fixes them, and
+files only what is clean. On the way in: a supplier's bill arrives already
+cleared, and the only open question is whether the buyer agrees with it.
+
+Everything is archived immutably for the statutory retention period.
 
 ---
 
@@ -34,12 +46,42 @@ Every seeded account uses the password `123`.
 | `admin@gulftech.local` | Company Admin | A **pending** merchant: can upload, cannot submit |
 | `partner@gulfadvisory.local` | Channel Partner Admin | Partner portal — onboard and manage sub-tenants |
 
-To see the whole flow: sign in as the **accountant** → **Upload invoices** →
-download the template → fill in a few rows (make some mistakes) → upload → fix
-the red cells → **Send for approval**. Then sign in as the **tax approver** and
-release the batch from **Approvals**.
+To see the outbound flow: sign in as the **accountant** → **Outbound (AR)** →
+**Upload invoices** → download the template → fill in a few rows (make some
+mistakes) → upload → fix the red cells → **Send for approval**. Then sign in as
+the **tax approver** and release the batch from **Approvals**.
 
-### Roles and tenancy (SRS v2.1)
+To see it composed by hand instead: **Outbound (AR)** → **New invoice**, pick a
+customer from the directory, add lines, **Validate**, **Submit**.
+
+To see the inbound flow: **Inbound (AP)** → **Verification desk** → **Receive
+XML**, paste a supplier's UBL invoice, then accept, query or reject it.
+
+### The two modules (SRS v2.7 §1.2)
+
+`invoices.direction` is the discriminator: `OUTBOUND_SALES_AR` for documents the
+tenant files, `INBOUND_PURCHASE_AP` for documents their suppliers filed against
+them. One table rather than two, because they are the same shape with the arrow
+reversed — but every list, count and report is scoped by it, and a purchase
+invoice's number lives in the *supplier's* series, so uniqueness is per
+direction.
+
+| | Outbound (AR) | Inbound (AP) |
+|---|---|---|
+| Directory | Customers (§6) | Suppliers (§12.1) |
+| Ingestion | Excel, REST/ERP, in-app builders (§1.3) | Peppol/ASP webhook, manual XML (§12.1) |
+| Authoring | Invoice builder (380/388, §7) and credit note builder (381, §8) | — |
+| Clearance | We file it with the FTA (§10) | It arrived already cleared |
+| Verdict | The **buyer** accepts, queries or rejects it (§11) | **We** accept, query or reject it (§12.3) |
+| Correction | We issue a credit note referencing it (§8.2) | We ask the supplier for one |
+| Gate | Only the CFO may file (§16) | Only the CFO may accept for payment (§16) |
+| Metering | 1 unit on clearance (§15) | Free to receive; 1 unit to post to the ERP |
+
+Both directions share one Peppol Invoice Response engine: the codes a buyer
+sends us about a sales invoice are the same codes our AP desk sends a supplier
+about a purchase invoice, and `invoice_responses` logs both.
+
+### Roles and tenancy (SRS v2.1, extended by v2.7 §16)
 
 Four tenancy tiers: the host, direct **enterprise tenants**, **channel
 partners**, and the **managed sub-tenants** that hang off a partner. Six roles,
@@ -50,6 +92,12 @@ The rule that shapes the workflow: **only a Tax Approver / CFO may file with the
 FTA.** An accountant's submission parks the invoices in
 `PENDING_CFO_APPROVAL`; the approver releases them, or returns them with a
 reason, which withdraws them and reopens the staged rows for correction.
+
+v2.7 gives that rule a mirror on the inbound side. An accountant may review a
+supplier's bill and put it under query or reject it, but **accepting one
+releases it for payment**, so acceptance sits with the CFO alongside filing.
+Both desks are otherwise open to the accountant, and the company administrator
+maintains the two directories.
 
 ## Development
 
@@ -76,48 +124,69 @@ fail against code that is not on disk.
 ### Tests
 
 ```bash
-pnpm --filter @uae/domain test   # 30 — VAT maths, validation rules, auto-fix
-pnpm --filter @uae/ubl test      # 14 — UBL 2.1 generation, QR payload
-pnpm --filter @uae/api test      # 15 — Excel template/parser round trip
+pnpm --filter @uae/domain test   # 43 — VAT maths, validation rules, auto-fix, credit note reversal
+pnpm --filter @uae/ubl test      # 30 — UBL 2.1 generation and reading, ApplicationResponse, QR payload
+pnpm --filter @uae/api test      # 28 — Excel round trip, the §16 permission matrix
 pnpm --filter @uae/portal test   # 11 — staging grid and error sidebar
 ```
 
-End-to-end, against a running stack — 70 checks covering the whole journey:
+The AP reader is tested against documents the AR builder generated, rather than
+against a fixture: anything the two disagree about is a real defect in one of
+them, and the two halves of the platform have to be able to read each other.
+
+End-to-end, against a running stack — 103 checks covering the whole journey:
 
 ```bash
 cd apps/api && node scripts/e2e.mjs              # local (:3100)
 cd apps/api && API_URL=http://localhost:8080 node scripts/e2e.mjs   # containers
 ```
 
+It is safe to run repeatedly against the same database: invoice numbers and the
+onboarded sub-tenant's TRN are per-run, and the assertions name the rows they
+care about rather than assuming the tenant has nothing else in it.
+
 ## Architecture
 
 ```
-Merchant's .xlsx
-      │
-      ▼
-  portal (React SPA, nginx)  ──►  api (Fastify)
-                                    │  archives the original file (WORM)
-                                    │  enqueues a parse job
-                                    ▼
-                                 worker
-                                    │  parses, validates, stages
-                                    ▼
-                            staging grid ◄──► merchant fixes cells
-                                    │
-                                    ▼  (one job per invoice)
-                              UBL 2.1 XML → WORM archive → ASP → FTA
-                                    │
-                                    ▼
-                        clearance verdict (webhook, or polled)
+        MODULE 1 — OUTBOUND (AR)                MODULE 2 — INBOUND (AP)
+
+  .xlsx / REST / in-app builder                  supplier's ASP
+             │                                          │
+             ▼                                          ▼
+   portal (React SPA) ──► api (Fastify)         signed webhook ──► api
+             │              │ archives (WORM)                       │ parses UBL
+             │              │ enqueues                              │ resolves supplier
+             ▼              ▼                                       │ archives (WORM)
+      staging grid ◄──► worker                                      ▼
+                            │ validates                    verification desk
+                            ▼                                       │
+              UBL 2.1 XML → WORM → ASP → FTA                        │ accept / query / reject
+                            │                                       ▼
+                            ▼                             ApplicationResponse
+                  clearance verdict + IRN                     → ASP → supplier
+                            │
+                            ▼
+                  buyer's ApplicationResponse
+                            │  (RE / UQ opens a dispute)
+                            ▼
+                   credit note builder (381)
+                            │
+                            ▼
+                  cleared → dispute closed
 ```
 
 | Piece | What it is |
 |---|---|
-| `apps/portal` | React + Vite SPA. Merchant, partner and admin panels, separated by role. |
+| `apps/portal` | React + Vite SPA. Merchant (AR/AP/reports), partner and admin panels, separated by role. |
 | `apps/api` | Fastify API. Also runs as the queue worker from `src/worker.ts`. |
-| `packages/domain` | Code lists, VAT maths, the validation rule catalogue, auto-fix. |
-| `packages/ubl` | PINT-AE UBL 2.1 document builder and the QR payload. |
+| `packages/domain` | Code lists, VAT maths, the reversal engine, the validation rule catalogue, auto-fix. |
+| `packages/ubl` | PINT-AE UBL 2.1 builder, the inbound invoice reader, the Peppol ApplicationResponse, the QR payload. |
 | `packages/contracts` | Zod schemas shared by the API and the portal. |
+
+Inside `apps/api/src/modules`, the v2.7 additions are `ar/` (the two in-app
+builders and the dispute desk), `ap/` (reception and the verification desk),
+`directories/` (both master directories), `responses/` (the bidirectional IMR
+engine), `reports/` (§13 analytics) and `metering/` (§15 data bundles).
 
 **Why the maths lives in a shared package:** the staging grid recalculates
 totals in the browser as the user types, while the worker recalculates them
@@ -134,8 +203,10 @@ arithmetic rule. There is one implementation, imported by both.
 - **The audit trail is append-only by privilege** — `UPDATE` and `DELETE` are
   revoked from the application role, so it cannot rewrite its own history.
 - **Duplicate filing is prevented by the database.** `UNIQUE (tenant_id,
-  invoice_number)` plus a stable idempotency key per submission: filing the same
-  invoice twice is a penalty for the merchant, not merely a bug.
+  direction, invoice_number)` plus a stable idempotency key per submission:
+  filing the same invoice twice is a penalty for the merchant, not merely a bug.
+  Uniqueness is per direction because a purchase invoice's number belongs to the
+  *supplier's* numbering series and may legitimately collide with one of ours.
 - **Archives are immutable.** Original workbooks, generated XML and signed
   receipts go to object storage with Object Lock in COMPLIANCE mode. The XML is
   archived *before* transmission, so we can never have filed something we cannot
@@ -174,6 +245,27 @@ specification before production.
 **Phase 2 (native AS4 / Peppol).** Not implemented. The driver registration
 exists and reports that clearly rather than failing obscurely.
 
+**ERP connectors (§10.1).** The connector catalogue — SAP, Oracle/NetSuite,
+Dynamics, Tally, Zoho, QuickBooks — is not built; the SRS itself lists them as
+separately monetisable modules. `ingestion_source` names them so a document
+records which one produced it, and the §10.6 reverse push marks a cleared
+document `erp_reverse_sync_status = PENDING`, but nothing drains that queue
+until there is an ERP on the other end of it. A document composed in the browser
+is marked `NOT_APPLICABLE` rather than left pending forever.
+
+**§10.5 FTA outage notification.** BullMQ carries the retry and dead-letter
+behaviour the SRS describes, but the automated incident notification to the FTA
+within two business days is not built: it needs a notification channel the FTA
+has not published, and guessing at one would produce a compliance control that
+silently does nothing.
+
+**Purchase order matching (§12.2)** matches on the PO reference the supplier put
+on their invoice, because that is the only key both parties genuinely share.
+There is no purchase-order table — orders live in the tenant's ERP — so the desk
+records and surfaces the linkage rather than verifying it against an order this
+system does not hold. Bills with no reference at all are put on hold and
+flagged.
+
 ## Deviations from the SRS
 
 | SRS says | Built | Why |
@@ -185,6 +277,10 @@ exists and reports that clearly rather than failing obscurely.
 | v2.3 §3.2 "salted bcrypt/Argon2" | Argon2id throughout | Argon2id is the stronger of the two the SRS offers, and was already in place. |
 | v2.3 §5 templates quote a fixed platform name | `PLATFORM_NAME` / `SUPPORT_EMAIL` config | The templates are written with `[Middleware Platform Name]` placeholders precisely because this is a white-label product. |
 | v2.3 §4.1 rate limits, storage unspecified | Redis counters, failing open | An hour-old counter has no value in Postgres. If Redis is down the cap lapses rather than locking every customer out of account recovery. |
+| v2.7 §17 `customers.trn` nullable for all | Nullable, but a `B2B` customer must have one | A B2B buyer without a TRN cannot be issued a 380 at all, so the omission is only ever discovered at filing time. The check pairs the two fields that decide the document type. |
+| v2.7 §17 `UNIQUE (tenant_id, customer_code)` | Partial unique index over non-null codes | The code is optional, and a plain `UNIQUE` admits unlimited NULL rows while still reporting a uniqueness failure when a real value collides. Same for supplier codes and both TRNs. |
+| v2.7 §8 credit note as UBL Type 381 | Emitted as an `Invoice` root with `InvoiceTypeCode 381` | The SRS's own XPaths assume it: §8.2 maps the preceding-document link to `/Invoice/cac:BillingReference/…`, not to a `CreditNote` root. |
+| v2.7 §12.3 "Reject (RE)" open to the AP desk | Rejecting and querying are, accepting is not | §16 reserves "authorize AP payments" to the tax approver, and accepting a bill is what releases it for payment. An accountant flags it instead. |
 
 ## Authentication and credential lifecycle
 
@@ -248,6 +344,29 @@ Read what it captures at **http://localhost:8025**.
 The SMTP password is encrypted at rest with the same AES-256-GCM key as ASP
 credentials, and never leaves the API — the portal is told only whether a
 password is set.
+
+### Templates
+
+`apps/api/src/mail/templates.ts` implements SRS §5. Templates A–D concern a
+person and their own account; the rest concern a *desk* and a document with a
+deadline, so they lead with what happened and end with the one action that
+resolves it.
+
+| | Sent when | Action it offers |
+|---|---|---|
+| A / B | A tenant, partner or managed sub-tenant is provisioned | Set a password (24 hours) |
+| C / D | Password reset requested, then changed | Reset link; security confirmation |
+| Lockout | Five failed sign-ins | Self-service unlock |
+| **E** (§5.5) | A buyer returns `RE` or `UQ` against a cleared sales invoice | Opens the credit note builder with the invoice already loaded — §8.2's one-click path |
+| **F** (§5.6) | A supplier's invoice lands in the AP desk | Opens the verification desk on that bill |
+| Quota (§15) | A data bundle crosses 80%, 90% or 100% | Usage and balance |
+
+E and F go to everyone on the relevant desk; the quota alert goes only to the
+company administrator and the tax approver, because an accountant cannot buy
+more capacity and telling them only adds noise to an inbox that already has a
+filing deadline in it. A dispute alert is sent when a dispute *opens*, not on
+every response, so a buyer who queries twice does not generate two identical
+mails.
 
 ## Ports
 

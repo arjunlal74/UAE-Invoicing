@@ -176,7 +176,11 @@ export type MailKind =
   | 'TEST'
   | 'PASSWORD_RESET'
   | 'PASSWORD_CHANGED'
-  | 'SECURITY_ALERT';
+  | 'SECURITY_ALERT'
+  // SRS v2.7 §5.5 / §5.6 / §15 — the operational alerts the two modules raise.
+  | 'DISPUTE_ALERT'
+  | 'INBOUND_INVOICE'
+  | 'QUOTA_ALERT';
 
 export async function recordQueued(params: {
   kind: MailKind;

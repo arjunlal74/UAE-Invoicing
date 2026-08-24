@@ -30,6 +30,20 @@ export const Permission = z.enum([
   'invoice.submit_for_approval',
   /** File with the FTA. Reserved to the tax approver by the SRS. */
   'invoice.submit',
+  /** Read the customer (AR) and supplier (AP) master directories. */
+  'directory.read',
+  /** Create and edit directory entries, including the builder's quick-add. */
+  'directory.manage',
+  /** Read the inbound purchase inbox and open a supplier bill (§12.2). */
+  'ap.read',
+  /** Accept, query or reject an incoming purchase invoice (§12.3). */
+  'ap.verify',
+  /** Post an accepted purchase bill to the ledger and authorise payment. */
+  'ap.post',
+  /** Read the AR/AP dispute analytics and the reporting suite (§13). */
+  'reports.read',
+  /** See the tenant's own data bundle balance and consumption (§15). */
+  'billing.read',
   /** Read the audit trail. */
   'audit.read',
 ]);
@@ -38,7 +52,12 @@ export type Permission = z.infer<typeof Permission>;
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   GLOBAL_ADMIN: ['platform.manage', 'platform.read', 'audit.read'],
 
-  PARTNER_ADMIN: ['partner.subtenants.manage', 'partner.read', 'audit.read'],
+  PARTNER_ADMIN: [
+    'partner.subtenants.manage',
+    'partner.read',
+    'billing.read',
+    'audit.read',
+  ],
 
   COMPANY_ADMIN: [
     'tenant.profile.manage',
@@ -46,17 +65,50 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'invoice.read',
     'invoice.edit',
     'invoice.submit_for_approval',
+    // §16: the company administrator is the role that "maintains Customer &
+    // Supplier Directories".
+    'directory.read',
+    'directory.manage',
+    'ap.read',
+    'ap.verify',
+    'reports.read',
+    'billing.read',
     'audit.read',
   ],
 
-  ACCOUNTANT: ['invoice.read', 'invoice.edit', 'invoice.submit_for_approval'],
+  // §16 gives the accountant both desks: they compose AR documents and they
+  // verify inbound AP bills. What they cannot do is release either one — filing
+  // a sales invoice and authorising a purchase payment both sit with the CFO.
+  ACCOUNTANT: [
+    'invoice.read',
+    'invoice.edit',
+    'invoice.submit_for_approval',
+    'directory.read',
+    // The §7 builder wireframe puts a "Quick Add" next to the customer picker,
+    // so the person composing the invoice must be able to create the buyer.
+    'directory.manage',
+    'ap.read',
+    'ap.verify',
+    'reports.read',
+  ],
 
-  // The SRS gives the approver the filing power and nothing else: preparation
-  // and correction stay with the accountant, and a row the approver disagrees
-  // with goes back to them rather than being edited on the way out.
-  TAX_APPROVER_CFO: ['invoice.read', 'invoice.submit', 'audit.read'],
+  // The SRS gives the approver the release powers and not the preparation ones:
+  // composition and correction stay with the accountant, and a document the
+  // approver disagrees with goes back to them rather than being edited on the
+  // way out. v2.7 adds the AP side of the same gate — "authorize AP payments".
+  TAX_APPROVER_CFO: [
+    'invoice.read',
+    'invoice.submit',
+    'directory.read',
+    'ap.read',
+    'ap.verify',
+    'ap.post',
+    'reports.read',
+    'billing.read',
+    'audit.read',
+  ],
 
-  AUDITOR: ['invoice.read', 'audit.read'],
+  AUDITOR: ['invoice.read', 'directory.read', 'ap.read', 'reports.read', 'audit.read'],
 };
 
 export function can(role: Role, permission: Permission): boolean {

@@ -1,5 +1,5 @@
 import { ROLE_LABELS } from '@uae/contracts';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { can, isPartnerUser, isPlatformUser, useAuthStore } from '../stores/auth';
 import { StatusBadge, cx } from './ui';
@@ -7,21 +7,85 @@ import { StatusBadge, cx } from './ui';
 interface NavItem {
   to: string;
   label: string;
-  /** Only the dashboard needs exact matching; every other path is a prefix. */
+  /** Only a section's own landing page needs exact matching. */
   end?: boolean;
+  needs?: Parameters<typeof can>[1];
 }
 
 /**
- * Navigation is built from the same capability matrix the API enforces, so a
- * role never sees a link to a screen its requests would be refused.
+ * Navigation for a platform that is now two products in a trench coat.
+ *
+ * SRS v2.7 §1.2 splits the tenant workspace into an outbound sales module and an
+ * inbound purchase module, and the people who use them are different: an AR
+ * clerk composing invoices and an AP clerk approving bills share a login and
+ * almost nothing else. A single flat menu of fourteen links would make both of
+ * them read past the eleven that are not theirs, so the modules are the primary
+ * axis and each carries its own second row.
  */
-const MERCHANT_NAV: (NavItem & { needs?: Parameters<typeof can>[1] })[] = [
-  { to: '/', label: 'Dashboard', end: true },
-  { to: '/upload', label: 'Upload invoices', needs: 'invoice.edit' },
-  { to: '/batches', label: 'Batches' },
-  { to: '/approvals', label: 'Approvals', needs: 'invoice.submit' },
-  { to: '/invoices', label: 'Invoices' },
-  { to: '/settings', label: 'Settings' },
+interface Module {
+  key: string;
+  label: string;
+  /** Where clicking the module tab lands. */
+  home: string;
+  /** Which URL prefixes belong to this module. */
+  match: (path: string) => boolean;
+  items: NavItem[];
+  needs?: Parameters<typeof can>[1];
+}
+
+const OUTBOUND_PATHS = ['/upload', '/batches', '/invoices', '/approvals', '/ar'];
+
+const MODULES: Module[] = [
+  {
+    key: 'ar',
+    label: 'Outbound (AR)',
+    home: '/',
+    match: (path) => path === '/' || OUTBOUND_PATHS.some((p) => path.startsWith(p)),
+    items: [
+      { to: '/', label: 'Overview', end: true },
+      { to: '/ar/new-invoice', label: 'New invoice', needs: 'invoice.edit' },
+      { to: '/ar/drafts', label: 'Drafts', needs: 'invoice.edit' },
+      { to: '/invoices', label: 'Sales documents' },
+      { to: '/ar/disputes', label: 'Disputes' },
+      { to: '/ar/customers', label: 'Customers', needs: 'directory.read' },
+      { to: '/upload', label: 'Excel upload', needs: 'invoice.edit' },
+      { to: '/batches', label: 'Batches' },
+      { to: '/approvals', label: 'Approvals', needs: 'invoice.submit' },
+    ],
+  },
+  {
+    key: 'ap',
+    label: 'Inbound (AP)',
+    home: '/ap',
+    match: (path) => path.startsWith('/ap'),
+    needs: 'ap.read',
+    items: [
+      { to: '/ap', label: 'Overview', end: true },
+      { to: '/ap/inbox', label: 'Verification desk' },
+      { to: '/ap/suppliers', label: 'Suppliers', needs: 'directory.read' },
+    ],
+  },
+  {
+    key: 'reports',
+    label: 'Reports',
+    home: '/reports',
+    match: (path) => path.startsWith('/reports'),
+    needs: 'reports.read',
+    items: [
+      { to: '/reports', label: 'Dispute analytics', end: true },
+      { to: '/reports/library', label: 'Report library' },
+    ],
+  },
+  {
+    key: 'settings',
+    label: 'Settings',
+    home: '/settings',
+    match: (path) => path.startsWith('/settings'),
+    items: [
+      { to: '/settings', label: 'Company profile', end: true },
+      { to: '/settings/usage', label: 'Usage & balance', needs: 'billing.read' },
+    ],
+  },
 ];
 
 const ADMIN_NAV: NavItem[] = [
@@ -36,20 +100,31 @@ const ADMIN_NAV: NavItem[] = [
 
 const PARTNER_NAV: NavItem[] = [{ to: '/partner/sub-tenants', label: 'Sub-tenants' }];
 
+const linkClass = ({ isActive }: { isActive: boolean }) =>
+  cx(
+    'rounded px-3 py-1.5 text-sm transition-colors',
+    isActive ? 'bg-white/20 font-medium' : 'text-white/80 hover:bg-white/10',
+  );
+
 export function AppLayout() {
   const user = useAuthStore((s) => s.user);
   const refreshToken = useAuthStore((s) => s.refreshToken);
   const clear = useAuthStore((s) => s.clear);
   const navigate = useNavigate();
+  const { pathname } = useLocation();
 
   const platform = isPlatformUser(user);
   const partner = isPartnerUser(user);
+  const merchant = !platform && !partner;
 
-  const nav = platform
-    ? ADMIN_NAV
-    : partner
-      ? PARTNER_NAV
-      : MERCHANT_NAV.filter((item) => !item.needs || can(user, item.needs));
+  const modules = MODULES.filter((m) => !m.needs || can(user, m.needs)).map((m) => ({
+    ...m,
+    items: m.items.filter((item) => !item.needs || can(user, item.needs)),
+  }));
+
+  // Fall back to the first module the user can see rather than to a fixed one:
+  // an auditor has no AR overview to land on.
+  const activeModule = modules.find((m) => m.match(pathname)) ?? modules[0];
 
   const signOut = async () => {
     // Best effort: the server-side revoke matters, but a network failure must
@@ -79,21 +154,35 @@ export function AppLayout() {
             </div>
 
             <nav className="flex items-center gap-1">
-              {nav.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.end}
-                  className={({ isActive }) =>
-                    cx(
+              {platform &&
+                ADMIN_NAV.map((item) => (
+                  <NavLink key={item.to} to={item.to} end={item.end} className={linkClass}>
+                    {item.label}
+                  </NavLink>
+                ))}
+
+              {partner &&
+                PARTNER_NAV.map((item) => (
+                  <NavLink key={item.to} to={item.to} className={linkClass}>
+                    {item.label}
+                  </NavLink>
+                ))}
+
+              {merchant &&
+                modules.map((module) => (
+                  <NavLink
+                    key={module.key}
+                    to={module.home}
+                    className={cx(
                       'rounded px-3 py-1.5 text-sm transition-colors',
-                      isActive ? 'bg-white/20 font-medium' : 'text-white/80 hover:bg-white/10',
-                    )
-                  }
-                >
-                  {item.label}
-                </NavLink>
-              ))}
+                      module.key === activeModule?.key
+                        ? 'bg-white/20 font-medium'
+                        : 'text-white/80 hover:bg-white/10',
+                    )}
+                  >
+                    {module.label}
+                  </NavLink>
+                ))}
             </nav>
           </div>
 
@@ -123,11 +212,25 @@ export function AppLayout() {
             </button>
           </div>
         </div>
+
+        {/* The active module's own menu. Only merchants have one — the admin and
+            partner consoles are single-purpose. */}
+        {merchant && activeModule && activeModule.items.length > 1 && (
+          <div className="border-t border-white/10 bg-brand-800/40">
+            <div className="mx-auto flex max-w-[1600px] items-center gap-1 px-4 py-1.5">
+              {activeModule.items.map((item) => (
+                <NavLink key={item.to} to={item.to} end={item.end} className={linkClass}>
+                  {item.label}
+                </NavLink>
+              ))}
+            </div>
+          </div>
+        )}
       </header>
 
       {/* A merchant whose account is not yet live needs to know before they
           spend an afternoon preparing invoices they cannot submit. */}
-      {!platform && !partner && user?.tenantStatus && user.tenantStatus !== 'ACTIVE' && (
+      {merchant && user?.tenantStatus && user.tenantStatus !== 'ACTIVE' && (
         <div className="border-b border-warn-200 bg-warn-50 px-4 py-2">
           <div className="mx-auto flex max-w-[1600px] items-center gap-2 text-sm text-warn-700">
             <StatusBadge status={user.tenantStatus} />

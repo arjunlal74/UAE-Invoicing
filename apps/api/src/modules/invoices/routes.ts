@@ -1,4 +1,9 @@
-import { InvoiceSearchQuery, SUBMITTABLE_STATUSES, type InvoiceDetail, type InvoiceListItem } from '@uae/contracts';
+import {
+  InvoiceSearchQuery,
+  SUBMITTABLE_STATUSES,
+  type InvoiceDetail,
+  type InvoiceResponseDto,
+} from '@uae/contracts';
 import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit } from '../../audit/audit.js';
 import { withTenant } from '../../db/client.js';
@@ -6,61 +11,17 @@ import { requireContext, requirePermission } from '../../http/context.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { SUBMIT_JOB_OPTIONS, invoiceSubmitQueue } from '../../queue/queues.js';
 import { getObject, keyFromUri } from '../../storage/objectStore.js';
+import { DOCUMENT_SELECT, toInvoiceListItem, type DocumentRow } from '../documents/mapper.js';
+import { loadResponses } from '../responses/service.js';
 
-interface InvoiceRow {
-  id: string;
-  invoice_number: string;
-  invoice_type: InvoiceListItem['invoiceType'];
-  issue_date: Date;
-  issue_time: string;
-  buyer_name: string;
-  buyer_trn: string | null;
-  buyer_emirate: string | null;
-  currency_code: string;
-  exchange_rate: string;
-  seller_trn: string;
-  seller_name: string;
-  payable_amount: string;
-  payable_amount_aed: string;
-  line_extension_amount: string;
-  tax_exclusive_amount: string;
-  tax_inclusive_amount: string;
-  vat_total_amount: string;
-  status: InvoiceListItem['status'];
-  batch_upload_id: string | null;
-  peppol_uuid: string;
-  qr_code_data: string | null;
-  ubl_xml_s3_uri: string | null;
-  ubl_xml_sha256: string | null;
-  fta_rejection_reason: string | null;
-  approval_note: string | null;
-  approved_at: Date | null;
-  created_by_name: string | null;
-  approved_by_name: string | null;
-  submitted_at: Date | null;
-  cleared_at: Date | null;
-  created_at: Date;
-}
-
-
-function toListItem(row: InvoiceRow): InvoiceListItem {
-  return {
-    id: row.id,
-    invoiceNumber: row.invoice_number,
-    invoiceType: row.invoice_type,
-    issueDate: row.issue_date.toISOString().slice(0, 10),
-    buyerName: row.buyer_name,
-    buyerTrn: row.buyer_trn,
-    currencyCode: row.currency_code,
-    payableAmount: row.payable_amount,
-    payableAmountAed: row.payable_amount_aed,
-    status: row.status,
-    batchId: row.batch_upload_id,
-    createdByName: row.created_by_name,
-    approvedByName: row.approved_by_name,
-    createdAt: row.created_at.toISOString(),
-  };
-}
+/**
+ * Document search and detail.
+ *
+ * v2.7 makes this endpoint serve both modules (§1.2): the AR desk asks for
+ * OUTBOUND_SALES_AR, the AP desk's detail view asks for a specific document
+ * regardless of direction, and the contract defaults the filter so that a
+ * caller who forgets gets their own sales invoices rather than a mixture.
+ */
 
 export function registerInvoiceRoutes(app: FastifyInstance) {
   // --- Search --------------------------------------------------------------
@@ -71,62 +32,63 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
     const query = InvoiceSearchQuery.parse(request.query);
     const offset = (query.page - 1) * query.pageSize;
 
-    const result = await withTenant(ctx.tenantId, async (tx) => {
-      // Full-text over the fields a finance user actually searches, with the
-      // filters applied as plain predicates so the planner can use the indexes.
-      // Scalar subqueries rather than a join: invoices and users both carry a
-      // tenant_id, and every filter below names bare columns, so joining would
-      // make them ambiguous for no gain on a two-row lookup.
-      const rows = await tx<InvoiceRow[]>`
-        SELECT *,
-               (SELECT full_name FROM users u WHERE u.id = invoices.created_by_user_id)
-                 AS created_by_name,
-               (SELECT full_name FROM users u WHERE u.id = invoices.approved_by_user_id)
-                 AS approved_by_name
-        FROM invoices
-        WHERE tenant_id = ${ctx.tenantId}
-          AND (${query.q ?? null}::text IS NULL OR
-               to_tsvector('simple',
-                 coalesce(invoice_number, '') || ' ' || coalesce(buyer_name, '') || ' ' ||
-                 coalesce(buyer_trn, '') || ' ' || coalesce(po_reference, '')
-               ) @@ plainto_tsquery('simple', ${query.q ?? ''})
-               OR invoice_number ILIKE ${'%' + (query.q ?? '') + '%'})
-          AND (${query.status ?? null}::text IS NULL OR status::text = ${query.status ?? null})
-          AND (${query.type ?? null}::text IS NULL OR invoice_type::text = ${query.type ?? null})
-          AND (${query.buyerTrn ?? null}::text IS NULL OR buyer_trn = ${query.buyerTrn ?? null})
-          AND (${query.batchId ?? null}::uuid IS NULL OR batch_upload_id = ${query.batchId ?? null}::uuid)
-          AND (${query.dateFrom ?? null}::date IS NULL OR issue_date >= ${query.dateFrom ?? null}::date)
-          AND (${query.dateTo ?? null}::date IS NULL OR issue_date <= ${query.dateTo ?? null}::date)
-          AND (${query.amountMin ?? null}::numeric IS NULL OR payable_amount_aed >= ${query.amountMin ?? null})
-          AND (${query.amountMax ?? null}::numeric IS NULL OR payable_amount_aed <= ${query.amountMax ?? null})
-        ORDER BY issue_date DESC, created_at DESC
-        LIMIT ${query.pageSize} OFFSET ${offset}
-      `;
+    // The filter list is written once and used by both the page query and the
+    // count. Positional parameters rather than the tagged template because the
+    // SELECT list is itself a constant string.
+    const filters = `
+      tenant_id = $1
+      AND direction = $2::invoice_direction
+      AND ($3::text IS NULL OR
+           to_tsvector('simple',
+             coalesce(invoice_number, '') || ' ' || coalesce(buyer_name, '') || ' ' ||
+             coalesce(seller_name, '') || ' ' || coalesce(buyer_trn, '') || ' ' ||
+             coalesce(seller_trn, '') || ' ' || coalesce(po_reference, '')
+           ) @@ plainto_tsquery('simple', $3)
+           OR invoice_number ILIKE '%' || $3 || '%')
+      AND ($4::text IS NULL OR status::text = $4)
+      AND ($5::text IS NULL OR invoice_type::text = $5)
+      AND ($6::text IS NULL OR buyer_trn = $6)
+      AND ($7::uuid IS NULL OR batch_upload_id = $7::uuid)
+      AND ($8::date IS NULL OR issue_date >= $8::date)
+      AND ($9::date IS NULL OR issue_date <= $9::date)
+      AND ($10::numeric IS NULL OR payable_amount_aed >= $10)
+      AND ($11::numeric IS NULL OR payable_amount_aed <= $11)
+    `;
 
-      const counted = await tx<{ count: string }[]>`
-        SELECT count(*)::text AS count FROM invoices
-        WHERE tenant_id = ${ctx.tenantId}
-          AND (${query.q ?? null}::text IS NULL OR
-               to_tsvector('simple',
-                 coalesce(invoice_number, '') || ' ' || coalesce(buyer_name, '') || ' ' ||
-                 coalesce(buyer_trn, '') || ' ' || coalesce(po_reference, '')
-               ) @@ plainto_tsquery('simple', ${query.q ?? ''})
-               OR invoice_number ILIKE ${'%' + (query.q ?? '') + '%'})
-          AND (${query.status ?? null}::text IS NULL OR status::text = ${query.status ?? null})
-          AND (${query.type ?? null}::text IS NULL OR invoice_type::text = ${query.type ?? null})
-          AND (${query.buyerTrn ?? null}::text IS NULL OR buyer_trn = ${query.buyerTrn ?? null})
-          AND (${query.batchId ?? null}::uuid IS NULL OR batch_upload_id = ${query.batchId ?? null}::uuid)
-          AND (${query.dateFrom ?? null}::date IS NULL OR issue_date >= ${query.dateFrom ?? null}::date)
-          AND (${query.dateTo ?? null}::date IS NULL OR issue_date <= ${query.dateTo ?? null}::date)
-          AND (${query.amountMin ?? null}::numeric IS NULL OR payable_amount_aed >= ${query.amountMin ?? null})
-          AND (${query.amountMax ?? null}::numeric IS NULL OR payable_amount_aed <= ${query.amountMax ?? null})
-      `;
+    const params = [
+      ctx.tenantId,
+      query.direction,
+      query.q ?? null,
+      query.status ?? null,
+      query.type ?? null,
+      query.buyerTrn ?? null,
+      query.batchId ?? null,
+      query.dateFrom ?? null,
+      query.dateTo ?? null,
+      query.amountMin ?? null,
+      query.amountMax ?? null,
+    ];
+
+    const result = await withTenant(ctx.tenantId, async (tx) => {
+      const rows = await tx.unsafe<DocumentRow[]>(
+        `SELECT ${DOCUMENT_SELECT}
+         FROM invoices
+         WHERE ${filters}
+         ORDER BY issue_date DESC, created_at DESC
+         LIMIT $12 OFFSET $13`,
+        [...params, query.pageSize, offset],
+      );
+
+      const counted = await tx.unsafe<{ count: string }[]>(
+        `SELECT count(*)::text AS count FROM invoices WHERE ${filters}`,
+        params,
+      );
 
       return { rows, total: Number(counted[0]!.count) };
     });
 
     return reply.send({
-      items: result.rows.map(toListItem),
+      items: result.rows.map(toInvoiceListItem),
       total: result.total,
       page: query.page,
       pageSize: query.pageSize,
@@ -143,14 +105,10 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
       if (!ctx.tenantId) throw notFound('Tenant');
 
       const detail = await withTenant(ctx.tenantId, async (tx) => {
-        const rows = await tx<InvoiceRow[]>`
-          SELECT *,
-                 (SELECT full_name FROM users u WHERE u.id = invoices.created_by_user_id)
-                   AS created_by_name,
-                 (SELECT full_name FROM users u WHERE u.id = invoices.approved_by_user_id)
-                   AS approved_by_name
-          FROM invoices WHERE id = ${id}
-        `;
+        const rows = await tx.unsafe<DocumentRow[]>(
+          `SELECT ${DOCUMENT_SELECT} FROM invoices WHERE id = $1`,
+          [id],
+        );
         const invoice = rows[0];
         if (!invoice) throw notFound('Invoice');
 
@@ -202,29 +160,61 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
           SELECT * FROM transmission_logs WHERE invoice_id = ${id} ORDER BY created_at DESC
         `;
 
-        return { invoice, lines, findings, transmissions };
+        const responses = await loadResponses(tx, id);
+
+        return { invoice, lines, findings, transmissions, responses };
       });
 
+      const invoice = detail.invoice;
+
       const response: InvoiceDetail = {
-        ...toListItem(detail.invoice),
-        peppolUuid: detail.invoice.peppol_uuid,
-        issueTime: detail.invoice.issue_time,
-        exchangeRate: detail.invoice.exchange_rate,
-        sellerTrn: detail.invoice.seller_trn,
-        sellerName: detail.invoice.seller_name,
-        buyerEmirate: detail.invoice.buyer_emirate,
-        lineExtensionAmount: detail.invoice.line_extension_amount,
-        taxExclusiveAmount: detail.invoice.tax_exclusive_amount,
-        taxInclusiveAmount: detail.invoice.tax_inclusive_amount,
-        vatTotalAmount: detail.invoice.vat_total_amount,
-        qrCodeData: detail.invoice.qr_code_data,
-        ublXmlUri: detail.invoice.ubl_xml_s3_uri,
-        ublXmlSha256: detail.invoice.ubl_xml_sha256,
-        ftaRejectionReason: detail.invoice.fta_rejection_reason,
-        approvalNote: detail.invoice.approval_note,
-        approvedAt: detail.invoice.approved_at?.toISOString() ?? null,
-        submittedAt: detail.invoice.submitted_at?.toISOString() ?? null,
-        clearedAt: detail.invoice.cleared_at?.toISOString() ?? null,
+        ...toInvoiceListItem(invoice),
+        peppolUuid: invoice.peppol_uuid,
+        issueTime: invoice.issue_time,
+        exchangeRate: invoice.exchange_rate,
+        sellerTrn: invoice.seller_trn,
+        sellerName: invoice.seller_name,
+        buyerEmirate: invoice.buyer_emirate,
+        lineExtensionAmount: invoice.line_extension_amount,
+        taxExclusiveAmount: invoice.tax_exclusive_amount,
+        taxInclusiveAmount: invoice.tax_inclusive_amount,
+        vatTotalAmount: invoice.vat_total_amount,
+        qrCodeData: invoice.qr_code_data,
+        ublXmlUri: invoice.ubl_xml_s3_uri,
+        ublXmlSha256: invoice.ubl_xml_sha256,
+        ftaRejectionReason: invoice.fta_rejection_reason,
+        approvalNote: invoice.approval_note,
+        approvedAt: invoice.approved_at?.toISOString() ?? null,
+        submittedAt: invoice.submitted_at?.toISOString() ?? null,
+        clearedAt: invoice.cleared_at?.toISOString() ?? null,
+
+        ftaCryptographicStamp: invoice.fta_cryptographic_stamp,
+        mlsStatus: invoice.mls_status,
+        referencedInvoiceId: invoice.referenced_invoice_id,
+        referencedInvoiceNumber: invoice.referenced_invoice_number,
+        referencedFtaIrn: invoice.referenced_fta_irn,
+        creditNoteReasonCode: invoice.credit_note_reason_code,
+        creditNoteReversalMode: invoice.credit_note_reversal_mode,
+        creditNoteNotes: invoice.credit_note_notes,
+        latestResponseCode: invoice.latest_response_code,
+        latestResponseReasonCode: invoice.latest_response_reason_code,
+        latestResponseComment: invoice.latest_response_comment,
+        disputeOpenedAt: invoice.dispute_opened_at?.toISOString() ?? null,
+        disputeResolvedAt: invoice.dispute_resolved_at?.toISOString() ?? null,
+        correctiveCreditNoteId: invoice.corrective_credit_note_id,
+        correctiveCreditNoteNumber: invoice.corrective_credit_note_number,
+        supplierId: invoice.supplier_id,
+        supplierName: invoice.supplier_name_en,
+        supplierIsProvisional: invoice.supplier_is_provisional === true,
+        poReference: invoice.po_reference,
+        grnReference: invoice.grn_reference,
+        apPostingStatus: invoice.ap_posting_status,
+        apReviewedByName: invoice.ap_reviewed_by_name,
+        apReviewedAt: invoice.ap_reviewed_at?.toISOString() ?? null,
+        customerId: invoice.customer_id,
+        erpReverseSyncStatus: invoice.erp_reverse_sync_status,
+        erpReverseSyncedAt: invoice.erp_reverse_synced_at?.toISOString() ?? null,
+
         lines: detail.lines.map((l) => ({
           id: String(l.line_number),
           lineNumber: String(l.line_number),
@@ -261,6 +251,20 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
           attempt: t.attempt,
           createdAt: t.created_at.toISOString(),
         })),
+        responses: detail.responses.map(
+          (r): InvoiceResponseDto => ({
+            id: r.id,
+            responseDirection: r.response_direction,
+            responseCode: r.response_code,
+            statusReasonCode: r.status_reason_code,
+            isTechnical: r.is_technical,
+            comments: r.comments,
+            createdByName: r.created_by_name,
+            transmittedAt: r.transmitted_at?.toISOString() ?? null,
+            transmissionError: r.transmission_error,
+            receivedAt: r.received_at.toISOString(),
+          }),
+        ),
       };
 
       return reply.send(response);
@@ -286,7 +290,7 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
       const row = rows[0];
       if (!row) throw notFound('Invoice');
       if (!row.ubl_xml_s3_uri) {
-        throw notFound('The XML for this invoice has not been generated yet');
+        throw notFound('The XML for this document has not been generated yet');
       }
 
       const buffer = await getObject(keyFromUri(row.ubl_xml_s3_uri));
@@ -307,11 +311,21 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
       if (!ctx.tenantId) throw notFound('Tenant');
 
       const invoice = await withTenant(ctx.tenantId, async (tx) => {
-        const rows = await tx<{ id: string; status: string; invoice_number: string }[]>`
-          SELECT id, status, invoice_number FROM invoices WHERE id = ${id}
+        const rows = await tx<
+          { id: string; status: string; invoice_number: string; direction: string }[]
+        >`
+          SELECT id, status, invoice_number, direction::text AS direction
+          FROM invoices WHERE id = ${id}
         `;
         const row = rows[0];
         if (!row) throw notFound('Invoice');
+
+        // A purchase invoice is not ours to file. It arrived cleared.
+        if (row.direction === 'INBOUND_PURCHASE_AP') {
+          throw badRequest(
+            'This is an inbound purchase invoice. It was filed by your supplier, not by you.',
+          );
+        }
 
         // Retrying an accepted invoice would file it a second time.
         if (row.status === 'ACCEPTED_BY_FTA') {
@@ -323,8 +337,11 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
         if (row.status === 'PENDING_CFO_APPROVAL') {
           throw badRequest('Approve this invoice from the approvals queue rather than retrying it.');
         }
+        if (row.status === 'DRAFT') {
+          throw badRequest('This document is still a draft. Submit it from the builder.');
+        }
         if (!SUBMITTABLE_STATUSES.includes(row.status as never) && row.status !== 'VALIDATION_FAILED') {
-          throw badRequest(`An invoice with status ${row.status} cannot be retried.`);
+          throw badRequest(`A document with status ${row.status} cannot be retried.`);
         }
 
         await tx`

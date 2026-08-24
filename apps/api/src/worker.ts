@@ -4,6 +4,7 @@ import { closeDb } from './db/client.js';
 import { parseBatchJob } from './jobs/parseBatch.js';
 import { pollStatusJob } from './jobs/pollStatus.js';
 import { sendMailJob } from './jobs/sendMail.js';
+import { sendResponseJob } from './jobs/sendResponse.js';
 import { submitInvoiceJob } from './jobs/submitInvoice.js';
 import { logger } from './logger.js';
 import './modules/asp/service.js'; // registers the ASP drivers
@@ -11,6 +12,7 @@ import {
   QUEUE_MAIL,
   QUEUE_PARSE,
   QUEUE_POLL,
+  QUEUE_RESPONSE,
   QUEUE_SUBMIT,
   aspBackoff,
   closeQueues,
@@ -19,6 +21,7 @@ import {
   type ParseBatchJob,
   type PollStatusJob,
   type SendMailJob,
+  type SendResponseJob,
   type SubmitInvoiceJob,
 } from './queue/queues.js';
 
@@ -61,6 +64,14 @@ async function main() {
     { connection, concurrency: 3 },
   );
 
+  // AP verdicts (SRS v2.7 §12.3). Narrow, because a supplier's access point
+  // being slow must not consume the lanes that file tax documents.
+  const responseWorker = new Worker<SendResponseJob>(
+    QUEUE_RESPONSE,
+    async (job) => sendResponseJob(job.data),
+    { connection, concurrency: 4 },
+  );
+
   const pollWorker = new Worker<PollStatusJob>(
     QUEUE_POLL,
     async () => pollStatusJob(),
@@ -72,6 +83,7 @@ async function main() {
     ['submit', submitWorker],
     ['poll', pollWorker],
     ['mail', mailWorker],
+    ['response', responseWorker],
   ] as const) {
     worker.on('failed', (job, err) => {
       logger.error(
@@ -107,6 +119,7 @@ async function main() {
         submitWorker.close(),
         pollWorker.close(),
         mailWorker.close(),
+        responseWorker.close(),
       ]);
       await closeQueues();
       await closeDb();

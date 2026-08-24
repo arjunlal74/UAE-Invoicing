@@ -24,9 +24,12 @@ export function registerDashboardRoutes(app: FastifyInstance) {
         SELECT status FROM tenant_asp_configs WHERE tenant_id = ${ctx.tenantId} AND is_active
       `;
 
+      // Everything on this page is the AR module (SRS v2.7 §1.2). The AP desk
+      // has its own overview, and mixing the two would count a supplier's bill
+      // as one of the tenant's own filings.
       const statusCounts = await tx<{ status: InvoiceStatus; count: string }[]>`
         SELECT status, count(*)::text AS count FROM invoices
-        WHERE tenant_id = ${ctx.tenantId}
+        WHERE tenant_id = ${ctx.tenantId} AND direction = 'OUTBOUND_SALES_AR'
         GROUP BY status
       `;
 
@@ -40,13 +43,15 @@ export function registerDashboardRoutes(app: FastifyInstance) {
             WHERE tenant_id = ${ctx.tenantId} AND status = 'STAGED_WITH_ERRORS')::text
             AS batches_with_errors,
           (SELECT count(*) FROM invoices
-            WHERE tenant_id = ${ctx.tenantId} AND status = 'REJECTED_BY_FTA')::text
+            WHERE tenant_id = ${ctx.tenantId} AND direction = 'OUTBOUND_SALES_AR'
+              AND status = 'REJECTED_BY_FTA')::text
             AS rejected_invoices,
           -- "Stuck" means handed to the provider but with no verdict for an
           -- hour. These are exactly the invoices a merchant would otherwise
           -- discover were missing only at the end of a filing period.
           (SELECT count(*) FROM invoices
-            WHERE tenant_id = ${ctx.tenantId} AND status = 'SUBMITTED_TO_ASP'
+            WHERE tenant_id = ${ctx.tenantId} AND direction = 'OUTBOUND_SALES_AR'
+              AND status = 'SUBMITTED_TO_ASP'
               AND submitted_at < now() - interval '1 hour')::text
             AS stuck_transmissions
       `;
@@ -68,7 +73,10 @@ export function registerDashboardRoutes(app: FastifyInstance) {
           count(i.id) FILTER (WHERE i.status = 'REJECTED_BY_FTA')::text AS rejected
         FROM generate_series(CURRENT_DATE - interval '29 days', CURRENT_DATE, interval '1 day') AS d(day)
         LEFT JOIN invoices i
-          ON i.tenant_id = ${ctx.tenantId} AND i.created_at::date = d.day::date
+          ON i.tenant_id = ${ctx.tenantId}
+         AND i.direction = 'OUTBOUND_SALES_AR'
+         AND i.status <> 'DRAFT'
+         AND i.created_at::date = d.day::date
         GROUP BY d.day
         ORDER BY d.day
       `;

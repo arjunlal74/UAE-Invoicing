@@ -40,7 +40,17 @@ function s3(): S3Client {
   return client;
 }
 
-export type ArtefactKind = 'source' | 'xml' | 'receipt';
+/**
+ * What an archived object is, which becomes the second segment of its key.
+ *
+ * SRS v2.7 §19 puts all five under the same 5-to-15 year WORM lock: the source
+ * workbook, the generated invoice XML, the clearance receipt, an inbound
+ * purchase invoice as the supplier sent it, and every ApplicationResponse that
+ * crossed the boundary in either direction. Keeping them in separate key
+ * prefixes is what makes an audit request for one kind a prefix listing rather
+ * than a scan of everything the tenant has ever filed.
+ */
+export type ArtefactKind = 'source' | 'xml' | 'receipt' | 'inbound' | 'response';
 
 /**
  * Object keys are tenant-prefixed and date-partitioned so that an FTA audit

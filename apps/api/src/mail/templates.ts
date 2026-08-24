@@ -363,3 +363,243 @@ export function renderAccountLocked(params: {
 
   return { subject: `Security alert: your ${name} account was locked`, html, text };
 }
+
+// ===========================================================================
+// SRS v2.7 §5.5 and §5.6 — the two module templates
+// ===========================================================================
+// These differ in kind from A–D. Those are addressed to a person about their
+// own account; these are addressed to a *desk* about a document with a deadline
+// attached. Both therefore lead with what happened and what it is worth, and
+// end with the single action that resolves it.
+
+/** A small labelled table, used by all three operational templates below. */
+function detailRows(rows: [string, string][]): string {
+  const cells = rows
+    .map(
+      ([label, value]) => `<tr>
+         <td style="padding:4px 12px 4px 0;font-size:13px;color:#64748b;white-space:nowrap;">${escapeHtml(label)}</td>
+         <td style="padding:4px 0;font-size:13px;color:#0f172a;font-weight:500;">${escapeHtml(value)}</td>
+       </tr>`,
+    )
+    .join('');
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">${cells}</table>`;
+}
+
+/**
+ * Template E — commercial rejection / dispute alert (Module 1 AR, §5.5).
+ *
+ * Sent the moment a buyer returns UQ or RE against a cleared sales invoice. The
+ * call to action is the credit note builder rather than the invoice screen,
+ * because under UAE VAT law the cleared document cannot be amended and a
+ * corrective 381 is the only thing that resolves the dispute.
+ */
+export function renderDisputeAlert(params: {
+  invoiceNumber: string;
+  buyerName: string;
+  ftaIrn: string | null;
+  responseStatus: string;
+  reasonCode: string | null;
+  reasonLabel: string | null;
+  comments: string | null;
+  creditNoteUrl: string;
+}): RenderedMail {
+  const rows: [string, string][] = [
+    ['Invoice number', params.invoiceNumber],
+    ['Buyer', params.buyerName],
+  ];
+  if (params.ftaIrn) rows.push(['FTA IRN', params.ftaIrn]);
+  rows.push(['Response status', params.responseStatus]);
+  if (params.reasonCode) {
+    rows.push([
+      'Reason code',
+      `${params.reasonCode}${params.reasonLabel ? ` — ${params.reasonLabel}` : ''}`,
+    ]);
+  }
+
+  const comment = params.comments
+    ? `<p style="margin:0 0 16px;padding:12px;border-radius:6px;background:#fef2f2;border:1px solid #fecaca;font-size:13px;line-height:1.6;color:#991b1b;">
+         <strong>Buyer comment:</strong><br>${escapeHtml(params.comments)}
+       </p>`
+    : '';
+
+  const html = layout(
+    'A buyer has disputed a cleared invoice',
+    `<p style="margin:0 0 12px;font-size:14px;line-height:1.6;">Dear Finance Team,</p>
+     <p style="margin:0 0 16px;font-size:14px;line-height:1.6;">
+       The cleared tax invoice <strong>${escapeHtml(params.invoiceNumber)}</strong> issued to
+       <strong>${escapeHtml(params.buyerName)}</strong> has been disputed by the buyer over the
+       Peppol network.
+     </p>
+     ${detailRows(rows)}
+     ${comment}
+     <p style="margin:0 0 4px;font-size:14px;line-height:1.6;">
+       A cleared invoice cannot be amended or withdrawn. To correct it, issue a credit note
+       (Type 381) that references the original document.
+     </p>
+     ${actionButton(params.creditNoteUrl, 'Open the credit note builder')}`,
+  );
+
+  const text = [
+    'Dear Finance Team,',
+    '',
+    `The cleared tax invoice ${params.invoiceNumber} issued to ${params.buyerName} has been disputed by the buyer over the Peppol network.`,
+    '',
+    ...rows.map(([label, value]) => `  ${label}: ${value}`),
+    ...(params.comments ? ['', `Buyer comment: "${params.comments}"`] : []),
+    '',
+    'A cleared invoice cannot be amended or withdrawn. To correct it, issue a credit note (Type 381) referencing the original document:',
+    '',
+    params.creditNoteUrl,
+  ].join('\n');
+
+  return {
+    subject: `Action required: invoice ${params.invoiceNumber} disputed by ${params.buyerName}`,
+    html,
+    text,
+  };
+}
+
+/**
+ * Template F — inbound purchase invoice received (Module 2 AP, §5.6).
+ *
+ * Carries the amount because that is what decides whether the recipient walks
+ * over to the verification desk now or after lunch.
+ */
+export function renderInboundPurchaseInvoice(params: {
+  supplierName: string;
+  supplierTrn: string | null;
+  invoiceNumber: string;
+  ftaIrn: string | null;
+  totalAmount: string;
+  vatAmount: string;
+  currency: string;
+  isNewSupplier: boolean;
+  deskUrl: string;
+}): RenderedMail {
+  const rows: [string, string][] = [['Supplier', params.supplierName]];
+  if (params.supplierTrn) rows.push(['Supplier TRN', params.supplierTrn]);
+  rows.push(['Invoice number', params.invoiceNumber]);
+  if (params.ftaIrn) rows.push(['FTA IRN', params.ftaIrn]);
+  rows.push(
+    ['Total payable', `${params.currency} ${params.totalAmount}`],
+    ['Of which VAT', `${params.currency} ${params.vatAmount}`],
+  );
+
+  const newSupplier = params.isNewSupplier
+    ? `<p style="margin:0 0 16px;padding:12px;border-radius:6px;background:#fffbeb;border:1px solid #fde68a;font-size:13px;line-height:1.6;color:#92400e;">
+         This is the first invoice received from this TRN. A provisional supplier record has been
+         created; confirm the bank and contact details before authorising payment.
+       </p>`
+    : '';
+
+  const html = layout(
+    'New purchase invoice received',
+    `<p style="margin:0 0 12px;font-size:14px;line-height:1.6;">Dear Accounts Payable Team,</p>
+     <p style="margin:0 0 16px;font-size:14px;line-height:1.6;">
+       A cleared purchase e-invoice has been received from
+       <strong>${escapeHtml(params.supplierName)}</strong> over the FTA Peppol network.
+     </p>
+     ${detailRows(rows)}
+     ${newSupplier}
+     <p style="margin:0 0 4px;font-size:14px;line-height:1.6;">
+       Verify the line items against your purchase order, then accept or reject the invoice. Input
+       tax cannot be claimed until it is accepted.
+     </p>
+     ${actionButton(params.deskUrl, 'Open the purchase verification desk')}`,
+  );
+
+  const text = [
+    'Dear Accounts Payable Team,',
+    '',
+    `A cleared purchase e-invoice has been received from ${params.supplierName} over the FTA Peppol network.`,
+    '',
+    ...rows.map(([label, value]) => `  ${label}: ${value}`),
+    ...(params.isNewSupplier
+      ? [
+          '',
+          'This is the first invoice received from this TRN. A provisional supplier record has been created; confirm the bank and contact details before authorising payment.',
+        ]
+      : []),
+    '',
+    'Verify the line items against your purchase order, then accept or reject the invoice:',
+    '',
+    params.deskUrl,
+  ].join('\n');
+
+  return {
+    subject: `Action required: new purchase invoice ${params.invoiceNumber} from ${params.supplierName}`,
+    html,
+    text,
+  };
+}
+
+/**
+ * §15 threshold alert — 80%, 90% and 100% of a prepaid bundle.
+ *
+ * §5 defines no template for it, but §15 requires the notification, and a
+ * tenant who discovers an exhausted bundle by being unable to file on the last
+ * day of a VAT period has been failed by the platform rather than by their own
+ * planning.
+ */
+export function renderQuotaThreshold(params: {
+  contactName: string;
+  companyName: string;
+  threshold: number;
+  purchasedUnits: number;
+  consumedUnits: number;
+  remainingUnits: number;
+  hardCap: boolean;
+  balanceUrl: string;
+}): RenderedMail {
+  const { name, supportEmail } = platform();
+  const exhausted = params.threshold >= 100;
+
+  const consequence = exhausted
+    ? params.hardCap
+      ? 'Filing is now blocked until the bundle is topped up.'
+      : 'Filing continues under your overage agreement, and further documents will be invoiced.'
+    : 'No action is required yet, but a top-up ordered now will avoid an interruption.';
+
+  const html = layout(
+    exhausted ? 'Your data bundle is exhausted' : `Your data bundle is ${params.threshold}% used`,
+    `<p style="margin:0 0 12px;font-size:14px;line-height:1.6;">Dear ${escapeHtml(params.contactName)},</p>
+     <p style="margin:0 0 16px;font-size:14px;line-height:1.6;">
+       The prepaid data bundle for <strong>${escapeHtml(params.companyName)}</strong> has reached
+       ${params.threshold}% of its capacity.
+     </p>
+     ${detailRows([
+       ['Purchased', `${params.purchasedUnits.toLocaleString()} documents`],
+       ['Consumed', `${params.consumedUnits.toLocaleString()} documents`],
+       ['Remaining', `${Math.max(0, params.remainingUnits).toLocaleString()} documents`],
+     ])}
+     <p style="margin:0 0 4px;font-size:14px;line-height:1.6;">${escapeHtml(consequence)}</p>
+     ${actionButton(params.balanceUrl, 'View usage and balance')}
+     <p style="margin:0;font-size:13px;color:#475569;">
+       To order additional capacity, contact ${escapeHtml(supportEmail)}.
+     </p>`,
+  );
+
+  const text = [
+    `Dear ${params.contactName},`,
+    '',
+    `The prepaid data bundle for ${params.companyName} has reached ${params.threshold}% of its capacity.`,
+    '',
+    `  Purchased: ${params.purchasedUnits} documents`,
+    `  Consumed:  ${params.consumedUnits} documents`,
+    `  Remaining: ${Math.max(0, params.remainingUnits)} documents`,
+    '',
+    consequence,
+    '',
+    params.balanceUrl,
+    '',
+    `To order additional capacity, contact ${supportEmail}.`,
+  ].join('\n');
+
+  return {
+    subject: exhausted
+      ? `${name}: your data bundle is exhausted`
+      : `${name}: your data bundle is ${params.threshold}% used`,
+    html,
+    text,
+  };
+}

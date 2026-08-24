@@ -169,18 +169,26 @@ async function main() {
   section('4. Fill the template — two good invoices, two with mistakes');
 
   const today = new Date().toISOString().slice(0, 10);
+
+  // Invoice numbers are per-run. Fixed ones made this script single-use: the
+  // second run against the same database is refused as a duplicate filing —
+  // which is the constraint doing its job, but it reads as a regression and it
+  // means the suite can only ever be trusted on a freshly seeded stack.
+  const RUN = Date.now().toString(36).slice(-5).toUpperCase();
+  const NUM = (n) => `E2E-${RUN}-${String(n).padStart(3, '0')}`;
+
   const invoices = [
     // Clean B2B invoice.
-    { num: 'E2E-001', type: '380', buyerTrn: '100384759200003', buyer: 'Emirates Trading Co', emirate: 'Dubai',
+    { num: NUM(1), type: '380', buyerTrn: '100384759200003', buyer: 'Emirates Trading Co', emirate: 'Dubai',
       lines: [{ desc: 'Cloud Hosting', qty: 1, price: 5000, cat: 'S' }, { desc: 'Support', qty: 2, price: 750, cat: 'S' }] },
     // Clean B2C simplified invoice, no buyer TRN.
-    { num: 'E2E-002', type: '388', buyerTrn: '', buyer: 'Walk-in Customer', emirate: 'Sharjah',
+    { num: NUM(2), type: '388', buyerTrn: '', buyer: 'Walk-in Customer', emirate: 'Sharjah',
       lines: [{ desc: 'Retail Goods', qty: 3, price: 150, cat: 'S' }] },
     // Buyer TRN too short — must be caught.
-    { num: 'E2E-003', type: '380', buyerTrn: '1002938475', buyer: 'Broken TRN Co', emirate: 'Dubai',
+    { num: NUM(3), type: '380', buyerTrn: '1002938475', buyer: 'Broken TRN Co', emirate: 'Dubai',
       lines: [{ desc: 'Consulting', qty: 4, price: 1000, cat: 'S' }] },
     // VAT category and rate contradict each other, and the emirate is misspelled.
-    { num: 'E2E-004', type: '380', buyerTrn: '100492817400003', buyer: 'Zero Rate Co', emirate: 'dxb',
+    { num: NUM(4), type: '380', buyerTrn: '100492817400003', buyer: 'Zero Rate Co', emirate: 'dxb',
       lines: [{ desc: 'Exported Goods', qty: 1, price: 2000, cat: 'Z', rate: 5 }] },
   ];
 
@@ -242,21 +250,21 @@ async function main() {
 
   const rows = Object.fromEntries(staged.rows.map((r) => [r.invoice.invoiceNumber, r]));
 
-  check('accepted the clean B2B invoice', rows['E2E-001']?.submittable === true);
-  check('accepted the B2C invoice with no buyer TRN', rows['E2E-002']?.submittable === true);
+  check('accepted the clean B2B invoice', rows[NUM(1)]?.submittable === true);
+  check('accepted the B2C invoice with no buyer TRN', rows[NUM(2)]?.submittable === true);
   check(
     'warned that the B2C invoice will be filed as simplified',
-    rows['E2E-002']?.findings.some((f) => f.ruleCode === 'WRN-UAE-02'),
+    rows[NUM(2)]?.findings.some((f) => f.ruleCode === 'WRN-UAE-02'),
   );
 
-  const shortTrn = rows['E2E-003'];
+  const shortTrn = rows[NUM(3)];
   check('rejected the short buyer TRN', shortTrn?.submittable === false);
   const trnFinding = shortTrn?.findings.find((f) => f.ruleCode === 'BR-UAE-08');
   check('flagged it with the right rule code', !!trnFinding);
   check('mapped it to the exact spreadsheet cell', trnFinding?.cell === 'I4', `cell=${trnFinding?.cell}`);
   check('named the source sheet', trnFinding?.sheet === 'Invoice_Header');
 
-  const badRate = rows['E2E-004'];
+  const badRate = rows[NUM(4)];
   check('rejected the contradictory VAT rate', badRate?.submittable === false);
   check(
     'flagged the VAT rate mismatch',
@@ -269,8 +277,8 @@ async function main() {
 
   check(
     'computed totals correctly (1x5000 + 2x750 + 5% VAT)',
-    rows['E2E-001']?.invoice.payableAmount === '6825.00',
-    rows['E2E-001']?.invoice.payableAmount,
+    rows[NUM(1)]?.invoice.payableAmount === '6825.00',
+    rows[NUM(1)]?.invoice.payableAmount,
   );
 
   section('7. Auto-fix the mechanical mistakes');
@@ -288,21 +296,21 @@ async function main() {
 
   const afterFix = await api(`/api/v1/batches/${batchId}/staging?pageSize=50`, { token });
   const fixedRows = Object.fromEntries(afterFix.body.rows.map((r) => [r.invoice.invoiceNumber, r]));
-  check('the auto-fixed invoice now passes', fixedRows['E2E-004']?.submittable === true);
+  check('the auto-fixed invoice now passes', fixedRows[NUM(4)]?.submittable === true);
   check(
     'the VAT rate warning clears once the row is normalised',
-    !fixedRows['E2E-004']?.findings.some((f) => f.ruleCode === 'BR-UAE-14'),
+    !fixedRows[NUM(4)]?.findings.some((f) => f.ruleCode === 'BR-UAE-14'),
   );
   check(
     'and the stored rate now matches the zero-rated category',
-    fixedRows['E2E-004']?.invoice.lines[0]?.vatRate === '0.00',
-    fixedRows['E2E-004']?.invoice.lines[0]?.vatRate,
+    fixedRows[NUM(4)]?.invoice.lines[0]?.vatRate === '0.00',
+    fixedRows[NUM(4)]?.invoice.lines[0]?.vatRate,
   );
-  check('the TRN error still stands', fixedRows['E2E-003']?.submittable === false);
+  check('the TRN error still stands', fixedRows[NUM(3)]?.submittable === false);
 
   section('8. Fix the remaining error inline, as a user would');
 
-  const patch = await api(`/api/v1/batches/${batchId}/staging/${fixedRows['E2E-003'].id}`, {
+  const patch = await api(`/api/v1/batches/${batchId}/staging/${fixedRows[NUM(3)].id}`, {
     method: 'PATCH',
     token,
     body: { invoice: { buyerTrn: '100384759200003' } },
@@ -339,17 +347,25 @@ async function main() {
 
   section('10. Transmission and clearance');
 
+  // Scoped to this run's batch. Reading the tenant's whole invoice list and
+  // asserting it holds exactly four assumed a database that had never been used
+  // for anything else — including by a previous run of this script.
   const cleared = await waitFor(
     'all invoices to reach a verdict',
     async () => {
-      const result = await api('/api/v1/invoices?pageSize=50', { token });
+      const result = await api(`/api/v1/invoices?pageSize=50&batchId=${batchId}`, { token });
       const items = result.body?.items ?? [];
       const settled = items.filter((i) =>
         ['ACCEPTED_BY_FTA', 'REJECTED_BY_FTA'].includes(i.status),
       );
       return items.length === 4 && settled.length === 4 ? items : null;
     },
-    { timeoutMs: 180_000, intervalMs: 3_000 },
+    // Must outlast the retry schedule, not just the happy path. The mock
+    // provider fails ~3% of submissions transiently on purpose, and the backoff
+    // is 1m then 5m — so a 180s wait turned any simulated timeout into a run
+    // abort. This returns the moment all four settle, so the extra headroom
+    // costs nothing when nothing goes wrong.
+    { timeoutMs: 420_000, intervalMs: 3_000 },
   );
 
   check('every invoice reached a verdict', cleared.length === 4);
@@ -383,7 +399,10 @@ async function main() {
   await retryBook.xlsx.load(template.buffer);
   const retryHeader = retryBook.getWorksheet('Invoice_Header');
   const retryLines = retryBook.getWorksheet('Invoice_Line_Items');
-  retryHeader.getCell('A2').value = 'E2E-RET-001';
+  // Per-run for the same reason as the batch above: this row is filed under its
+  // own number, so a fixed one collides with the previous run's.
+  const RETRY_NUM = `E2E-${RUN}-RET`;
+  retryHeader.getCell('A2').value = RETRY_NUM;
   retryHeader.getCell('B2').value = '380';
   retryHeader.getCell('C2').value = today;
   retryHeader.getCell('D2').value = '11:00:00';
@@ -391,7 +410,7 @@ async function main() {
   retryHeader.getCell('J2').value = 'Returned Goods Co';
   retryHeader.getCell('K2').value = 'Dubai';
   retryHeader.getCell('N2').value = '30';
-  retryLines.getCell('A2').value = 'E2E-RET-001';
+  retryLines.getCell('A2').value = RETRY_NUM;
   retryLines.getCell('B2').value = 1;
   retryLines.getCell('C2').value = 'Disputed Consulting';
   retryLines.getCell('E2').value = 1;
@@ -501,7 +520,16 @@ async function main() {
   check('platform admin signs in', !!adminToken);
 
   const tenants = await api('/api/v1/admin/tenants', { token: adminToken });
-  check('admin lists every tenant', tenants.body?.items?.length === 4, `count=${tenants.body?.items?.length}`);
+  // The four seeded tenants must all be visible. Asserting the list holds
+  // *exactly* four assumed nothing had ever been onboarded since — including by
+  // §15 of this same script, which onboards one every time it runs.
+  const seeded = ['ALBAHAR', 'GULFTECH', 'GULFADV', 'DESERTLOG'];
+  const codes = new Set(tenants.body?.items?.map((t) => t.companyCode));
+  check(
+    'admin lists every tenant',
+    seeded.every((code) => codes.has(code)),
+    `missing ${seeded.filter((code) => !codes.has(code)).join(', ') || 'nothing'}`,
+  );
   check(
     'admin sees the tenancy tiers',
     new Set(tenants.body?.items?.map((t) => t.tenantType)).size === 3,
@@ -538,11 +566,24 @@ async function main() {
 
   const partnerOverview = await api('/api/v1/partner/overview', { token: partnerToken });
   check('partner sees their roll-up', partnerOverview.status === 200);
-  check('counting their sub-tenants', partnerOverview.body?.subTenantCount === 1, JSON.stringify(partnerOverview.body));
+  check(
+    'counting their sub-tenants',
+    partnerOverview.body?.subTenantCount >= 1,
+    JSON.stringify(partnerOverview.body),
+  );
 
   const subTenants = await api('/api/v1/partner/sub-tenants', { token: partnerToken });
-  check('partner lists their sub-tenants', subTenants.body?.items?.length === 1, `count=${subTenants.body?.items?.length}`);
-  check('and only their own', subTenants.body?.items?.[0]?.companyCode === 'DESERTLOG');
+  const subCodes = subTenants.body?.items?.map((t) => t.companyCode) ?? [];
+  check('partner lists their sub-tenants', subCodes.includes('DESERTLOG'), subCodes.join(', '));
+  // "Only their own" is the isolation claim, and it is about what must NOT be
+  // in the list. Asserting a single row tested the seed's size instead, and
+  // stopped meaning anything the first time a second client was onboarded.
+  const foreign = ['ALBAHAR', 'GULFTECH', 'GULFADV'];
+  check(
+    'and only their own',
+    subCodes.length > 0 && !subCodes.some((code) => foreign.includes(code)),
+    subCodes.join(', '),
+  );
 
   const partnerAdminPanel = await api('/api/v1/admin/tenants', { token: partnerToken });
   check('a partner cannot reach the admin panel', partnerAdminPanel.status === 403, `got ${partnerAdminPanel.status}`);
@@ -560,7 +601,10 @@ async function main() {
       companyCode: `E2ESUB${Date.now().toString().slice(-6)}`,
       legalNameEn: 'E2E Onboarded Client LLC',
       legalNameAr: 'عميل تجريبي ذ.م.م',
-      trn: '100777888900003',
+      // Per-run, like the company code above. A fixed TRN collided with the
+      // previous run's tenant on `tenants_trn_key` — the uniqueness rule doing
+      // its job, reported as an onboarding failure.
+      trn: `1${String(Date.now()).slice(-9)}${String(process.pid).padStart(5, '0').slice(-5)}`,
       registeredAddress: { street: 'Test Road', city: 'Dubai', emirate: 'Dubai', postalCode: '', countryCode: 'AE' },
       adminEmail: `e2e-sub-${Date.now()}@example.local`,
       adminFullName: 'E2E Sub Admin',

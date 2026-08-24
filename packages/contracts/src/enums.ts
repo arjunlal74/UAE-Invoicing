@@ -42,8 +42,38 @@ export const IngestionSource = z.enum([
   'CSV_UPLOAD',
   'SFTP',
   'POS_CONNECTOR',
+  /** SRS v2.7 §1.3 channel 3: composed in the browser builders. */
+  'MANUAL_IN_APP_ENTRY',
+  /** SRS v2.7 §12.1: received off the Peppol network as a purchase invoice. */
+  'INBOUND_PEPPOL_AS4',
+  'SAP_CONNECTOR',
+  'ORACLE_CONNECTOR',
+  'DYNAMICS_CONNECTOR',
+  'NETSUITE_CONNECTOR',
 ]);
 export type IngestionSource = z.infer<typeof IngestionSource>;
+
+/**
+ * Which half of the platform a document belongs to (SRS v2.7 §1.2).
+ *
+ * This is the single most load-bearing discriminator added by v2.7. Almost
+ * every list, count and report is scoped by it, because "invoices" now means
+ * two entirely different piles of paper depending on which way the arrow
+ * points.
+ */
+export const InvoiceDirection = z.enum(['OUTBOUND_SALES_AR', 'INBOUND_PURCHASE_AP']);
+export type InvoiceDirection = z.infer<typeof InvoiceDirection>;
+
+export const DIRECTION_LABELS: Record<InvoiceDirection, string> = {
+  OUTBOUND_SALES_AR: 'Outbound sales (AR)',
+  INBOUND_PURCHASE_AP: 'Inbound purchases (AP)',
+};
+
+/** Short form, for column headers and badges where the long label will not fit. */
+export const DIRECTION_SHORT: Record<InvoiceDirection, string> = {
+  OUTBOUND_SALES_AR: 'AR',
+  INBOUND_PURCHASE_AP: 'AP',
+};
 
 export const BatchStatus = z.enum([
   'UPLOADED',
@@ -64,13 +94,30 @@ export const InvoiceTypeDb = z.enum([
 ]);
 export type InvoiceTypeDb = z.infer<typeof InvoiceTypeDb>;
 
+/**
+ * The document lifecycle, spanning both modules.
+ *
+ * v2.1 ended at the tax authority's verdict. v2.7 continues past it: once the
+ * FTA has cleared a sales invoice the *buyer* gets a say, and the last four
+ * statuses record what they said. The same values describe an inbound purchase
+ * invoice from the other side of the table — there, we are the party issuing
+ * the verdict.
+ */
 export const InvoiceStatus = z.enum([
+  /** Composed in a browser builder and not yet handed to anyone. */
+  'DRAFT',
   'INGESTED',
   'VALIDATED',
   'VALIDATION_FAILED',
   'PENDING_CFO_APPROVAL',
   'SUBMITTED_TO_ASP',
   'ACCEPTED_BY_FTA',
+  'DELIVERED_TO_BUYER',
+  'ACKNOWLEDGED',
+  'UNDER_QUERY',
+  'ACCEPTED_BY_BUYER',
+  'REJECTED_TECHNICAL',
+  'REJECTED_COMMERCIAL',
   'REJECTED_BY_FTA',
   'ARCHIVED',
 ]);
@@ -82,8 +129,111 @@ export const SUBMITTABLE_STATUSES: InvoiceStatus[] = ['VALIDATED', 'REJECTED_BY_
 /** Statuses a tax approver can act on from the approval queue. */
 export const APPROVABLE_STATUSES: InvoiceStatus[] = ['PENDING_CFO_APPROVAL'];
 
-/** Statuses that are final — no further transitions are accepted. */
-export const TERMINAL_STATUSES: InvoiceStatus[] = ['ACCEPTED_BY_FTA', 'ARCHIVED'];
+/**
+ * Statuses that are final for *clearance* purposes — a late verdict from the
+ * tax authority must not overwrite them.
+ *
+ * Note that ACCEPTED_BY_FTA is terminal here while the buyer-driven statuses
+ * that follow it are not listed at all: those are a separate axis, applied by
+ * the IMR engine rather than by the clearance path, and a cleared invoice that
+ * is later disputed has not become un-cleared.
+ */
+export const TERMINAL_STATUSES: InvoiceStatus[] = [
+  'ACCEPTED_BY_FTA',
+  'DELIVERED_TO_BUYER',
+  'ACKNOWLEDGED',
+  'UNDER_QUERY',
+  'ACCEPTED_BY_BUYER',
+  'REJECTED_COMMERCIAL',
+  'ARCHIVED',
+];
+
+/** Statuses that mean the document reached the FTA and was accepted. */
+export const CLEARED_STATUSES: InvoiceStatus[] = [
+  'ACCEPTED_BY_FTA',
+  'DELIVERED_TO_BUYER',
+  'ACKNOWLEDGED',
+  'UNDER_QUERY',
+  'ACCEPTED_BY_BUYER',
+  'REJECTED_COMMERCIAL',
+];
+
+/**
+ * Peppol BIS Invoice Response 3.0 status codes (SRS v2.7 §11).
+ *
+ * The same six codes flow in both directions: a buyer sends them to us about a
+ * sales invoice, and our AP desk sends them to a supplier about a purchase
+ * invoice.
+ */
+export const ResponseStatusCode = z.enum(['AB', 'IP', 'UQ', 'CA', 'AP', 'RE']);
+export type ResponseStatusCode = z.infer<typeof ResponseStatusCode>;
+
+export const RESPONSE_CODE_LABELS: Record<ResponseStatusCode, string> = {
+  AB: 'Acknowledged',
+  IP: 'In process',
+  UQ: 'Under query',
+  CA: 'Conditionally accepted',
+  AP: 'Accepted',
+  RE: 'Rejected',
+};
+
+/** Codes the AP verification desk may issue. AB/IP/CA are network-level. */
+export const AP_DECISION_CODES: ResponseStatusCode[] = ['AP', 'UQ', 'RE'];
+
+/**
+ * Reason codes (SRS v2.7 §11). Shared by IMR responses and by the credit note
+ * builder's "reason for issuance" picker, because a credit note raised to
+ * settle a PRI dispute should carry the same code the dispute did.
+ */
+export const RejectionReasonCode = z.enum(['REF', 'PRI', 'QTY', 'ITM', 'DEL', 'NON', 'OTH']);
+export type RejectionReasonCode = z.infer<typeof RejectionReasonCode>;
+
+export const REASON_CODE_LABELS: Record<RejectionReasonCode, string> = {
+  REF: 'Reference / PO mismatch',
+  PRI: 'Price dispute',
+  QTY: 'Quantity discrepancy',
+  ITM: 'Wrong or defective item',
+  DEL: 'Delivery failure',
+  NON: 'Non-compliant data',
+  OTH: 'Other',
+};
+
+/**
+ * §12.3 separates a technical rejection from a commercial one. NON is the only
+ * reason that is technical by nature — bad XML, an unparseable TRN — and it is
+ * the one that consumes no quota under §15.
+ */
+export const TECHNICAL_REASON_CODES: RejectionReasonCode[] = ['NON'];
+
+/** §8.2 Mode A / Mode B. */
+export const ReversalMode = z.enum(['FULL_CANCELLATION', 'PARTIAL_ADJUSTMENT']);
+export type ReversalMode = z.infer<typeof ReversalMode>;
+
+export const REVERSAL_MODE_LABELS: Record<ReversalMode, string> = {
+  FULL_CANCELLATION: 'Full cancellation (100% reversal)',
+  PARTIAL_ADJUSTMENT: 'Partial adjustment (line by line)',
+};
+
+/** Where an accepted purchase invoice has got to in the buyer's own ledger. */
+export const ApPostingStatus = z.enum(['NOT_POSTED', 'POSTED', 'BLOCKED', 'ON_HOLD']);
+export type ApPostingStatus = z.infer<typeof ApPostingStatus>;
+
+export const AP_POSTING_LABELS: Record<ApPostingStatus, string> = {
+  NOT_POSTED: 'Not posted',
+  POSTED: 'Posted to ERP',
+  BLOCKED: 'Blocked',
+  ON_HOLD: 'On hold',
+};
+
+/** §10.6 reverse push back to the ERP the document came from. */
+export const ErpSyncStatus = z.enum(['NOT_APPLICABLE', 'PENDING', 'SENT', 'FAILED']);
+export type ErpSyncStatus = z.infer<typeof ErpSyncStatus>;
+
+export const PartyType = z.enum(['B2B', 'B2C']);
+export type PartyType = z.infer<typeof PartyType>;
+
+export const BundleStatus = z.enum(['ACTIVE', 'EXHAUSTED', 'EXPIRED', 'SUSPENDED']);
+export type BundleStatus = z.infer<typeof BundleStatus>;
 
 export const ValidationSeverity = z.enum(['INFO', 'WARNING', 'ERROR', 'FATAL']);
 export type ValidationSeverity = z.infer<typeof ValidationSeverity>;

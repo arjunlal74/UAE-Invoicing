@@ -60,9 +60,29 @@ function fromPostgres(err: PgError): AppError | null {
   if (err.code === '23505') {
     // Unique violation. The invoice-number constraint is the one users hit, and
     // a generic "duplicate key" message would be useless to a finance user.
-    if (err.constraint_name === 'uq_tenant_invoice_num') {
+    if (err.constraint_name === 'uq_tenant_invoice_dir') {
       return conflict(
-        'An invoice with this number has already been filed. Submitting it again would create a duplicate with the FTA.',
+        'A document with this number already exists in this module. Filing it again would create a duplicate with the FTA.',
+      );
+    }
+    if (err.constraint_name === 'uq_tenant_customer_code') {
+      return conflict('That customer code is already in use.');
+    }
+    if (err.constraint_name === 'uq_tenant_customer_trn') {
+      return conflict('A customer with that TRN is already in your directory.');
+    }
+    if (err.constraint_name === 'uq_tenant_supplier_code') {
+      return conflict('That supplier code is already in use.');
+    }
+    if (err.constraint_name === 'uq_tenant_supplier_trn') {
+      return conflict('A supplier with that TRN is already in your directory.');
+    }
+    if (err.constraint_name === 'uq_bundle_reference') {
+      return conflict('That bundle reference is already in use for this tenant.');
+    }
+    if (err.constraint_name === 'uq_invoice_idempotency') {
+      return conflict(
+        'This document has already been ingested under the same idempotency key.',
       );
     }
     if (err.constraint_name === 'users_email_unique') {

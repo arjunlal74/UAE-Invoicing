@@ -84,6 +84,7 @@ export function Card({
 
 const STATUS_STYLES: Record<string, string> = {
   // Invoice
+  DRAFT: 'bg-slate-100 text-slate-600',
   INGESTED: 'bg-slate-100 text-slate-700',
   VALIDATED: 'bg-brand-50 text-brand-700',
   VALIDATION_FAILED: 'bg-danger-50 text-danger-700',
@@ -92,6 +93,23 @@ const STATUS_STYLES: Record<string, string> = {
   ACCEPTED_BY_FTA: 'bg-ok-50 text-ok-700',
   REJECTED_BY_FTA: 'bg-danger-50 text-danger-700',
   ARCHIVED: 'bg-slate-100 text-slate-600',
+  // The buyer-driven half of the v2.7 lifecycle. Deliberately a different
+  // colour family from the clearance statuses: an invoice can be cleared and
+  // disputed at once, and the two must not read as the same kind of fact.
+  DELIVERED_TO_BUYER: 'bg-brand-50 text-brand-700',
+  ACKNOWLEDGED: 'bg-brand-50 text-brand-700',
+  UNDER_QUERY: 'bg-warn-50 text-warn-700',
+  ACCEPTED_BY_BUYER: 'bg-ok-50 text-ok-700',
+  REJECTED_COMMERCIAL: 'bg-danger-50 text-danger-700',
+  REJECTED_TECHNICAL: 'bg-danger-50 text-danger-700',
+  // AP posting
+  NOT_POSTED: 'bg-slate-100 text-slate-600',
+  POSTED: 'bg-ok-50 text-ok-700',
+  BLOCKED: 'bg-danger-50 text-danger-700',
+  ON_HOLD: 'bg-warn-50 text-warn-700',
+  // Data bundles
+  EXHAUSTED: 'bg-danger-50 text-danger-700',
+  EXPIRED: 'bg-slate-200 text-slate-700',
   // Batch
   UPLOADED: 'bg-slate-100 text-slate-700',
   PARSING: 'bg-brand-50 text-brand-700',
@@ -110,14 +128,27 @@ const STATUS_STYLES: Record<string, string> = {
 
 /** Human wording. Users should never be shown SCREAMING_SNAKE_CASE. */
 const STATUS_LABELS: Record<string, string> = {
+  DRAFT: 'Draft',
   INGESTED: 'Received',
   VALIDATED: 'Ready to submit',
   VALIDATION_FAILED: 'Failed checks',
   PENDING_CFO_APPROVAL: 'Awaiting approval',
   SUBMITTED_TO_ASP: 'Awaiting FTA',
-  ACCEPTED_BY_FTA: 'Accepted',
-  REJECTED_BY_FTA: 'Rejected',
+  ACCEPTED_BY_FTA: 'Cleared by FTA',
+  REJECTED_BY_FTA: 'Rejected by FTA',
   ARCHIVED: 'Archived',
+  DELIVERED_TO_BUYER: 'Delivered',
+  ACKNOWLEDGED: 'Acknowledged',
+  UNDER_QUERY: 'Under query',
+  ACCEPTED_BY_BUYER: 'Accepted by buyer',
+  REJECTED_COMMERCIAL: 'Disputed',
+  REJECTED_TECHNICAL: 'Technically rejected',
+  NOT_POSTED: 'Not posted',
+  POSTED: 'Posted',
+  BLOCKED: 'Blocked',
+  ON_HOLD: 'On hold',
+  EXHAUSTED: 'Exhausted',
+  EXPIRED: 'Expired',
   UPLOADED: 'Uploaded',
   PARSING: 'Reading file',
   STAGED_WITH_ERRORS: 'Needs attention',
@@ -289,4 +320,132 @@ export function formatDate(iso: string | null): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '—';
   return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+/**
+ * A modal, used by the directory forms and the AP verdict dialogs.
+ *
+ * Deliberately not a portal into document.body: nothing in this application
+ * renders a modal from inside a stacking context that would clip it, and the
+ * simpler tree is easier to test.
+ */
+export function Modal({
+  title,
+  onClose,
+  children,
+  footer,
+  width = 'md',
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  footer?: ReactNode;
+  width?: 'md' | 'lg' | 'xl';
+}) {
+  const widths = { md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl' };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4 sm:p-8"
+      // Clicking the backdrop closes; clicking the panel must not, so the
+      // handler checks the target is the backdrop itself rather than a child.
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        className={cx(
+          'w-full rounded-lg border border-slate-200 bg-white shadow-xl',
+          widths[width],
+        )}
+      >
+        <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+          <h2 className="text-sm font-semibold text-slate-800">{title}</h2>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded px-2 py-0.5 text-lg leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+          >
+            ×
+          </button>
+        </header>
+        <div className="max-h-[70vh] overflow-y-auto p-4">{children}</div>
+        {footer && (
+          <footer className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+            {footer}
+          </footer>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Title row with optional description and right-aligned actions. */
+export function PageHeader({
+  title,
+  description,
+  actions,
+}: {
+  title: string;
+  description?: string;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h1 className="text-lg font-semibold text-slate-900">{title}</h1>
+        {description && <p className="mt-0.5 text-sm text-slate-500">{description}</p>}
+      </div>
+      {actions && <div className="flex items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
+
+/**
+ * A headline number with a label. The dashboards are mostly these, and having
+ * them agree on size and colour is what makes a row of them readable at a
+ * glance rather than as six separate boxes.
+ */
+export function StatTile({
+  label,
+  value,
+  hint,
+  tone = 'neutral',
+  onClick,
+}: {
+  label: string;
+  value: string | number;
+  hint?: string;
+  tone?: 'neutral' | 'ok' | 'warn' | 'danger';
+  onClick?: () => void;
+}) {
+  const tones = {
+    neutral: 'text-slate-900',
+    ok: 'text-ok-700',
+    warn: 'text-warn-700',
+    danger: 'text-danger-700',
+  };
+
+  const content = (
+    <>
+      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
+      <div className={cx('mt-1 text-2xl font-semibold tabular-nums', tones[tone])}>
+        {typeof value === 'number' ? value.toLocaleString() : value}
+      </div>
+      {hint && <div className="mt-0.5 text-xs text-slate-500">{hint}</div>}
+    </>
+  );
+
+  if (onClick) {
+    return (
+      <button
+        onClick={onClick}
+        className="rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm transition-colors hover:border-brand-300 hover:bg-brand-50/40"
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">{content}</div>;
 }
