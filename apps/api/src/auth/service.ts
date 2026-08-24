@@ -3,9 +3,29 @@ import { isPlatformRole } from '@uae/contracts';
 import * as argon2 from 'argon2';
 import { authenticator } from 'otplib';
 import { config } from '../config.js';
-import { sql, withPlatformAccess, type Sql, type Tx } from '../db/client.js';
-import { generateToken, safeEqual, sha256Hex } from '../lib/crypto.js';
+import { jsonb, sql, withPlatformAccess, type Sql, type Tx } from '../db/client.js';
+import { generateToken, sha256Hex } from '../lib/crypto.js';
 import { badRequest, forbidden, tooManyRequests, unauthorized } from '../lib/errors.js';
+import { logger } from '../logger.js';
+import {
+  queueAccountLocked,
+  queuePasswordChanged,
+  queuePasswordReset,
+} from '../mail/outbox.js';
+import { consumeRateLimit } from './rateLimit.js';
+import {
+  FAILURE_WINDOW_MINUTES,
+  LOCKOUT_MINUTES,
+  MAX_FAILED_LOGINS,
+  PASSWORD_HISTORY_DEPTH,
+  RESET_REQUESTS_PER_HOUR,
+  consumeAuthToken,
+  inspectAuthToken,
+  issueAuthToken,
+  pushPasswordHistory,
+  reusesRecentPassword,
+  REDEEM_MESSAGES,
+} from './credentials.js';
 import { signAccessToken } from './tokens.js';
 
 /**
@@ -21,9 +41,6 @@ const ARGON_OPTIONS: argon2.Options = {
   timeCost: 2,
   parallelism: 1,
 };
-
-const MAX_FAILED_LOGINS = 8;
-const LOCKOUT_MINUTES = 15;
 
 export function hashPassword(plain: string): Promise<string> {
   return argon2.hash(plain, ARGON_OPTIONS);
@@ -49,19 +66,34 @@ interface UserRow {
   is_active: boolean;
   failed_logins: number;
   locked_until: Date | null;
+  is_locked: boolean;
+  last_failed_login_at: Date | null;
+  must_rotate_password: boolean;
   tenant_name: string | null;
   tenant_status: string | null;
 }
 
+/**
+ * The columns every session-building query needs.
+ *
+ * Written once because there are three of them — sign-in, refresh and invite
+ * acceptance — and a column added to one but not the others produces a session
+ * that behaves differently depending on how it was created.
+ */
+export const SESSION_USER_COLUMNS = `
+  u.id, u.tenant_id, u.email, u.full_name, u.role, u.password_hash,
+  u.mfa_secret, u.mfa_enabled, u.is_active, u.failed_logins, u.locked_until,
+  u.is_locked, u.last_failed_login_at, u.must_rotate_password,
+  t.legal_name_en AS tenant_name, t.status::text AS tenant_status
+`;
+
 async function findUserByEmail(email: string): Promise<UserRow | null> {
-  const rows = await sql()<UserRow[]>`
-    SELECT u.id, u.tenant_id, u.email, u.full_name, u.role, u.password_hash,
-           u.mfa_secret, u.mfa_enabled, u.is_active, u.failed_logins, u.locked_until,
-           t.legal_name_en AS tenant_name, t.status::text AS tenant_status
-    FROM users u
-    LEFT JOIN tenants t ON t.id = u.tenant_id
-    WHERE u.email = ${email.trim().toLowerCase()}
-  `;
+  const rows = await sql().unsafe<UserRow[]>(
+    `SELECT ${SESSION_USER_COLUMNS}
+     FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
+     WHERE u.email = $1`,
+    [email.trim().toLowerCase()],
+  );
   return rows[0] ?? null;
 }
 
@@ -75,6 +107,7 @@ export function toSessionUser(row: UserRow): SessionUser {
     tenantName: row.tenant_name,
     tenantStatus: (row.tenant_status as SessionUser['tenantStatus']) ?? null,
     mfaEnabled: row.mfa_enabled,
+    mustRotatePassword: row.must_rotate_password,
   };
 }
 
@@ -104,9 +137,21 @@ export async function login(
   }
 
   if (user.locked_until && user.locked_until > new Date()) {
+    const minutes = Math.max(1, Math.ceil((user.locked_until.getTime() - Date.now()) / 60_000));
     throw tooManyRequests(
-      'Too many failed sign-in attempts. Your account is locked for a few minutes.',
+      `Too many failed sign-in attempts. This account is locked for another ${minutes} minute${minutes === 1 ? '' : 's'}. You can unlock it immediately by resetting your password.`,
     );
+  }
+
+  // The lock has aged out. Clearing it here rather than waiting for a
+  // successful sign-in means the flag an administrator sees is the truth.
+  if (user.is_locked) {
+    await sql()`
+      UPDATE users SET is_locked = FALSE, locked_until = NULL, failed_logins = 0
+      WHERE id = ${user.id}
+    `;
+    user.is_locked = false;
+    user.failed_logins = 0;
   }
 
   if (!user.is_active) {
@@ -115,17 +160,35 @@ export async function login(
 
   const passwordOk = await verifyPassword(user.password_hash, password);
   if (!passwordOk) {
-    const failed = user.failed_logins + 1;
-    const lockUntil =
-      failed >= MAX_FAILED_LOGINS
-        ? new Date(Date.now() + LOCKOUT_MINUTES * 60_000)
-        : null;
+    // §4.4 counts failures "within a 15-minute window". Without this reset the
+    // counter would accumulate across months and lock out someone who mistypes
+    // their password once every few weeks.
+    const windowStart = Date.now() - FAILURE_WINDOW_MINUTES * 60_000;
+    const withinWindow =
+      user.last_failed_login_at !== null && user.last_failed_login_at.getTime() >= windowStart;
+
+    const failed = (withinWindow ? user.failed_logins : 0) + 1;
+    const lock = failed >= MAX_FAILED_LOGINS;
+    const lockUntil = lock ? new Date(Date.now() + LOCKOUT_MINUTES * 60_000) : null;
 
     await sql()`
-      UPDATE users
-      SET failed_logins = ${failed}, locked_until = ${lockUntil}
+      UPDATE users SET
+        failed_logins = ${failed},
+        last_failed_login_at = CURRENT_TIMESTAMP,
+        is_locked = ${lock},
+        locked_until = ${lockUntil}
       WHERE id = ${user.id}
     `;
+
+    if (lock) {
+      // §4.4 step 2: tell the account holder, since a burst of failures they
+      // did not cause is the only warning they get that someone is trying.
+      await notifyAccountLocked(user, context.ip ?? null);
+      throw tooManyRequests(
+        `Too many failed sign-in attempts. This account is locked for ${LOCKOUT_MINUTES} minutes. You can unlock it immediately by resetting your password.`,
+      );
+    }
+
     throw unauthorized('Incorrect email address or password.');
   }
 
@@ -143,8 +206,9 @@ export async function login(
   // A suspended tenant's staff can sign in — they need to see why — but every
   // action that would file an invoice is blocked further down the stack.
   await sql()`
-    UPDATE users
-    SET failed_logins = 0, locked_until = NULL, last_login_at = CURRENT_TIMESTAMP
+    UPDATE users SET
+      failed_logins = 0, locked_until = NULL, is_locked = FALSE,
+      last_failed_login_at = NULL, last_login_at = CURRENT_TIMESTAMP
     WHERE id = ${user.id}
   `;
 
@@ -159,6 +223,7 @@ async function issueSession(user: UserRow, context: { ip?: string; userAgent?: s
     email: user.email,
     role: user.role,
     tenantId: user.tenant_id,
+    mustRotatePassword: user.must_rotate_password,
   });
 
   const { token: refreshToken, hash } = generateToken(48);
@@ -203,14 +268,12 @@ export async function refreshSession(
 
   await sql()`UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE id = ${stored.id}`;
 
-  const users = await sql()<UserRow[]>`
-    SELECT u.id, u.tenant_id, u.email, u.full_name, u.role, u.password_hash,
-           u.mfa_secret, u.mfa_enabled, u.is_active, u.failed_logins, u.locked_until,
-           t.legal_name_en AS tenant_name, t.status::text AS tenant_status
-    FROM users u
-    LEFT JOIN tenants t ON t.id = u.tenant_id
-    WHERE u.id = ${stored.user_id}
-  `;
+  const users = await sql().unsafe<UserRow[]>(
+    `SELECT ${SESSION_USER_COLUMNS}
+     FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
+     WHERE u.id = $1`,
+    [stored.user_id],
+  );
 
   const user = users[0];
   if (!user || !user.is_active) throw unauthorized('This account is no longer active.');
@@ -266,47 +329,306 @@ export async function disableMfa(userId: string): Promise<void> {
   await sql()`UPDATE users SET mfa_enabled = FALSE, mfa_secret = NULL WHERE id = ${userId}`;
 }
 
-// --- Passwords & invites -----------------------------------------------------
 
+// --- Passwords, recovery & invitations (SRS v2.3 §4) -------------------------
+
+interface ContactRow {
+  id: string;
+  email: string;
+  full_name: string;
+  tenant_id: string | null;
+  tenant_name: string | null;
+  password_hash: string | null;
+  password_history: string[];
+  is_active: boolean;
+}
+
+const CONTACT_COLUMNS = `
+  u.id, u.email, u.full_name, u.tenant_id, u.password_hash, u.password_history, u.is_active,
+  t.legal_name_en AS tenant_name
+`;
+
+async function loadContact(userId: string): Promise<ContactRow | null> {
+  const rows = await sql().unsafe<ContactRow[]>(
+    `SELECT ${CONTACT_COLUMNS} FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
+     WHERE u.id = $1`,
+    [userId],
+  );
+  return rows[0] ?? null;
+}
+
+export function activationUrlFor(token: string): string {
+  return `${config().PORTAL_ORIGIN}/accept-invite?token=${token}`;
+}
+
+export function resetUrlFor(token: string): string {
+  return `${config().PORTAL_ORIGIN}/reset-password?token=${token}`;
+}
+
+/**
+ * §4.4 step 2 — tell the account holder their account was locked.
+ *
+ * Carries a reset link because §4.4 step 3 makes password reset the immediate
+ * way out of a lock, and the person reading this is, by definition, someone who
+ * cannot get in.
+ */
+export async function notifyAccountLocked(
+  user: { id: string; email: string; full_name: string; tenant_name: string | null; tenant_id: string | null },
+  ip: string | null,
+): Promise<void> {
+  try {
+    const { token } = await issueAuthToken(user.id, 'PASSWORD_RESET', { ip });
+    await queueAccountLocked({
+      to: user.email,
+      contactName: user.full_name,
+      lockMinutes: LOCKOUT_MINUTES,
+      ip,
+      resetUrl: resetUrlFor(token),
+      userId: user.id,
+      tenantId: user.tenant_id,
+    });
+  } catch (err) {
+    // A lock that cannot be announced is still a lock. Never let the mail path
+    // turn a failed sign-in into a 500.
+    logger.error({ err, userId: user.id }, 'could not send the account lock alert');
+  }
+}
+
+/**
+ * Set a new password and deal with every consequence of having done so.
+ *
+ * One place for all three routes that can change a secret — in-session change,
+ * reset by link, and invitation acceptance — because the consequences are the
+ * part that gets forgotten: the history entry, clearing the rotation flag,
+ * releasing the lock, ending other sessions, and telling the account holder.
+ */
+async function applyNewPassword(params: {
+  contact: ContactRow;
+  newPassword: string;
+  ip: string | null;
+  /** Sessions to end. A reset always ends all of them; a change may keep one. */
+  keepRefreshTokenHash?: string | null;
+  revokeSessions: boolean;
+  /** Invitation acceptance also turns the account on. */
+  activate?: boolean;
+  fullName?: string;
+}): Promise<void> {
+  const { contact, newPassword, ip } = params;
+
+  const history = Array.isArray(contact.password_history) ? contact.password_history : [];
+  // §4.2: the current password counts as generation one, so it is checked too —
+  // otherwise "change" could be satisfied by retyping what is already set.
+  const known = contact.password_hash ? [contact.password_hash, ...history] : history;
+
+  if (await reusesRecentPassword(newPassword, known)) {
+    throw badRequest(
+      `Choose a password you have not used before. The last ${PASSWORD_HISTORY_DEPTH} cannot be reused.`,
+    );
+  }
+
+  const hash = await hashPassword(newPassword);
+  const nextHistory = contact.password_hash
+    ? pushPasswordHistory(history, contact.password_hash)
+    : history;
+
+  await sql()`
+    UPDATE users SET
+      password_hash            = ${hash},
+      password_history         = ${jsonb(sql(), nextHistory)},
+      password_last_changed_at = CURRENT_TIMESTAMP,
+      must_rotate_password     = FALSE,
+      failed_logins            = 0,
+      last_failed_login_at     = NULL,
+      is_locked                = FALSE,
+      locked_until             = NULL,
+      -- Both only move on invitation acceptance; every other caller passes the
+      -- value already stored, which keeps this one statement for all three
+      -- routes without stitching SQL fragments together conditionally.
+      is_active                = ${params.activate ? true : contact.is_active},
+      full_name                = ${params.fullName ?? contact.full_name}
+    WHERE id = ${contact.id}
+  `;
+
+  if (params.revokeSessions) {
+    if (params.keepRefreshTokenHash) {
+      await sql()`
+        UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP
+        WHERE user_id = ${contact.id} AND revoked_at IS NULL
+          AND token_hash <> ${params.keepRefreshTokenHash}
+      `;
+    } else {
+      await revokeAllSessions(contact.id);
+    }
+  }
+
+  // Template D. Not awaited for its outcome beyond queueing: a confirmation
+  // that cannot be sent must not undo a password the user has already set.
+  await queuePasswordChanged({
+    to: contact.email,
+    contactName: contact.full_name,
+    companyName: contact.tenant_name,
+    changedAt: new Date(),
+    ip,
+    userId: contact.id,
+    tenantId: contact.tenant_id,
+  });
+}
+
+/** §4.2 — authenticated in-session change. */
 export async function changePassword(
   userId: string,
   currentPassword: string,
   newPassword: string,
+  options: { ip?: string | null; signOutOtherDevices?: boolean; currentRefreshToken?: string } = {},
 ): Promise<void> {
-  const rows = await sql()<{ password_hash: string | null }[]>`
-    SELECT password_hash FROM users WHERE id = ${userId}
-  `;
-  const hash = rows[0]?.password_hash;
-  if (!hash || !(await verifyPassword(hash, currentPassword))) {
+  const contact = await loadContact(userId);
+
+  // §4.2 step 2: the re-authentication gate. Verified before the new secret is
+  // even looked at, so an unattended terminal cannot be used to take an account.
+  if (!contact?.password_hash || !(await verifyPassword(contact.password_hash, currentPassword))) {
     throw badRequest('Your current password is not correct.');
   }
 
-  await sql()`UPDATE users SET password_hash = ${await hashPassword(newPassword)} WHERE id = ${userId}`;
-
-  // Changing a password ends every other session — that is the whole point of
-  // changing it after a suspected compromise.
-  await revokeAllSessions(userId);
+  await applyNewPassword({
+    contact,
+    newPassword,
+    ip: options.ip ?? null,
+    revokeSessions: options.signOutOtherDevices !== false,
+    keepRefreshTokenHash: options.currentRefreshToken
+      ? sha256Hex(options.currentRefreshToken)
+      : null,
+  });
 }
 
-/** How long an invitation stays usable. Quoted in the e-mail that carries it. */
-export const INVITE_TTL_DAYS = 7;
+/**
+ * §4.1 — self-service recovery request.
+ *
+ * Returns nothing the caller can use to tell whether the address exists. The
+ * anti-enumeration requirement is the whole design here: every branch that
+ * could leak — unknown address, deactivated account, rate limit reached — ends
+ * in the same silence, and the differences are recorded in the log instead.
+ */
+export async function requestPasswordReset(email: string, ip: string | null): Promise<void> {
+  const address = email.trim().toLowerCase();
+
+  // §4.1 step 3: per address and per IP, so neither a single mailbox nor a
+  // single origin can be used to flood.
+  const limits = await Promise.all([
+    consumeRateLimit(`pwreset:email:${address}`, RESET_REQUESTS_PER_HOUR, 3600),
+    consumeRateLimit(`pwreset:ip:${ip ?? 'unknown'}`, RESET_REQUESTS_PER_HOUR, 3600),
+  ]);
+
+  if (limits.some((l) => !l.allowed)) {
+    logger.warn({ email: address, ip }, 'password reset rate limit reached');
+    return;
+  }
+
+  const rows = await sql().unsafe<ContactRow[]>(
+    `SELECT ${CONTACT_COLUMNS} FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
+     WHERE u.email = $1`,
+    [address],
+  );
+
+  const contact = rows[0];
+  if (!contact || !contact.is_active) {
+    logger.info({ email: address, ip }, 'password reset requested for an unusable account');
+    return;
+  }
+
+  const { token } = await issueAuthToken(contact.id, 'PASSWORD_RESET', { ip });
+
+  await queuePasswordReset({
+    to: contact.email,
+    contactName: contact.full_name,
+    companyName: contact.tenant_name,
+    resetUrl: resetUrlFor(token),
+    userId: contact.id,
+    tenantId: contact.tenant_id,
+  });
+
+  logger.info({ userId: contact.id }, 'password reset link issued');
+}
+
+/** Whether a reset link is still good, checked before asking for a password. */
+export async function checkResetToken(
+  token: string,
+): Promise<{ valid: boolean; email: string | null; message: string }> {
+  const result = await inspectAuthToken(token, 'PASSWORD_RESET');
+
+  if (!result.ok) {
+    return { valid: false, email: null, message: REDEEM_MESSAGES[result.reason] };
+  }
+  return { valid: true, email: result.row.email, message: 'Choose a new password.' };
+}
+
+/** §4.1 steps 6 and 7 — redeem the link and set the new secret. */
+export async function resetPassword(
+  token: string,
+  newPassword: string,
+  ip: string | null,
+): Promise<void> {
+  const result = await inspectAuthToken(token, 'PASSWORD_RESET');
+  if (!result.ok) throw badRequest(REDEEM_MESSAGES[result.reason]);
+
+  const contact = await loadContact(result.row.userId);
+  if (!contact) throw badRequest('The account for this link no longer exists.');
+
+  await applyNewPassword({
+    contact,
+    newPassword,
+    ip,
+    // A reset is the response to a lost or compromised password, so every
+    // session goes — including, deliberately, any the attacker holds.
+    revokeSessions: true,
+  });
+
+  await consumeAuthToken(result.row.id);
+}
+
+/** §4.3 — an administrator holds an account at the rotation gate. */
+export async function setMustRotatePassword(userId: string, required: boolean): Promise<void> {
+  await sql()`UPDATE users SET must_rotate_password = ${required} WHERE id = ${userId}`;
+}
 
 /**
- * Issue an invitation token for a user.
+ * §4.3 — an administrator sends a reset link without ever seeing a password.
+ *
+ * Distinct from `requestPasswordReset` in that the caller is entitled to know
+ * whether it worked: there is no address to enumerate when an administrator is
+ * acting on a user already listed on their own screen.
+ */
+export async function sendAdminPasswordReset(
+  userId: string,
+  ip: string | null,
+): Promise<{ sent: boolean; reason?: string }> {
+  const contact = await loadContact(userId);
+  if (!contact) throw badRequest('That user no longer exists.');
+
+  const { token } = await issueAuthToken(contact.id, 'PASSWORD_RESET', { ip });
+
+  const result = await queuePasswordReset({
+    to: contact.email,
+    contactName: contact.full_name,
+    companyName: contact.tenant_name,
+    resetUrl: resetUrlFor(token),
+    userId: contact.id,
+    tenantId: contact.tenant_id,
+  });
+
+  return { sent: result.queued, reason: result.reason };
+}
+
+// --- Invitations --------------------------------------------------------------
+
+/**
+ * Issue an activation token for a user.
  *
  * Pass the surrounding transaction when the user is being created in one:
  * without it this runs on a different pooled connection, which cannot see the
- * uncommitted row and fails on `user_invites.user_id`.
+ * uncommitted row and fails on `auth_tokens.user_id`.
  */
 export async function createInvite(userId: string, client: Sql | Tx = sql()): Promise<string> {
-  const { token, hash } = generateToken(32);
-  const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60_000);
-
-  await client`
-    INSERT INTO user_invites (user_id, token_hash, expires_at)
-    VALUES (${userId}, ${hash}, ${expiresAt})
-  `;
-
+  const { token } = await issueAuthToken(userId, 'ACTIVATION_INVITE', { client });
   return token;
 }
 
@@ -314,45 +636,37 @@ export async function acceptInvite(
   token: string,
   fullName: string,
   password: string,
+  ip: string | null = null,
 ): Promise<SessionUser> {
-  const hash = sha256Hex(token);
+  const result = await inspectAuthToken(token, 'ACTIVATION_INVITE');
+  if (!result.ok) throw badRequest(REDEEM_MESSAGES[result.reason]);
 
-  return withPlatformAccess(async (tx) => {
-    const invites = await tx<{ id: string; user_id: string; expires_at: Date; accepted_at: Date | null }[]>`
-      SELECT id, user_id, expires_at, accepted_at
-      FROM user_invites WHERE token_hash = ${hash}
-      FOR UPDATE
-    `;
+  const contact = await loadContact(result.row.userId);
+  if (!contact) throw badRequest('The account for this invitation no longer exists.');
 
-    const invite = invites[0];
-    // Compare through safeEqual as well as the indexed lookup so that a partial
-    // token cannot be distinguished by response time.
-    if (!invite || !safeEqual(hash, sha256Hex(token))) {
-      throw badRequest('This invitation link is not valid.');
-    }
-    if (invite.accepted_at) throw badRequest('This invitation has already been used.');
-    if (invite.expires_at < new Date()) throw badRequest('This invitation has expired.');
-
-    await tx`
-      UPDATE users
-      SET full_name = ${fullName}, password_hash = ${await hashPassword(password)}, is_active = TRUE
-      WHERE id = ${invite.user_id}
-    `;
-    await tx`UPDATE user_invites SET accepted_at = CURRENT_TIMESTAMP WHERE id = ${invite.id}`;
-
-    const users = await tx<UserRow[]>`
-      SELECT u.id, u.tenant_id, u.email, u.full_name, u.role, u.password_hash,
-             u.mfa_secret, u.mfa_enabled, u.is_active, u.failed_logins, u.locked_until,
-             t.legal_name_en AS tenant_name, t.status::text AS tenant_status
-      FROM users u
-      LEFT JOIN tenants t ON t.id = u.tenant_id
-      WHERE u.id = ${invite.user_id}
-    `;
-
-    const user = users[0];
-    if (!user) throw badRequest('The account for this invitation no longer exists.');
-    return toSessionUser(user);
+  await applyNewPassword({
+    contact,
+    newPassword: password,
+    ip,
+    revokeSessions: false, // A brand-new account has no sessions to end.
+    activate: true,
+    fullName,
   });
+
+  await consumeAuthToken(result.row.id);
+
+  const users = await withPlatformAccess((tx) =>
+    tx.unsafe<UserRow[]>(
+      `SELECT ${SESSION_USER_COLUMNS}
+       FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
+       WHERE u.id = $1`,
+      [contact.id],
+    ),
+  );
+
+  const user = users[0];
+  if (!user) throw badRequest('The account for this invitation no longer exists.');
+  return toSessionUser(user);
 }
 
 export { isPlatformRole };

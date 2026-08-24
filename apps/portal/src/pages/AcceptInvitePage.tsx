@@ -1,5 +1,7 @@
+import { isPasswordAcceptable } from '@uae/contracts';
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { NewPasswordFields } from '../components/PasswordFields';
 import { Alert, Button, Field, inputClass } from '../components/ui';
 import { ApiError, api } from '../lib/api';
 
@@ -29,8 +31,8 @@ export function AcceptInvitePage() {
       setError('The two passwords do not match.');
       return;
     }
-    if (password.length < 12) {
-      setError('Use at least 12 characters.');
+    if (!isPasswordAcceptable(password)) {
+      setError('Your password does not meet the requirements listed below.');
       return;
     }
 
@@ -89,27 +91,13 @@ export function AcceptInvitePage() {
                 />
               </Field>
 
-              <Field label="Password" hint="At least 12 characters." required>
-                <input
-                  className={inputClass}
-                  type="password"
-                  value={password}
-                  autoComplete="new-password"
-                  required
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </Field>
-
-              <Field label="Confirm password" required>
-                <input
-                  className={inputClass}
-                  type="password"
-                  value={confirm}
-                  autoComplete="new-password"
-                  required
-                  onChange={(e) => setConfirm(e.target.value)}
-                />
-              </Field>
+              <NewPasswordFields
+                password={password}
+                confirmation={confirm}
+                onPasswordChange={setPassword}
+                onConfirmationChange={setConfirm}
+                label="Password"
+              />
 
               <Button
                 type="submit"

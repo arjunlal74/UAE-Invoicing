@@ -5,8 +5,12 @@ import {
 } from '@uae/contracts';
 import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit } from '../../audit/audit.js';
-import { createInvite } from '../../auth/service.js';
-import { queueInvitation } from '../../mail/outbox.js';
+import {
+  createInvite,
+  sendAdminPasswordReset,
+  setMustRotatePassword,
+} from '../../auth/service.js';
+import { queueActivation } from '../../mail/outbox.js';
 import { config } from '../../config.js';
 import { jsonb, withPlatformAccess } from '../../db/client.js';
 import { requireContext, requirePartner } from '../../http/context.js';
@@ -153,8 +157,9 @@ export function registerPartnerRoutes(app: FastifyInstance) {
       const body = CreateSubTenantRequest.parse(request.body);
 
       const result = await withPlatformAccess(async (tx) => {
-        const partners = await tx<{ tenant_type: string; status: string }[]>`
-          SELECT tenant_type::text, status::text FROM tenants WHERE id = ${tenantId}
+        const partners = await tx<{ tenant_type: string; status: string; legal_name_en: string }[]>`
+          SELECT tenant_type::text, status::text, legal_name_en
+          FROM tenants WHERE id = ${tenantId}
         `;
         const partner = partners[0];
         if (!partner) throw notFound('Partner');
@@ -196,6 +201,7 @@ export function registerPartnerRoutes(app: FastifyInstance) {
 
         return {
           subTenantId,
+          partnerName: partner.legal_name_en,
           inviteUserId: users[0]!.id,
           inviteToken: await createInvite(users[0]!.id, tx),
         };
@@ -216,12 +222,15 @@ export function registerPartnerRoutes(app: FastifyInstance) {
 
       const inviteUrl = `${config().PORTAL_ORIGIN}/accept-invite?token=${result.inviteToken}`;
 
-      const mail = await queueInvitation({
+      // Template B rather than A: this client was provisioned by their
+      // accountant, so the mail names the partner and points setup questions at
+      // them instead of at a support desk that has never heard of the client.
+      const mail = await queueActivation({
         to: body.adminEmail,
-        fullName: body.adminFullName,
-        role: 'COMPANY_ADMIN',
-        inviteUrl,
-        organisation: body.legalNameEn,
+        contactName: body.adminFullName,
+        companyName: body.legalNameEn,
+        activationUrl: inviteUrl,
+        partner: { name: result.partnerName, contactEmail: ctx.email },
         userId: result.inviteUserId,
         tenantId: result.subTenantId,
       });
@@ -239,4 +248,69 @@ export function registerPartnerRoutes(app: FastifyInstance) {
       });
     },
   );
+
+  // --- Credential actions on sub-tenant users (SRS v2.3 §4.3) --------------
+  //
+  // A partner administers its clients' accounts, so it gets the same two
+  // write-only actions a company admin has — but only over users belonging to
+  // a sub-tenant it actually owns, which is what the parent check enforces.
+
+  app.post(
+    '/api/v1/partner/users/:id/send-reset',
+    { preHandler: requirePartner() },
+    async (request, reply) => {
+      const ctx = requireContext(request);
+      const { id } = request.params as { id: string };
+
+      await assertUserUnderPartner(id, partnerTenantId(ctx));
+      const result = await sendAdminPasswordReset(id, ctx.ip ?? null);
+
+      await audit(actorFromContext(ctx), {
+        action: 'PASSWORD_RESET_REQUESTED',
+        resourceType: 'USER',
+        resourceId: id,
+        changes: { by: 'channel partner', emailed: result.sent },
+      });
+
+      return reply.send(result);
+    },
+  );
+
+  app.post(
+    '/api/v1/partner/users/:id/force-rotation',
+    { preHandler: requirePartner() },
+    async (request, reply) => {
+      const ctx = requireContext(request);
+      const { id } = request.params as { id: string };
+
+      await assertUserUnderPartner(id, partnerTenantId(ctx));
+      await setMustRotatePassword(id, true);
+
+      await audit(actorFromContext(ctx), {
+        action: 'PASSWORD_ROTATION_REQUIRED',
+        resourceType: 'USER',
+        resourceId: id,
+      });
+
+      return reply.status(204).send();
+    },
+  );
+}
+
+/**
+ * The target must belong to a sub-tenant of this partner.
+ *
+ * Checked through tenants.parent_tenant_id rather than by trusting a tenant id
+ * from the request, so a partner cannot reset an unrelated company's users by
+ * guessing a user id.
+ */
+async function assertUserUnderPartner(userId: string, partnerId: string): Promise<void> {
+  const rows = await withPlatformAccess(
+    (tx) => tx<{ id: string }[]>`
+      SELECT u.id FROM users u
+      JOIN tenants t ON t.id = u.tenant_id
+      WHERE u.id = ${userId} AND t.parent_tenant_id = ${partnerId}
+    `,
+  );
+  if (!rows[0]) throw notFound('User');
 }

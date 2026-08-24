@@ -104,6 +104,17 @@ export function AppLayout() {
                 {user?.tenantName ?? 'Platform'} · {user ? ROLE_LABELS[user.role] : ''}
               </div>
             </div>
+            <NavLink
+              to="/security"
+              className={({ isActive }) =>
+                cx(
+                  'rounded border border-white/30 px-2.5 py-1 text-xs hover:bg-white/10',
+                  isActive && 'bg-white/20',
+                )
+              }
+            >
+              Security
+            </NavLink>
             <button
               onClick={signOut}
               className="rounded border border-white/30 px-2.5 py-1 text-xs hover:bg-white/10"

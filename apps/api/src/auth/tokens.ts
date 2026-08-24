@@ -15,6 +15,13 @@ export interface AccessTokenClaims {
   email: string;
   role: Role;
   tenantId: string | null;
+  /**
+   * SRS v2.3 §4.3. Carried in the token rather than read from the database on
+   * every request because the specification makes the flag bite "upon the
+   * user's next login" — so the value at issue time is the correct one, and a
+   * per-request lookup would buy nothing but latency.
+   */
+  mustRotatePassword?: boolean;
 }
 
 function accessKey(): Uint8Array {
@@ -27,6 +34,7 @@ export async function signAccessToken(claims: AccessTokenClaims): Promise<string
     email: claims.email,
     role: claims.role,
     tenantId: claims.tenantId,
+    mustRotatePassword: claims.mustRotatePassword ?? false,
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(claims.sub)
@@ -49,6 +57,7 @@ export async function verifyAccessToken(token: string): Promise<AccessTokenClaim
       email: String(payload.email),
       role: payload.role as Role,
       tenantId: (payload.tenantId as string | null) ?? null,
+      mustRotatePassword: payload.mustRotatePassword === true,
     };
   } catch {
     throw unauthorized('Your session has expired. Please sign in again.');

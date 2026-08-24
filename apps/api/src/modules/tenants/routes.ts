@@ -16,7 +16,7 @@ import { jsonb, sql, withPlatformAccess } from '../../db/client.js';
 import { requireAuth, requireContext, requirePlatform } from '../../http/context.js';
 import { badRequest, forbidden, notFound } from '../../lib/errors.js';
 import { logger } from '../../logger.js';
-import { queueInvitation } from '../../mail/outbox.js';
+import { queueActivation } from '../../mail/outbox.js';
 
 /**
  * Tenant management — the admin panel's core.
@@ -184,12 +184,13 @@ export function registerTenantRoutes(app: FastifyInstance) {
     if (result.inviteToken) {
       inviteUrl = `${config().PORTAL_ORIGIN}/accept-invite?token=${result.inviteToken}`;
 
-      const mail = await queueInvitation({
+      // Template A: a direct tenant or a channel partner, provisioned by the
+      // platform itself rather than by an intermediary.
+      const mail = await queueActivation({
         to: body.adminEmail!,
-        fullName: body.adminFullName!,
-        role: result.inviteRole ?? 'COMPANY_ADMIN',
-        inviteUrl,
-        organisation: body.legalNameEn,
+        contactName: body.adminFullName!,
+        companyName: body.legalNameEn,
+        activationUrl: inviteUrl,
         userId: result.inviteUserId,
         tenantId: result.tenantId,
       });

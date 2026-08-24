@@ -29,6 +29,7 @@ export function AdminStaffPage() {
   });
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-staff'],
@@ -50,6 +51,26 @@ export function AdminStaffPage() {
 
   const canInvite = can(user, 'platform.manage');
 
+  const credential = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: 'send-reset' | 'force-rotation' }) =>
+      api<{ sent?: boolean; reason?: string } | undefined>(
+        `/api/v1/admin/users/${id}/${action}`,
+        { method: 'POST' },
+      ).then((result) => ({ action, result })),
+    onSuccess: ({ action, result }) => {
+      setNotice(
+        action === 'force-rotation'
+          ? 'That user must choose a new password the next time they sign in.'
+          : result?.sent
+            ? 'A password reset link has been e-mailed.'
+            : (result?.reason ?? 'The reset link could not be e-mailed.'),
+      );
+      queryClient.invalidateQueries({ queryKey: ['admin-staff'] });
+    },
+    onError: (err) =>
+      setNotice(err instanceof ApiError ? err.message : 'That action could not be completed.'),
+  });
+
   return (
     <div className="mx-auto max-w-4xl space-y-4">
       <h1 className="text-lg font-semibold text-slate-900">Platform staff</h1>
@@ -60,6 +81,7 @@ export function AdminStaffPage() {
         </Alert>
       )}
       {error && <Alert kind="danger">{error}</Alert>}
+      {notice && <Alert kind="info">{notice}</Alert>}
 
       <Card title="Accounts">
         {isLoading ? (
@@ -73,6 +95,7 @@ export function AdminStaffPage() {
                 <th className="pb-2 font-medium">Role</th>
                 <th className="pb-2 font-medium">2FA</th>
                 <th className="pb-2 font-medium">Last sign-in</th>
+                <th className="pb-2 font-medium"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -98,6 +121,34 @@ export function AdminStaffPage() {
                     )}
                   </td>
                   <td className="py-2 text-slate-500">{formatDateTime(staff.lastLoginAt)}</td>
+                  <td className="py-2">
+                    {/* SRS v2.3 §4.3. Neither action reveals or sets a
+                        password — an administrator can only send a link or
+                        require the user to choose a new secret. */}
+                    {canInvite && staff.id !== user?.id && !staff.invitePending && (
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          size="sm"
+                          disabled={credential.isPending}
+                          onClick={() =>
+                            credential.mutate({ id: staff.id, action: 'send-reset' })
+                          }
+                        >
+                          Send reset link
+                        </Button>
+                        <Button
+                          size="sm"
+                          disabled={credential.isPending}
+                          title="The user must set a new password at their next sign-in."
+                          onClick={() =>
+                            credential.mutate({ id: staff.id, action: 'force-rotation' })
+                          }
+                        >
+                          Require change
+                        </Button>
+                      </div>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

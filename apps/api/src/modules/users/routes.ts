@@ -8,8 +8,13 @@ import {
 } from '@uae/contracts';
 import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit } from '../../audit/audit.js';
-import { createInvite, revokeAllSessions } from '../../auth/service.js';
-import { queueInvitation } from '../../mail/outbox.js';
+import {
+  createInvite,
+  revokeAllSessions,
+  sendAdminPasswordReset,
+  setMustRotatePassword,
+} from '../../auth/service.js';
+import { queueActivation } from '../../mail/outbox.js';
 import { config } from '../../config.js';
 import { sql } from '../../db/client.js';
 import { requireAuth, requireContext, requirePlatform } from '../../http/context.js';
@@ -93,12 +98,11 @@ export function registerUserRoutes(app: FastifyInstance) {
       SELECT legal_name_en FROM tenants WHERE id = ${ctx.tenantId}
     `;
 
-    const mail = await queueInvitation({
+    const mail = await queueActivation({
       to: body.email,
-      fullName: body.fullName,
-      role: body.role,
-      inviteUrl,
-      organisation: organisation[0]?.legal_name_en ?? null,
+      contactName: body.fullName,
+      companyName: organisation[0]?.legal_name_en ?? 'your organisation',
+      activationUrl: inviteUrl,
       userId,
       tenantId: ctx.tenantId,
     });
@@ -185,12 +189,11 @@ export function registerUserRoutes(app: FastifyInstance) {
         SELECT legal_name_en FROM tenants WHERE id = ${ctx.tenantId}
       `;
 
-      const mail = await queueInvitation({
+      const mail = await queueActivation({
         to: user.email,
-        fullName: user.full_name,
-        role: user.role,
-        inviteUrl,
-        organisation: organisation[0]?.legal_name_en ?? null,
+        contactName: user.full_name,
+        companyName: organisation[0]?.legal_name_en ?? 'your organisation',
+        activationUrl: inviteUrl,
         userId: id,
         tenantId: ctx.tenantId,
       });
@@ -228,12 +231,11 @@ export function registerUserRoutes(app: FastifyInstance) {
     const token = await createInvite(userId);
     const inviteUrl = `${config().PORTAL_ORIGIN}/accept-invite?token=${token}`;
 
-    const mail = await queueInvitation({
+    const mail = await queueActivation({
       to: body.email,
-      fullName: body.fullName,
-      role: body.role,
-      inviteUrl,
-      organisation: 'the E-Invoicing platform team',
+      contactName: body.fullName,
+      companyName: config().PLATFORM_NAME,
+      activationUrl: inviteUrl,
       userId,
     });
 
@@ -265,4 +267,110 @@ export function registerUserRoutes(app: FastifyInstance) {
       return reply.send({ items: rows.map(toSummary), total: rows.length, page: 1, pageSize: rows.length });
     },
   );
+
+  // --- Administrator-initiated credential actions (SRS v2.3 §4.3) ----------
+  //
+  // Both are deliberately write-only with respect to the secret itself. §4.3
+  // step 3: "Under no circumstances can an Administrator define or view a
+  // clear-text password for any user account." There is therefore no endpoint
+  // anywhere that accepts a password on another user's behalf — an
+  // administrator can only send a link, or require a rotation.
+
+  /** A company admin acting on a user inside their own tenant. */
+  app.post(
+    '/api/v1/tenant/users/:id/send-reset',
+    { preHandler: requireAuth() },
+    async (request, reply) => {
+      const ctx = requireContext(request);
+      const { id } = request.params as { id: string };
+      if (!ctx.tenantId || !can(ctx.role, 'tenant.users.manage')) throw forbidden();
+
+      await assertUserInTenant(id, ctx.tenantId);
+      const result = await sendAdminPasswordReset(id, ctx.ip ?? null);
+
+      await audit(actorFromContext(ctx), {
+        action: 'PASSWORD_RESET_REQUESTED',
+        resourceType: 'USER',
+        resourceId: id,
+        tenantId: ctx.tenantId,
+        changes: { by: 'company administrator', emailed: result.sent },
+      });
+
+      return reply.send(result);
+    },
+  );
+
+  app.post(
+    '/api/v1/tenant/users/:id/force-rotation',
+    { preHandler: requireAuth() },
+    async (request, reply) => {
+      const ctx = requireContext(request);
+      const { id } = request.params as { id: string };
+      if (!ctx.tenantId || !can(ctx.role, 'tenant.users.manage')) throw forbidden();
+      if (id === ctx.userId) throw badRequest('You cannot lock yourself out of your own account.');
+
+      await assertUserInTenant(id, ctx.tenantId);
+      await setMustRotatePassword(id, true);
+
+      await audit(actorFromContext(ctx), {
+        action: 'PASSWORD_ROTATION_REQUIRED',
+        resourceType: 'USER',
+        resourceId: id,
+        tenantId: ctx.tenantId,
+      });
+
+      return reply.status(204).send();
+    },
+  );
+
+  /** The host global admin, who may act on any account. */
+  app.post(
+    '/api/v1/admin/users/:id/send-reset',
+    { preHandler: requirePlatform() },
+    async (request, reply) => {
+      const ctx = requireContext(request);
+      const { id } = request.params as { id: string };
+      if (!can(ctx.role, 'platform.manage')) throw forbidden();
+
+      const result = await sendAdminPasswordReset(id, ctx.ip ?? null);
+
+      await audit(actorFromContext(ctx), {
+        action: 'PASSWORD_RESET_REQUESTED',
+        resourceType: 'USER',
+        resourceId: id,
+        changes: { by: 'global administrator', emailed: result.sent },
+      });
+
+      return reply.send(result);
+    },
+  );
+
+  app.post(
+    '/api/v1/admin/users/:id/force-rotation',
+    { preHandler: requirePlatform() },
+    async (request, reply) => {
+      const ctx = requireContext(request);
+      const { id } = request.params as { id: string };
+      if (!can(ctx.role, 'platform.manage')) throw forbidden();
+      if (id === ctx.userId) throw badRequest('You cannot lock yourself out of your own account.');
+
+      await setMustRotatePassword(id, true);
+
+      await audit(actorFromContext(ctx), {
+        action: 'PASSWORD_ROTATION_REQUIRED',
+        resourceType: 'USER',
+        resourceId: id,
+      });
+
+      return reply.status(204).send();
+    },
+  );
+}
+
+/** Refuses to act on a user who belongs to somebody else's tenant. */
+async function assertUserInTenant(userId: string, tenantId: string): Promise<void> {
+  const rows = await sql()<{ id: string }[]>`
+    SELECT id FROM users WHERE id = ${userId} AND tenant_id = ${tenantId}
+  `;
+  if (!rows[0]) throw notFound('User');
 }

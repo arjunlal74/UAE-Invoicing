@@ -1,9 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppLayout } from './components/AppLayout';
+import { PasswordRotationGate } from './components/PasswordRotationGate';
 import { ApiError } from './lib/api';
 import { AcceptInvitePage } from './pages/AcceptInvitePage';
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { LoginPage } from './pages/LoginPage';
+import { SecurityPage } from './pages/SecurityPage';
 import { AdminAuditPage } from './pages/admin/AdminAuditPage';
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
 import { AdminMailPage } from './pages/admin/AdminMailPage';
@@ -42,7 +46,11 @@ const queryClient = new QueryClient({
  * to and sends anyone else to their own home. A user who lands on the wrong URL
  * has not done anything wrong, so they get redirected rather than an error.
  */
-type Area = 'tenant' | 'platform' | 'partner';
+/**
+ * 'any' is for screens that belong to the person rather than to a panel —
+ * changing your own password is the same act whichever console you work in.
+ */
+type Area = 'tenant' | 'platform' | 'partner' | 'any';
 
 function areaOf(user: ReturnType<typeof useAuthStore.getState>['user']): Area {
   if (isPlatformUser(user)) return 'platform';
@@ -55,7 +63,10 @@ function RequireAuth({ children, area = 'tenant' }: { children: JSX.Element; are
   const token = useAuthStore((s) => s.accessToken);
 
   if (!token || !user) return <Navigate to="/login" replace />;
-  if (areaOf(user) !== area) return <Navigate to={homePathFor(user)} replace />;
+  if (user.mustRotatePassword) return <PasswordRotationGate />;
+  if (area !== 'any' && areaOf(user) !== area) {
+    return <Navigate to={homePathFor(user)} replace />;
+  }
 
   return children;
 }
@@ -79,6 +90,8 @@ export function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/accept-invite" element={<AcceptInvitePage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
 
         {/* Merchant */}
         <Route
@@ -103,6 +116,18 @@ export function App() {
               </RequirePermission>
             }
           />
+
+        </Route>
+
+        {/* Available to every signed-in role */}
+        <Route
+          element={
+            <RequireAuth area="any">
+              <AppLayout />
+            </RequireAuth>
+          }
+        >
+          <Route path="/security" element={<SecurityPage />} />
         </Route>
 
         {/* Channel partner */}

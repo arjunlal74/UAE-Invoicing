@@ -171,7 +171,12 @@ export async function sendThrough(
 
 // --- Delivery log ------------------------------------------------------------
 
-export type MailKind = 'USER_INVITE' | 'TEST';
+export type MailKind =
+  | 'USER_INVITE'
+  | 'TEST'
+  | 'PASSWORD_RESET'
+  | 'PASSWORD_CHANGED'
+  | 'SECURITY_ALERT';
 
 export async function recordQueued(params: {
   kind: MailKind;

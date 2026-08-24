@@ -1,7 +1,7 @@
 import type { Permission, Role } from '@uae/contracts';
 import { ROLE_PERMISSIONS, can, canAny } from '@uae/contracts';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { forbidden, unauthorized } from '../lib/errors.js';
+import { forbidden, rotationRequired, unauthorized } from '../lib/errors.js';
 import { verifyAccessToken } from '../auth/tokens.js';
 
 /**
@@ -15,6 +15,8 @@ export interface RequestContext {
   tenantId: string | null;
   ip: string | undefined;
   userAgent: string | undefined;
+  /** SRS v2.3 §4.3: the account is held at the rotation gate. */
+  mustRotatePassword: boolean;
 }
 
 declare module 'fastify' {
@@ -60,8 +62,28 @@ export async function authenticate(request: FastifyRequest): Promise<void> {
     tenantId: claims.tenantId,
     ip: request.ip,
     userAgent: request.headers['user-agent'],
+    mustRotatePassword: claims.mustRotatePassword === true,
   };
+
+  // §4.3: "the application restricts access to an isolated modal forcing the
+  // user to establish a permanent secret before any tax data can be accessed".
+  // Enforced here rather than in the portal alone — a client-side gate on a
+  // tax record is decoration, not a control.
+  if (request.ctx.mustRotatePassword && !ROTATION_EXEMPT.has(request.routeOptions.url ?? '')) {
+    throw rotationRequired();
+  }
 }
+
+/**
+ * Routes reachable while the rotation gate is closed: reading your own identity
+ * so the portal can render the modal, setting the new password, and leaving.
+ */
+const ROTATION_EXEMPT = new Set([
+  '/api/v1/auth/me',
+  '/api/v1/auth/change-password',
+  '/api/v1/auth/logout',
+  '/api/v1/auth/refresh',
+]);
 
 /**
  * Route guard: the caller must hold at least one of `permissions`.

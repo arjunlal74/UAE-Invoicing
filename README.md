@@ -181,6 +181,44 @@ exists and reports that clearly rather than failing obscurely.
 | RabbitMQ / Kafka, 500 inv/sec | BullMQ + Redis | That target assumes ERP connectors, which v1 does not have. The job interface is narrow enough to swap. |
 | `UNIQUE (tenant_id, is_active)` on ASP configs | Partial unique index over active rows | The SRS constraint also caps a tenant at one *inactive* config, so provider history is impossible and a second switch fails. |
 | Streaming Excel parse | Buffered `xlsx.load()` | ExcelJS's streaming reader fails non-deterministically (measured 6 failures in 8 identical runs). Memory is bounded by the upload and row caps instead. |
+| v2.3 §11 names `users.failed_login_attempts` | `users.failed_logins` | The column predates v2.3 and does the same job. §4.4, which is the normative text for lockout, names only `is_locked` and `locked_until` — both built as specified. |
+| v2.3 §3.2 "salted bcrypt/Argon2" | Argon2id throughout | Argon2id is the stronger of the two the SRS offers, and was already in place. |
+| v2.3 §5 templates quote a fixed platform name | `PLATFORM_NAME` / `SUPPORT_EMAIL` config | The templates are written with `[Middleware Platform Name]` placeholders precisely because this is a white-label product. |
+| v2.3 §4.1 rate limits, storage unspecified | Redis counters, failing open | An hour-old counter has no value in Postgres. If Redis is down the cap lapses rather than locking every customer out of account recovery. |
+
+## Authentication and credential lifecycle
+
+Implements SRS v2.3 §3–§5.
+
+**Password policy** (§3.2) lives in `packages/contracts/src/password.ts` so the
+API enforces and the portal displays the same rules: at least 8 characters (12
+recommended) with upper case, lower case, a digit and a symbol. Secrets are
+Argon2id and the last three are remembered and refused (§4.2).
+
+**Every activation vector expires in 24 hours** (§3.2). Invitations and reset
+links share one `auth_tokens` table keyed by purpose, stored as SHA-256 hashes,
+single-use, and a newly issued reset link invalidates any earlier one.
+
+**Recovery** (§4.1) is at `/forgot-password`. The response is identical whether
+the address exists, is deactivated, or the caller has exhausted their three
+requests an hour — the differences are recorded in the log, not in the answer.
+
+**Lockout** (§4.4): five failures inside a fifteen-minute window locks the
+account for thirty minutes and sends an alert carrying a reset link, because
+resetting is the specified way out of a lock. The window matters — without it a
+counter that never resets eventually locks out anyone who mistypes occasionally.
+
+**Forced rotation** (§4.3) is a flag an administrator sets; they can never see
+or choose a password. The gate is enforced in the API, not just the portal: a
+held session is refused every route but `me`, `refresh`, `logout` and
+`change-password`, with code `PASSWORD_ROTATION_REQUIRED`.
+
+**Templates** (§5) A/B/C/D are in `apps/api/src/mail/templates.ts`. A and B are
+genuinely different messages: a direct tenant is told the platform provisioned
+their account, a managed sub-tenant is told their accountant did and is pointed
+at that accountant for help.
+
+Change your own password at **/security**, available to every signed-in role.
 
 ## Outgoing mail
 

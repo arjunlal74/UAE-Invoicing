@@ -1,6 +1,6 @@
 import type { LoginResponse } from '@uae/contracts';
 import { useState } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { Alert, Button, Field, inputClass } from '../components/ui';
 import { ApiError, api } from '../lib/api';
 import { homePathFor, useAuthStore } from '../stores/auth';
@@ -113,6 +113,14 @@ export function LoginPage() {
           <Button type="submit" variant="primary" disabled={busy} className="w-full justify-center">
             {busy ? 'Signing in…' : 'Sign in'}
           </Button>
+
+          {/* §4.4 makes password reset the immediate way out of a lockout, so
+              this stays visible rather than hiding behind a failed attempt. */}
+          <p className="text-center text-sm">
+            <Link to="/forgot-password" className="text-brand-600 underline">
+              Forgot your password?
+            </Link>
+          </p>
         </form>
 
         <p className="mt-4 text-center text-xs text-white/50">

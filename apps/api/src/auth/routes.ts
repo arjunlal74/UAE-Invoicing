@@ -1,9 +1,11 @@
 import {
   AcceptInviteRequest,
   ChangePasswordRequest,
+  ForgotPasswordRequest,
   LoginRequest,
   MfaEnrolConfirmRequest,
   RefreshRequest,
+  ResetPasswordRequest,
 } from '@uae/contracts';
 import type { FastifyInstance } from 'fastify';
 import { SYSTEM_ACTOR, audit, actorFromContext } from '../audit/audit.js';
@@ -11,12 +13,16 @@ import { sql } from '../db/client.js';
 import { requireAuth, requireContext } from '../http/context.js';
 import { notFound } from '../lib/errors.js';
 import {
+  SESSION_USER_COLUMNS,
   acceptInvite,
   changePassword,
+  checkResetToken,
   confirmMfaEnrolment,
   disableMfa,
   login,
   refreshSession,
+  requestPasswordReset,
+  resetPassword,
   revokeSession,
   startMfaEnrolment,
   toSessionUser,
@@ -68,14 +74,12 @@ export function registerAuthRoutes(app: FastifyInstance) {
   app.get('/api/v1/auth/me', { preHandler: requireAuth() }, async (request, reply) => {
     const ctx = requireContext(request);
 
-    const rows = await sql()<any[]>`
-      SELECT u.id, u.tenant_id, u.email, u.full_name, u.role, u.password_hash,
-             u.mfa_secret, u.mfa_enabled, u.is_active, u.failed_logins, u.locked_until,
-             t.legal_name_en AS tenant_name, t.status::text AS tenant_status
-      FROM users u
-      LEFT JOIN tenants t ON t.id = u.tenant_id
-      WHERE u.id = ${ctx.userId}
-    `;
+    const rows = await sql().unsafe<any[]>(
+      `SELECT ${SESSION_USER_COLUMNS}
+       FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
+       WHERE u.id = $1`,
+      [ctx.userId],
+    );
 
     if (!rows[0]) throw notFound('Account');
     return reply.send(toSessionUser(rows[0]));
@@ -85,7 +89,11 @@ export function registerAuthRoutes(app: FastifyInstance) {
     const ctx = requireContext(request);
     const body = ChangePasswordRequest.parse(request.body);
 
-    await changePassword(ctx.userId, body.currentPassword, body.newPassword);
+    await changePassword(ctx.userId, body.currentPassword, body.newPassword, {
+      ip: request.ip,
+      signOutOtherDevices: body.signOutOtherDevices,
+      currentRefreshToken: body.currentRefreshToken,
+    });
     await audit(actorFromContext(ctx), {
       action: 'PASSWORD_CHANGED',
       resourceType: 'USER',
@@ -127,10 +135,51 @@ export function registerAuthRoutes(app: FastifyInstance) {
     return reply.status(204).send();
   });
 
+  // --- Credential recovery (SRS v2.3 §4.1) ---------------------------------
+
+  /**
+   * Always answers the same way.
+   *
+   * §4.1 step 2 forbids revealing whether an address is registered, so there is
+   * no error branch here to leak one: an unknown address, a deactivated account
+   * and a rate-limited caller all receive this response.
+   */
+  app.post('/api/v1/auth/forgot-password', async (request, reply) => {
+    const body = ForgotPasswordRequest.parse(request.body);
+    await requestPasswordReset(body.email, request.ip);
+
+    return reply.send({
+      message:
+        'If an active account is associated with this email address, a password reset link has been dispatched.',
+    });
+  });
+
+  /** Lets the reset screen say "this link expired" before asking for a password. */
+  app.get('/api/v1/auth/reset-password', async (request, reply) => {
+    const { token } = request.query as { token?: string };
+    if (!token) return reply.send({ valid: false, email: null, message: 'No link was supplied.' });
+
+    return reply.send(await checkResetToken(token));
+  });
+
+  app.post('/api/v1/auth/reset-password', async (request, reply) => {
+    const body = ResetPasswordRequest.parse(request.body);
+    await resetPassword(body.token, body.password, request.ip);
+
+    await audit(
+      { ...SYSTEM_ACTOR, ip: request.ip },
+      { action: 'PASSWORD_RESET', resourceType: 'USER', changes: { via: 'self-service link' } },
+    );
+
+    return reply.send({
+      message: 'Your password has been changed. Sign in with your new password.',
+    });
+  });
+
   // Unauthenticated by design — the invite token is the credential.
   app.post('/api/v1/auth/accept-invite', async (request, reply) => {
     const body = AcceptInviteRequest.parse(request.body);
-    const user = await acceptInvite(body.token, body.fullName, body.password);
+    const user = await acceptInvite(body.token, body.fullName, body.password, request.ip);
 
     await audit(
       { ...SYSTEM_ACTOR, ip: request.ip, tenantId: user.tenantId },

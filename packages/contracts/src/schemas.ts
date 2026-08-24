@@ -1,5 +1,6 @@
 import { EMIRATES, INVOICE_NUMBER_PATTERN, TRN_PATTERN } from '@uae/domain';
 import { z } from 'zod';
+import { StrongPassword } from './password.js';
 import {
   AspConnectionStatus,
   AspProviderType,
@@ -42,6 +43,11 @@ export const SessionUser = z.object({
   tenantName: z.string().nullable(),
   tenantStatus: TenantStatus.nullable(),
   mfaEnabled: z.boolean(),
+  /**
+   * SRS v2.3 §4.3. When true the portal must show the rotation modal and the
+   * API refuses everything but signing out and setting a new password.
+   */
+  mustRotatePassword: z.boolean(),
 });
 export type SessionUser = z.infer<typeof SessionUser>;
 
@@ -72,14 +78,53 @@ export const RefreshRequest = z.object({ refreshToken: z.string().min(1) });
 
 export const ChangePasswordRequest = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(12, 'Use at least 12 characters'),
+  newPassword: StrongPassword,
+  /**
+   * SRS v2.3 §4.2 offers this as a choice rather than imposing it. A reset
+   * driven by suspected compromise always revokes regardless of the flag.
+   */
+  signOutOtherDevices: z.boolean().default(true),
+  /**
+   * The caller's own refresh token, so signing other devices out does not sign
+   * this one out too. Omitted simply means every session ends.
+   */
+  currentRefreshToken: z.string().optional(),
 });
+export type ChangePasswordRequest = z.infer<typeof ChangePasswordRequest>;
 
 export const AcceptInviteRequest = z.object({
   token: z.string().min(1),
   fullName: z.string().trim().min(1).max(200),
-  password: z.string().min(12, 'Use at least 12 characters'),
+  password: StrongPassword,
 });
+
+// --- Credential recovery (SRS v2.3 §4.1) ------------------------------------
+
+export const ForgotPasswordRequest = z.object({
+  email: z.string().trim().toLowerCase().email(),
+});
+export type ForgotPasswordRequest = z.infer<typeof ForgotPasswordRequest>;
+
+/**
+ * Deliberately uniform. §4.1 requires the same answer whether or not the
+ * address exists, so there is nothing here to vary.
+ */
+export const ForgotPasswordResponse = z.object({ message: z.string() });
+export type ForgotPasswordResponse = z.infer<typeof ForgotPasswordResponse>;
+
+export const ResetPasswordRequest = z.object({
+  token: z.string().min(1),
+  password: StrongPassword,
+});
+export type ResetPasswordRequest = z.infer<typeof ResetPasswordRequest>;
+
+/** Answers "is this link still good?" before asking for a new password. */
+export const ResetTokenCheckResponse = z.object({
+  valid: z.boolean(),
+  email: z.string().nullable(),
+  message: z.string(),
+});
+export type ResetTokenCheckResponse = z.infer<typeof ResetTokenCheckResponse>;
 
 // --- Tenants ----------------------------------------------------------------
 

@@ -38,6 +38,17 @@ export const unprocessable = (message: string, details?: unknown) =>
 export const tooManyRequests = (message = 'Too many attempts. Try again shortly.') =>
   new AppError(429, 'TOO_MANY_REQUESTS', message);
 
+/**
+ * SRS v2.3 §4.3: the account is held until a new password is set.
+ *
+ * Its own code rather than a plain 403 so the portal can tell "you may not do
+ * this" apart from "you may not do anything yet" and open the rotation modal
+ * instead of showing a permission error.
+ */
+export const rotationRequired = (
+  message = 'You must set a new password before continuing.',
+) => new AppError(403, 'PASSWORD_ROTATION_REQUIRED', message);
+
 interface PgError {
   code?: string;
   constraint_name?: string;

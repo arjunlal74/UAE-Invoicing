@@ -45,6 +45,13 @@ const EnvSchema = z.object({
   JWT_REFRESH_TTL: z.coerce.number().int().default(2_592_000),
   MFA_ISSUER: z.string().default('UAE E-Invoicing'),
 
+  // Substituted into the transactional templates of SRS v2.3 §5, which are
+  // written with [Middleware Platform Name] and [Support Email] placeholders
+  // precisely so a white-label deployment can put its own name on them.
+  PLATFORM_NAME: z.string().default('UAE E-Invoicing Portal'),
+  SUPPORT_EMAIL: z.string().default('support@einvoice.local'),
+  SUPPORT_PHONE: z.string().default(''),
+
   SECRETS_ENCRYPTION_KEY: z.string().min(1),
 
   ASP_DEFAULT_DRIVER: z.enum(['MOCK', 'GENERIC_REST', 'NATIVE_AS4']).default('MOCK'),
