@@ -203,6 +203,23 @@ export const CreateApiKeyRequest = z.object({
   scopes: z.array(Permission).min(1, 'A key with no scopes can do nothing'),
   /** ISO date. Omit for a key that does not expire on its own. */
   expiresAt: z.string().datetime().nullable().optional(),
+  /**
+   * Bind an SFTP drop directory to this key (§1.2 channel 1, SFTP limb). The
+   * key's scopes then govern what a file left in that directory may do, and
+   * revoking the key closes it. It is a filesystem path segment, so the
+   * character set is narrow and it is unique across the whole platform rather
+   * than per tenant.
+   */
+  sftpUsername: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(
+      /^[a-z][a-z0-9_-]{2,31}$/,
+      'Use 3–32 characters: a letter first, then lower-case letters, digits, hyphen or underscore',
+    )
+    .nullable()
+    .optional(),
 });
 export type CreateApiKeyRequest = z.infer<typeof CreateApiKeyRequest>;
 
@@ -212,6 +229,8 @@ export const ApiKeySummary = z.object({
   /** The non-secret leading segment, for telling two keys apart. */
   keyPrefix: z.string(),
   scopes: z.array(z.string()),
+  /** The drop directory this key owns, when one is bound. */
+  sftpUsername: z.string().nullable(),
   createdByName: z.string().nullable(),
   lastUsedAt: z.string().nullable(),
   expiresAt: z.string().nullable(),

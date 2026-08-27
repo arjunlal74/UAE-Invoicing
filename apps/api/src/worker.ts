@@ -8,6 +8,7 @@ import { sendResponseJob } from './jobs/sendResponse.js';
 import { submitInvoiceJob } from './jobs/submitInvoice.js';
 import { logger } from './logger.js';
 import './modules/asp/service.js'; // registers the ASP drivers
+import { startSftpWatcher } from './sftp/watcher.js';
 import {
   QUEUE_MAIL,
   QUEUE_PARSE,
@@ -109,11 +110,21 @@ async function main() {
     },
   );
 
-  logger.info({ env: cfg.NODE_ENV }, 'worker started');
+  // Ingestion channel 1's SFTP limb (§1.2). It lives in the worker rather than
+  // the API because it is a loop that owns files, not a request handler — and
+  // because the API runs behind a load balancer where every replica would poll
+  // the same share.
+  const sftp = startSftpWatcher();
+
+  logger.info({ env: cfg.NODE_ENV, sftp: sftp !== null }, 'worker started');
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'worker shutting down');
     try {
+      // Stopped first, and it waits for the file in flight. Killing the watcher
+      // mid-delivery leaves the file claimed — recoverable, but it would be
+      // re-filed on the next start, and half of it may already be with the FTA.
+      await sftp?.stop();
       await Promise.all([
         parseWorker.close(),
         submitWorker.close(),

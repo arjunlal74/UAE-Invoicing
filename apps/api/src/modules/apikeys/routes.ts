@@ -9,7 +9,7 @@ import {
   type ApiKeyRow,
 } from '../../auth/apiKeys.js';
 import { actorFromContext, audit } from '../../audit/audit.js';
-import { withTenant } from '../../db/client.js';
+import { withPlatformAccess, withTenant } from '../../db/client.js';
 import { requireContext, requirePermission } from '../../http/context.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 
@@ -61,14 +61,34 @@ export function registerApiKeyRoutes(app: FastifyInstance) {
       }
 
       const { token, tokenHash, keyPrefix } = generateToken();
+      const sftpUsername = body.sftpUsername ?? null;
+
+      // Checked with platform access, deliberately: the name is a filesystem
+      // path segment in a namespace shared by the whole platform, so the
+      // collision it can have is with *another tenant's* directory — which a
+      // tenant-scoped read cannot see. The unique index is still the authority;
+      // this exists so the answer is a sentence rather than a constraint name.
+      if (sftpUsername) {
+        const taken = await withPlatformAccess(
+          (tx) => tx<{ id: string }[]>`
+            SELECT id FROM api_keys WHERE sftp_username = ${sftpUsername}
+          `,
+        );
+        if (taken[0]) {
+          throw badRequest(
+            `The SFTP account name "${sftpUsername}" is already in use. Choose another.`,
+          );
+        }
+      }
 
       const row = await withTenant(ctx.tenantId, async (tx) => {
         const inserted = await tx<{ id: string }[]>`
           INSERT INTO api_keys (
-            tenant_id, name, key_prefix, token_hash, scopes, created_by_user_id, expires_at
+            tenant_id, name, key_prefix, token_hash, scopes, created_by_user_id,
+            expires_at, sftp_username
           ) VALUES (
             ${ctx.tenantId}, ${body.name}, ${keyPrefix}, ${tokenHash},
-            ${scopes}::text[], ${ctx.userId}, ${expiresAt}
+            ${scopes}::text[], ${ctx.userId}, ${expiresAt}, ${sftpUsername}
           )
           RETURNING id
         `;
@@ -85,7 +105,13 @@ export function registerApiKeyRoutes(app: FastifyInstance) {
         resourceType: 'API_KEY',
         resourceId: row.id,
         tenantId: ctx.tenantId,
-        changes: { name: body.name, keyPrefix, scopes, expiresAt: body.expiresAt ?? null },
+        changes: {
+          name: body.name,
+          keyPrefix,
+          scopes,
+          expiresAt: body.expiresAt ?? null,
+          sftpUsername,
+        },
       });
 
       // The one and only time the token exists outside the caller's own
@@ -115,17 +141,27 @@ export function registerApiKeyRoutes(app: FastifyInstance) {
       if (!ctx.tenantId) throw notFound('Tenant');
 
       const row = await withTenant(ctx.tenantId, async (tx) => {
-        const rows = await tx<{ id: string; name: string; revoked_at: Date | null }[]>`
-          SELECT id, name, revoked_at FROM api_keys
+        const rows = await tx<
+          { id: string; name: string; sftp_username: string | null; revoked_at: Date | null }[]
+        >`
+          SELECT id, name, sftp_username, revoked_at FROM api_keys
           WHERE id = ${id} AND tenant_id = ${ctx.tenantId}
         `;
         const key = rows[0];
         if (!key) throw notFound('API key');
         if (key.revoked_at) return key;
 
+        // The drop directory belongs to the SFTP account, not to the key — the
+        // account on the server keeps its name, and the replacement key has to
+        // be able to take it. Holding the name on a revoked key would make
+        // "revoke and re-issue" the one operation that permanently burns an
+        // account name, which is precisely the operation you perform in a hurry
+        // when a credential has leaked.
         await tx`
           UPDATE api_keys
-          SET revoked_at = now(), revoked_by_user_id = ${ctx.userId}
+          SET revoked_at = now(),
+              revoked_by_user_id = ${ctx.userId},
+              sftp_username = NULL
           WHERE id = ${id}
         `;
         return key;
@@ -136,7 +172,10 @@ export function registerApiKeyRoutes(app: FastifyInstance) {
         resourceType: 'API_KEY',
         resourceId: id,
         tenantId: ctx.tenantId,
-        changes: { name: row.name },
+        // The released name is recorded here because the column no longer
+        // holds it: the audit trail is now the only place that says which
+        // directory this key used to own.
+        changes: { name: row.name, releasedSftpUsername: row.sftp_username },
       });
 
       return reply.send({ revoked: true });

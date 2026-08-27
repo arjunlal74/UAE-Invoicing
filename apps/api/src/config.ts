@@ -60,6 +60,17 @@ const EnvSchema = z.object({
 
   UPLOAD_MAX_BYTES: z.coerce.number().int().default(52_428_800),
   UPLOAD_MAX_ROWS: z.coerce.number().int().default(20_000),
+
+  // --- SFTP drop directories (SRS v2.1 §1.2 channel 1) ----------------------
+  // Off unless a deployment mounts a share and says so: a watcher that quietly
+  // finds nothing is indistinguishable from one that is not running at all.
+  SFTP_ENABLED: bool.default('false'),
+  SFTP_ROOT: z.string().default('/data/sftp'),
+  SFTP_POLL_SECONDS: z.coerce.number().int().min(1).default(15),
+  // An upload in progress is a file that already exists and is still growing.
+  // It is claimed only once its size and mtime have held still this long.
+  SFTP_STABLE_SECONDS: z.coerce.number().int().min(1).default(5),
+  SFTP_MAX_FILE_BYTES: z.coerce.number().int().default(52_428_800),
 });
 
 function load() {

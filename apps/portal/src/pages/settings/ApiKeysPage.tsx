@@ -75,6 +75,9 @@ export function ApiKeysPage() {
 
   const keys = data?.items ?? [];
   const active = keys.filter((key) => !key.revokedAt);
+  const sftpAccounts = active
+    .map((key) => key.sftpUsername)
+    .filter((name): name is string => Boolean(name));
 
   return (
     <div className="mx-auto max-w-4xl space-y-4">
@@ -101,6 +104,7 @@ export function ApiKeysPage() {
                 <th className="pb-2 font-medium">Name</th>
                 <th className="pb-2 font-medium">Key</th>
                 <th className="pb-2 font-medium">Permissions</th>
+                <th className="pb-2 font-medium">SFTP</th>
                 <th className="pb-2 font-medium">Last used</th>
                 <th className="pb-2" />
               </tr>
@@ -128,6 +132,9 @@ export function ApiKeysPage() {
                   <td className="py-2 font-mono text-xs text-slate-500">{key.keyPrefix}…</td>
                   <td className="py-2 text-xs text-slate-600">
                     {key.scopes.map((scope) => SCOPE_LABELS[scope]?.label ?? scope).join(', ')}
+                  </td>
+                  <td className="py-2 font-mono text-xs text-slate-600">
+                    {key.sftpUsername ?? <span className="font-sans text-slate-400">—</span>}
                   </td>
                   <td className="py-2 text-xs text-slate-500">
                     {key.lastUsedAt ? formatDateTime(key.lastUsedAt) : 'never'}
@@ -162,6 +169,7 @@ export function ApiKeysPage() {
       </Card>
 
       {active.length > 0 && <UsageGuide />}
+      {sftpAccounts.length > 0 && <SftpGuide usernames={sftpAccounts} />}
 
       {creating && (
         <CreateKeyModal
@@ -189,6 +197,7 @@ function CreateKeyModal({
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState<string[]>(DEFAULT_SCOPES);
   const [expiresAt, setExpiresAt] = useState('');
+  const [sftpUsername, setSftpUsername] = useState('');
 
   const create = useMutation({
     mutationFn: () =>
@@ -200,6 +209,7 @@ function CreateKeyModal({
           // A date input gives a day; the API wants an instant. End of that day
           // in Gulf time, so a key set to expire "on the 30th" works all of it.
           expiresAt: expiresAt ? new Date(`${expiresAt}T23:59:59+04:00`).toISOString() : null,
+          sftpUsername: sftpUsername.trim() || null,
         },
       }),
     onSuccess: onCreated,
@@ -260,6 +270,30 @@ function CreateKeyModal({
             Invoices posted with it are filed without anyone reviewing them. Grant it only to a
             system whose output you already trust; otherwise use “Submit for approval”, which parks
             each document for your tax approver.
+          </Alert>
+        )}
+
+        <Field
+          label="SFTP account (optional)"
+          hint="Give the key a drop directory for an ERP that exports files instead of calling an API. It cannot be added later — create another key if you need one."
+        >
+          <input
+            className={inputClass}
+            value={sftpUsername}
+            onChange={(e) => setSftpUsername(e.target.value.toLowerCase())}
+            placeholder="e.g. albahar-sap"
+          />
+        </Field>
+
+        {sftpUsername.trim() && (
+          <Alert kind="info" title="What the drop directory does">
+            Files left in <code className="font-mono text-xs">/inbox</code> are processed with{' '}
+            <em>this key's</em> permissions, and a receipt is written back beside the file in{' '}
+            <code className="font-mono text-xs">/processed</code> or{' '}
+            <code className="font-mono text-xs">/failed</code>. Ask your administrator to create
+            the matching SFTP account. Revoking this key stops the directory being read — but the
+            SFTP account&rsquo;s own password is separate, so disable that too if a credential has
+            leaked.
           </Alert>
         )}
 
@@ -365,6 +399,41 @@ function UsageGuide() {
 # then poll for the tax authority's verdict
 curl ${origin}/api/v1/invoices/status/INV-2026-00042 \\
   -H "X-API-Key: uaeinv_live_…"`}
+      </pre>
+    </Card>
+  );
+}
+
+/** The other half of channel 1, for an ERP that exports files on a schedule. */
+function SftpGuide({ usernames }: { usernames: string[] }) {
+  return (
+    <Card title="Using the SFTP drop">
+      <p className="mb-3 text-sm text-slate-600">
+        Upload into <code className="font-mono text-xs">inbox/</code>. The platform picks the file
+        up once it stops changing, and writes{' '}
+        <code className="font-mono text-xs">&lt;file&gt;.receipt.json</code> beside the moved file
+        in <code className="font-mono text-xs">processed/</code> or{' '}
+        <code className="font-mono text-xs">failed/</code>. A byte-identical re-send is refused
+        rather than filed twice.
+      </p>
+      <ul className="mb-3 space-y-1 text-sm text-slate-600">
+        <li>
+          <code className="font-mono text-xs">.json</code> — one document or an array, the same body
+          the REST endpoint takes. Each is filed on its own, so one bad document does not cost you
+          the rest of the file.
+        </li>
+        <li>
+          <code className="font-mono text-xs">.xlsx</code> — the platform&rsquo;s invoice template.
+          It becomes a batch in the staging grid for someone to review, and the receipt says which
+          one.
+        </li>
+      </ul>
+      <pre className="overflow-x-auto rounded-md bg-slate-900 p-3 text-xs leading-relaxed text-slate-100">
+        {`sftp -P 2222 ${usernames[0] ?? 'your-account'}@sftp.example.ae
+> cd inbox
+> put invoices-2026-08-27.json
+> cd ../processed
+> get invoices-2026-08-27.json.receipt.json`}
       </pre>
     </Card>
   );

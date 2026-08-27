@@ -331,18 +331,32 @@ async function main() {
   const resubmit = await api(`/api/v1/batches/${batchId}/submit`, { method: 'POST', token, body: {} });
   check('a second submit sends nothing', resubmit.body?.pendingApproval === 0, JSON.stringify(resubmit.body));
 
-  const queue = await api('/api/v1/invoices?status=PENDING_CFO_APPROVAL&pageSize=50', { token: cfoToken });
+  // Scoped to this run's batch. The approval queue is fed by every ingestion
+  // channel — the Excel upload here, the in-app builders, and an ERP posting
+  // over the API (§1.2) — so the tenant's whole queue is not this run's four
+  // invoices, and asserting on its total would fail for a reason that has
+  // nothing to do with what this section is testing.
+  const queue = await api(
+    `/api/v1/invoices?status=PENDING_CFO_APPROVAL&pageSize=50&batchId=${batchId}`,
+    { token: cfoToken },
+  );
   check('the approver sees the queue', queue.body?.total === 4, `total=${queue.body?.total}`);
   check('the queue names who prepared each invoice', queue.body?.items?.every((i) => i.createdByName === 'Priya Nair'));
 
   const approve = await api('/api/v1/approvals/approve', {
     method: 'POST',
     token: cfoToken,
-    body: { note: 'Reviewed against the August ledger.' },
+    body: {
+      invoiceIds: queue.body.items.map((i) => i.id),
+      note: 'Reviewed against the August ledger.',
+    },
   });
   check('the approver releases all four', approve.status === 200 && approve.body.affected === 4, JSON.stringify(approve.body));
 
-  const emptyQueue = await api('/api/v1/invoices?status=PENDING_CFO_APPROVAL', { token: cfoToken });
+  const emptyQueue = await api(
+    `/api/v1/invoices?status=PENDING_CFO_APPROVAL&batchId=${batchId}`,
+    { token: cfoToken },
+  );
   check('the queue empties', emptyQueue.body?.total === 0, `total=${emptyQueue.body?.total}`);
 
   section('10. Transmission and clearance');

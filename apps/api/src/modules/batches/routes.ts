@@ -4,10 +4,8 @@ import { actorFromContext, audit } from '../../audit/audit.js';
 import { config } from '../../config.js';
 import { withTenant } from '../../db/client.js';
 import { requireContext, requirePermission } from '../../http/context.js';
-import { sha256Hex } from '../../lib/crypto.js';
 import { badRequest, notFound } from '../../lib/errors.js';
-import { PARSE_JOB_OPTIONS, batchParseQueue } from '../../queue/queues.js';
-import { buildKey, putObject } from '../../storage/objectStore.js';
+import { ACCEPTED_EXTENSIONS, acceptWorkbook, extensionOf } from './service.js';
 
 export interface BatchRow {
   id: string;
@@ -47,8 +45,6 @@ export const BATCH_SELECT = `
   u.full_name AS uploaded_by_name
 `;
 
-const ACCEPTED_EXTENSIONS = ['.xlsx', '.xlsm'];
-
 export function registerBatchRoutes(app: FastifyInstance) {
   // --- Upload --------------------------------------------------------------
   app.post(
@@ -63,83 +59,40 @@ export function registerBatchRoutes(app: FastifyInstance) {
       if (!file) throw badRequest('No file was uploaded.');
 
       const fileName = file.filename ?? 'upload.xlsx';
-      const extension = fileName.slice(fileName.lastIndexOf('.')).toLowerCase();
-      if (!ACCEPTED_EXTENSIONS.includes(extension)) {
+      if (!ACCEPTED_EXTENSIONS.includes(extensionOf(fileName))) {
         throw badRequest(
           `Only Excel workbooks are accepted (${ACCEPTED_EXTENSIONS.join(', ')}). Save your file as .xlsx and try again.`,
         );
       }
 
       const buffer = await file.toBuffer();
+      // Checked here rather than in the service: only the multipart path can
+      // truncate, and it does so silently — the buffer looks complete.
       if (file.file.truncated) {
         throw badRequest(
           `That file is larger than the ${Math.round(config().UPLOAD_MAX_BYTES / 1_048_576)}MB limit. Split it into smaller uploads.`,
         );
       }
-      if (buffer.length === 0) throw badRequest('That file is empty.');
 
-      const hash = sha256Hex(buffer);
-
-      // The uploaded file is archived to WORM storage BEFORE anything is
-      // parsed. It is the evidentiary original: whatever the user later edits
-      // in the staging grid, this is what they actually sent us.
-      const stored = await putObject(
-        buildKey(tenantId, 'source', `${hash.slice(0, 16)}-${fileName}`, extension.slice(1)),
+      const batch = await acceptWorkbook({
+        tenantId,
+        fileName,
         buffer,
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        { tenantId, uploadedBy: ctx.userId, originalName: fileName },
-      );
-
-      const batch = await withTenant(tenantId, async (tx) => {
-        // A re-upload of a byte-identical file is almost always a double click
-        // or an impatient retry, not an intent to file everything twice.
-        const duplicates = await tx<{ id: string; reference: string }[]>`
-          SELECT id, reference FROM batch_uploads
-          WHERE tenant_id = ${tenantId} AND file_hash_sha256 = ${hash}
-            AND created_at > now() - interval '24 hours'
-          ORDER BY created_at DESC LIMIT 1
-        `;
-        if (duplicates[0]) {
-          throw badRequest(
-            `You uploaded this exact file within the last 24 hours as ${duplicates[0].reference}. Open that batch instead, or change the file if this is a new set of invoices.`,
-          );
-        }
-
-        const sequence = await tx<{ next: string }[]>`
-          SELECT lpad((count(*) + 1)::text, 4, '0') AS next
-          FROM batch_uploads
-          WHERE tenant_id = ${tenantId} AND created_at::date = CURRENT_DATE
-        `;
-
-        const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-        const reference = `BATCH-${stamp}-${sequence[0]!.next}`;
-
-        const inserted = await tx<{ id: string }[]>`
-          INSERT INTO batch_uploads (
-            tenant_id, reference, file_name, file_s3_uri, file_hash_sha256,
-            file_size_bytes, source, status, uploaded_by_user_id
-          ) VALUES (
-            ${tenantId}, ${reference}, ${fileName}, ${stored.uri}, ${hash},
-            ${buffer.length}, 'EXCEL_UPLOAD', 'UPLOADED', ${ctx.userId}
-          )
-          RETURNING id
-        `;
-
-        return { id: inserted[0]!.id, reference };
+        source: 'EXCEL_UPLOAD',
+        uploadedByUserId: ctx.userId,
       });
-
-      await batchParseQueue().add(
-        'parse',
-        { batchId: batch.id, tenantId, actorUserId: ctx.userId },
-        PARSE_JOB_OPTIONS,
-      );
 
       await audit(actorFromContext(ctx), {
         action: 'BATCH_UPLOADED',
         resourceType: 'BATCH',
         resourceId: batch.id,
         tenantId,
-        changes: { fileName, reference: batch.reference, sizeBytes: buffer.length, sha256: hash },
+        changes: {
+          fileName,
+          reference: batch.reference,
+          sizeBytes: batch.sizeBytes,
+          sha256: batch.hash,
+        },
       });
 
       return reply.status(202).send({

@@ -126,8 +126,9 @@ fail against code that is not on disk.
 ```bash
 pnpm --filter @uae/domain test   # 43 — VAT maths, validation rules, auto-fix, credit note reversal
 pnpm --filter @uae/ubl test      # 30 — UBL 2.1 generation and reading, ApplicationResponse, QR payload
-pnpm --filter @uae/api test      # 50 — Excel round trip, the §16 permission matrix,
-                                 #      PDF rendering, API key credentials and scopes
+pnpm --filter @uae/api test      # 64 — Excel round trip, the §16 permission matrix,
+                                 #      PDF rendering, API key credentials and scopes,
+                                 #      SFTP claim / stability / recovery semantics
 pnpm --filter @uae/portal test   # 11 — staging grid and error sidebar
 ```
 
@@ -142,15 +143,17 @@ cd apps/api && node scripts/e2e.mjs              # local (:3100)
 cd apps/api && API_URL=http://localhost:8080 node scripts/e2e.mjs   # containers
 ```
 
-And 42 more over the programmatic ERP API — key minting and scope limits,
-idempotent replay, validation vocabulary, the §16 approval gate, and revocation:
+And two more over ingestion channel 1 — the REST half (key minting and scope
+limits, idempotent replay, validation vocabulary, the §16 approval gate,
+revocation) and the SFTP half (upload stability, claim-by-rename, partial
+success, duplicate refusal, receipts, and revocation closing the directory):
 
 ```bash
-pnpm --filter @uae/api e2e:ingest                                        # containers
-cd apps/api && BASE=http://localhost:3100 node scripts/ingest-e2e.mjs    # local
+pnpm --filter @uae/api e2e:ingest    # REST
+pnpm --filter @uae/api e2e:sftp      # SFTP — needs the `sftp` container running
 ```
 
-Both are safe to run repeatedly against the same database: invoice numbers and
+All of them are safe to run repeatedly against the same database: invoice numbers and
 the onboarded sub-tenant's TRN are per-run, and the assertions name the rows
 they care about rather than assuming the tenant has nothing else in it.
 
@@ -267,11 +270,6 @@ of it. A document composed in the browser is marked `NOT_APPLICABLE` rather than
 left pending forever; one that arrived over the API is marked `PENDING`, because
 there genuinely is a row in a ledger somewhere waiting to hear the verdict.
 
-**SFTP ingestion (§1.2).** The third limb of channel 1. `ingestion_source` has
-the value; there is no listener. It needs a long-running file watcher and a
-per-tenant drop directory, neither of which the request/response deployment has
-a place for yet.
-
 **§10.5 FTA outage notification.** BullMQ carries the retry and dead-letter
 behaviour the SRS describes, but the automated incident notification to the FTA
 within two business days is not built: it needs a notification channel the FTA
@@ -366,6 +364,71 @@ minted it months earlier and was not present.
 
 Run `pnpm --filter @uae/api e2e:ingest` against a running stack to exercise all
 of the above.
+
+### Drop directories (SFTP)
+
+The other limb of channel 1, for an ERP that exports files on a schedule rather
+than calling an API — which is most of the ones old enough to matter.
+
+**The platform does not run an SSH daemon.** An SFTP endpoint already exists in
+every deployment target: `atmoz/sftp` beside the other containers here, AWS
+Transfer Family or equivalent in a real one. Owning host keys, cipher
+negotiation and a chroot jail would buy nothing the invoicing code needs. What
+the platform owns is the half nobody else can do — whose directory this is, what
+that party may file, and what happened.
+
+**A drop directory is an API key with a different transport.** Give a key an
+`sftpUsername` when you create it, and the same scope list decides whether a
+dropped file is filed or only prepared, the audit trail names the same actor,
+and revoking the key closes the directory — releasing the account name so a
+replacement key can take it.
+
+**Revoking the key is half of it.** There are two credentials here and the
+platform owns only one. The API key says what a dropped file may do; the SFTP
+account's own password or SSH key says who may drop one, and that lives with
+whoever runs the SFTP endpoint. Revoking the key stops the directory being read
+— including anything already sitting in the inbox, which is left in place rather
+than deleted — but it does not stop someone still holding the SFTP credentials
+from writing more. If a credential has leaked, disable the SFTP account too:
+otherwise a file written in the meantime is processed the moment a replacement
+key takes the account.
+
+```
+<SFTP_ROOT>/<username>/
+  inbox/        where the ERP puts files
+  processing/   claimed by rename — atomic on a POSIX filesystem
+  processed/    something was filed, with <file>.receipt.json beside it
+  failed/       nothing was filed, with <file>.receipt.json saying why
+```
+
+**Two formats, and the asymmetry is deliberate.** `.json` is one document or an
+array — the same body the REST endpoint takes — and each is filed on its own, so
+a file of two hundred invoices with one bad line does not cost the merchant the
+other hundred and ninety-nine. `.xlsx` is the platform's own template and
+becomes a batch in the staging grid. JSON is a machine asserting a finished
+document; a spreadsheet is a machine handing over something a person still owns.
+
+**Uploads are not atomic.** A file appears at zero bytes and grows, so nothing is
+claimed until its size and mtime have held still for `SFTP_STABLE_SECONDS`, and
+the temporary names upload clients use (`.filepart`, `.part`, `.tmp`, dotfiles)
+are skipped outright. Claiming is a `rename` into `processing/`, which either
+moves the file or fails because another worker already did — so the watcher is
+safe to run in more than one process. Anything left in `processing/` at startup
+was claimed by a worker that died holding it and is returned to the inbox;
+re-filing is safe because a byte-identical delivery is refused and an invoice
+number already filed cannot be filed twice.
+
+Polling rather than `fs.watch`, because inotify does not cross a network
+filesystem and every realistic deployment puts the share on one.
+
+Configuration: `SFTP_ENABLED`, `SFTP_ROOT`, `SFTP_POLL_SECONDS`,
+`SFTP_STABLE_SECONDS`, `SFTP_MAX_FILE_BYTES`. The watcher runs in the **worker**,
+not the API — the API sits behind a load balancer where every replica would poll
+the same share. Exercise it with `pnpm --filter @uae/api e2e:sftp`.
+
+**Still not built:** CSV. The template parser is workbook-only, and a CSV drop
+would need a column contract of its own rather than reusing the one merchants
+already have.
 
 ## Authentication and credential lifecycle
 

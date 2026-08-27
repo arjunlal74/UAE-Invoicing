@@ -36,6 +36,7 @@ export interface ApiKeyRow {
   name: string;
   key_prefix: string;
   scopes: string[];
+  sftp_username: string | null;
   created_by_user_id: string | null;
   created_by_name?: string | null;
   last_used_at: Date | null;
@@ -203,6 +204,7 @@ export function toApiKeySummary(row: ApiKeyRow): ApiKeySummary {
     name: row.name,
     keyPrefix: row.key_prefix,
     scopes: row.scopes,
+    sftpUsername: row.sftp_username,
     createdByName: row.created_by_name ?? null,
     lastUsedAt: row.last_used_at?.toISOString() ?? null,
     expiresAt: row.expires_at?.toISOString() ?? null,
@@ -212,7 +214,7 @@ export function toApiKeySummary(row: ApiKeyRow): ApiKeySummary {
 }
 
 export const API_KEY_SELECT = `
-  k.id, k.tenant_id, k.name, k.key_prefix, k.scopes, k.created_by_user_id,
+  k.id, k.tenant_id, k.name, k.key_prefix, k.scopes, k.sftp_username, k.created_by_user_id,
   k.last_used_at, k.expires_at, k.revoked_at, k.created_at,
   (SELECT full_name FROM users u WHERE u.id = k.created_by_user_id) AS created_by_name
 `;

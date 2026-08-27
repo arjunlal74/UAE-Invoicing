@@ -132,6 +132,11 @@ services:
     environment:
       <<: *app_env
       RUN_MIGRATIONS: "false"
+      # Only the worker watches the drop directories — see apps/api/src/sftp.
+      SFTP_ENABLED: ${SFTP_ENABLED:-true}
+      SFTP_ROOT: /data/sftp
+    volumes:
+      - sftp_data:/data/sftp
 
   # A local inbox. Nothing configured against it can reach the internet, so an
   # administrator can walk the whole invitation flow — configure the account,
@@ -140,6 +145,35 @@ services:
   #
   # In the mail settings screen use: host `mailpit`, port 1025, no encryption,
   # authentication off. Read what it captures at http://localhost:8025.
+  # The SFTP endpoint for ingestion channel 1 (SRS v2.1 §1.2).
+  #
+  # A container rather than something inside the platform: an SSH daemon means
+  # host keys, cipher negotiation and a chroot jail, none of which the invoicing
+  # code should own. In a real deployment this is a managed service — AWS
+  # Transfer Family or equivalent — writing into the same share; here it is a
+  # hardened image so that `docker compose up` gives a working endpoint.
+  #
+  # The account name must match an API key's `sftp_username` (Settings → API
+  # keys). `:e:` marks the password already-hashed; `erp` below is the demo
+  # account, password `erp`, and it can write only into its own inbox.
+  #
+  #   sftp -P 2222 erp@localhost      then: cd inbox && put invoices.json
+  #
+  # uid 1000 matches the `node` user the worker runs as: the two processes share
+  # a filesystem and nothing else, so they have to agree about who owns it. All
+  # four directories are created here rather than by the worker, because the
+  # chroot target itself (/home/erp) must stay root-owned for sshd to accept it,
+  # which leaves the worker unable to create anything directly beneath it.
+  sftp:
+    image: atmoz/sftp:alpine
+    command: >-
+      erp:erp:1000:1000:inbox,processing,processed,failed
+    ports:
+      - "${SFTP_PORT:-2222}:22"
+    volumes:
+      - sftp_data:/home
+    restart: unless-stopped
+
   mailpit:
     image: axllent/mailpit:latest
     environment:
@@ -167,3 +201,6 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
+  # Shared by the SFTP endpoint (which writes into it) and the worker (which
+  # watches it). The two never talk to each other; the filesystem is the queue.
+  sftp_data:
