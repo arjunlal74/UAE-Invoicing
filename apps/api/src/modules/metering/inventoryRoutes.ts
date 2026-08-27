@@ -12,6 +12,7 @@ import { withPlatformAccess, withTenant } from '../../db/client.js';
 import { requireContext, requirePermission, requirePlatform } from '../../http/context.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { loadHostInventory } from './inventory.js';
+import { parsePeriod, toReportingPeriod } from './period.js';
 
 /**
  * The wholesale half of the bundle lifecycle — SRS v2.8 §15.
@@ -171,15 +172,31 @@ export function registerInventoryRoutes(app: FastifyInstance) {
   app.get(
     '/api/v1/admin/inventory',
     { preHandler: requirePlatform() },
-    async (_request, reply) => {
+    async (request, reply) => {
+      // The host figures are balances and stay cumulative — see period.ts. The
+      // period governs the contract list and the spend totals beside it, which
+      // would otherwise only ever grow.
       const host = await loadHostInventory();
+      const period = parsePeriod(request.query);
 
       const data = await withPlatformAccess(async (tx) => {
         const procurements = await tx.unsafe<ProcurementRow[]>(
           `SELECT ${PROCUREMENT_SELECT}
            FROM asp_bundle_procurements p
+           WHERE ($1::date IS NULL OR p.purchase_date >= $1::date)
+             AND ($2::date IS NULL OR p.purchase_date <= $2::date)
            ORDER BY p.purchase_date DESC, p.created_at DESC
            LIMIT 200`,
+          [period.from, period.to],
+        );
+
+        const totals = await tx.unsafe<{ units: string; spend: string }[]>(
+          `SELECT coalesce(sum(total_units), 0)::text AS units,
+                  coalesce(sum(total_cost_aed), 0)::text AS spend
+           FROM asp_bundle_procurements
+           WHERE ($1::date IS NULL OR purchase_date >= $1::date)
+             AND ($2::date IS NULL OR purchase_date <= $2::date)`,
+          [period.from, period.to],
         );
 
         // One row per active bundle rather than per tenant: a tenant can hold
@@ -220,7 +237,7 @@ export function registerInventoryRoutes(app: FastifyInstance) {
           LIMIT 500
         `;
 
-        return { procurements, tiers };
+        return { procurements, tiers, totals: totals[0]! };
       });
 
       const tiers: InventoryTierRow[] = data.tiers.map((row) => {
@@ -246,6 +263,9 @@ export function registerInventoryRoutes(app: FastifyInstance) {
         host,
         procurements: data.procurements.map(toProcurementSummary),
         tiers,
+        period: toReportingPeriod(period),
+        periodUnitsPurchased: Number(data.totals.units),
+        periodSpendAed: data.totals.spend,
       };
 
       return reply.send(response);

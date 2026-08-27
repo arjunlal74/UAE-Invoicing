@@ -8,6 +8,7 @@ import { actorFromContext, audit } from '../../audit/audit.js';
 import { withPlatformAccess } from '../../db/client.js';
 import { requireContext, requirePermission, requirePlatform } from '../../http/context.js';
 import { badRequest, notFound } from '../../lib/errors.js';
+import { parsePeriod, toReportingPeriod, type ParsedPeriod } from './period.js';
 
 /**
  * The accredited provider master.
@@ -38,6 +39,7 @@ interface ProviderRow {
   contract_count: string;
   total_units: string;
   total_spend: string;
+  lifetime_contract_count: string;
 }
 
 function toSummary(row: ProviderRow): ProviderSummary {
@@ -55,30 +57,51 @@ function toSummary(row: ProviderRow): ProviderSummary {
     contractCount: Number(row.contract_count),
     totalUnitsPurchased: Number(row.total_units),
     totalSpendAed: row.total_spend,
+    lifetimeContractCount: Number(row.lifetime_contract_count),
     createdAt: row.created_at.toISOString(),
   };
 }
 
 /**
- * The roll-up is what makes a retirement decision an informed one: "this
- * provider supplied 1.2m units across four contracts" is the thing you want to
- * see before taking them out of the picker.
+ * The roll-up that makes a retirement decision an informed one: "this provider
+ * supplied 1.2m units across four contracts" is what you want to see before
+ * taking them out of the picker.
+ *
+ * Scoped to a period. A lifetime total only grows, so within a year or two it
+ * stops distinguishing a provider you buy from every quarter from one you used
+ * once in 2026 — which is exactly the question the roll-up exists to answer.
+ * `lifetime_contract_count` stays unscoped alongside it, because "none this
+ * period" and "none ever" are different facts and only the second makes a
+ * provider safe to retire.
+ *
+ * `$1`/`$2` are the period bounds; a null bound means open-ended on that side.
  */
 const PROVIDER_SELECT = `
   v.id, v.name, v.accreditation_reference, v.contact_name, v.contact_email,
   v.contact_phone, v.website, v.is_active, v.notes, v.created_at,
   v.default_cost_per_unit_aed::text AS default_cost_per_unit_aed,
-  (SELECT count(*) FROM asp_bundle_procurements p WHERE p.asp_provider_id = v.id)::text
-    AS contract_count,
+  (SELECT count(*) FROM asp_bundle_procurements p
+    WHERE p.asp_provider_id = v.id
+      AND ($1::date IS NULL OR p.purchase_date >= $1::date)
+      AND ($2::date IS NULL OR p.purchase_date <= $2::date))::text AS contract_count,
   (SELECT coalesce(sum(p.total_units), 0) FROM asp_bundle_procurements p
-    WHERE p.asp_provider_id = v.id)::text AS total_units,
+    WHERE p.asp_provider_id = v.id
+      AND ($1::date IS NULL OR p.purchase_date >= $1::date)
+      AND ($2::date IS NULL OR p.purchase_date <= $2::date))::text AS total_units,
   (SELECT coalesce(sum(p.total_cost_aed), 0) FROM asp_bundle_procurements p
-    WHERE p.asp_provider_id = v.id)::text AS total_spend
+    WHERE p.asp_provider_id = v.id
+      AND ($1::date IS NULL OR p.purchase_date >= $1::date)
+      AND ($2::date IS NULL OR p.purchase_date <= $2::date))::text AS total_spend,
+  (SELECT count(*) FROM asp_bundle_procurements p WHERE p.asp_provider_id = v.id)::text
+    AS lifetime_contract_count
 `;
 
-async function loadOne(id: string): Promise<ProviderRow> {
+async function loadOne(id: string, period: ParsedPeriod): Promise<ProviderRow> {
   const rows = await withPlatformAccess((tx) =>
-    tx.unsafe<ProviderRow[]>(`SELECT ${PROVIDER_SELECT} FROM asp_providers v WHERE v.id = $1`, [id]),
+    tx.unsafe<ProviderRow[]>(
+      `SELECT ${PROVIDER_SELECT} FROM asp_providers v WHERE v.id = $3`,
+      [period.from, period.to, id],
+    ),
   );
   const row = rows[0];
   if (!row) throw notFound('Provider');
@@ -92,6 +115,7 @@ export function registerProviderRoutes(app: FastifyInstance) {
     { preHandler: requirePlatform() },
     async (request, reply) => {
       const { includeInactive } = request.query as { includeInactive?: string };
+      const period = parsePeriod(request.query);
 
       const rows = await withPlatformAccess((tx) =>
         tx.unsafe<ProviderRow[]>(
@@ -99,10 +123,11 @@ export function registerProviderRoutes(app: FastifyInstance) {
            FROM asp_providers v
            ${includeInactive === 'true' ? '' : 'WHERE v.is_active'}
            ORDER BY v.is_active DESC, v.name`,
+          [period.from, period.to],
         ),
       );
 
-      return reply.send({ items: rows.map(toSummary) });
+      return reply.send({ items: rows.map(toSummary), period: toReportingPeriod(period) });
     },
   );
 
@@ -151,7 +176,7 @@ export function registerProviderRoutes(app: FastifyInstance) {
         changes: { name: body.name, accreditation: body.accreditationReference ?? null },
       });
 
-      return reply.status(201).send(toSummary(await loadOne(id)));
+      return reply.status(201).send(toSummary(await loadOne(id, parsePeriod({}))));
     },
   );
 
@@ -164,7 +189,7 @@ export function registerProviderRoutes(app: FastifyInstance) {
       const { id } = request.params as { id: string };
       const body = UpdateProviderRequest.parse(request.body);
 
-      const before = await loadOne(id);
+      const before = await loadOne(id, parsePeriod({}));
 
       await withPlatformAccess(async (tx) => {
         if (body.name && body.name.toLowerCase() !== before.name.toLowerCase()) {
@@ -221,7 +246,7 @@ export function registerProviderRoutes(app: FastifyInstance) {
         changes: { name: body.name ?? before.name, isActive: body.isActive },
       });
 
-      return reply.send(toSummary(await loadOne(id)));
+      return reply.send(toSummary(await loadOne(id, parsePeriod({}))));
     },
   );
 }

@@ -358,7 +358,7 @@ function CreateSubTenantForm({ onDone }: { onDone: () => void }) {
 }
 
 /**
- * Carving a slice out of the partner's master pool â€” Â§15.4.
+ * Carving a slice out of the partner's master pool — §15.4.
  *
  * The two figures a partner needs are different questions and both are on
  * screen: *unallocated* is how much of the pool has not been promised to a
@@ -431,10 +431,10 @@ function AllocateSliceModal({
                   value={form.parentBundleId}
                   onChange={(e) => setForm({ ...form, parentBundleId: e.target.value })}
                 >
-                  <option value="">Select a poolâ€¦</option>
+                  <option value="">Select a pool…</option>
                   {usable.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.reference} Â· {p.unallocatedUnits.toLocaleString()} unallocated
+                      {p.reference} · {p.unallocatedUnits.toLocaleString()} unallocated
                     </option>
                   ))}
                 </select>
@@ -528,7 +528,7 @@ function AllocateSliceModal({
               }
               onClick={() => create.mutate()}
             >
-              {create.isPending ? 'Allocatingâ€¦' : 'Allocate units'}
+              {create.isPending ? 'Allocating…' : 'Allocate units'}
             </Button>
           )}
         </div>

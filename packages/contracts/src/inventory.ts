@@ -48,10 +48,21 @@ export const ProviderSummary = z.object({
   defaultCostPerUnitAed: z.string().nullable(),
   isActive: z.boolean(),
   notes: z.string().nullable(),
-  /** What has been bought from them, so a retirement is an informed one. */
+  /**
+   * What has been bought from them **within the period being reported on**,
+   * not since the beginning. A lifetime figure only ever grows, so by the
+   * second year it says nothing about whether this provider is still being used
+   * or what a renewal ought to cost.
+   */
   contractCount: z.number(),
   totalUnitsPurchased: z.number(),
   totalSpendAed: z.string(),
+  /**
+   * Contracts on file at any date. Kept beside the period figures because
+   * "0 contracts this quarter" and "0 contracts ever" are different facts, and
+   * only one of them makes a provider safe to retire.
+   */
+  lifetimeContractCount: z.number(),
   createdAt: z.string(),
 });
 export type ProviderSummary = z.infer<typeof ProviderSummary>;
@@ -150,10 +161,31 @@ export const InventoryTierRow = z.object({
 });
 export type InventoryTierRow = z.infer<typeof InventoryTierRow>;
 
+/**
+ * The window the *reporting* figures cover.
+ *
+ * Balances are deliberately excluded from it. Stock and net available are
+ * cumulative by definition — what is on the shelf today is every purchase ever
+ * made minus every sale ever made — and scoping them to a quarter would produce
+ * a number that looks like a balance and is not one. Only spend, unit counts
+ * and the contract list take a period.
+ */
+export const ReportingPeriod = z.object({
+  from: z.string().nullable(),
+  to: z.string().nullable(),
+  label: z.string(),
+});
+export type ReportingPeriod = z.infer<typeof ReportingPeriod>;
+
 export const InventoryConsole = z.object({
   host: HostInventorySummary,
   procurements: z.array(ProcurementSummary),
   tiers: z.array(InventoryTierRow),
+  /** Which window `procurements` and the per-provider roll-ups were computed over. */
+  period: ReportingPeriod,
+  /** Purchases and spend inside the period, as against the lifetime host figures. */
+  periodUnitsPurchased: z.number(),
+  periodSpendAed: z.string(),
 });
 export type InventoryConsole = z.infer<typeof InventoryConsole>;
 

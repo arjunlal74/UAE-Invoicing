@@ -37,24 +37,42 @@ import { ApiError, api } from '../../lib/api';
  * warned at — because the alert mail goes to the account holder, and the host
  * needs to know it went out before the phone rings.
  */
+/**
+ * The windows on offer.
+ *
+ * "All time" is last and is not the default: a lifetime total only grows, and
+ * once it is bigger than a year's worth it can no longer tell you whether a
+ * provider is still in use or what a renewal ought to cost.
+ */
+const PERIODS = [
+  { value: '3', label: 'Last 3 months' },
+  { value: '6', label: 'Last 6 months' },
+  { value: '12', label: 'Last 12 months' },
+  { value: '24', label: 'Last 24 months' },
+  { value: 'all', label: 'All time' },
+];
+
 export function AdminInventoryPage() {
   const queryClient = useQueryClient();
   const [registering, setRegistering] = useState(false);
   const [editingBuffer, setEditingBuffer] = useState(false);
   const [managingProviders, setManagingProviders] = useState(false);
   const [selling, setSelling] = useState(false);
+  const [period, setPeriod] = useState('12');
 
   const { data, isLoading } = useQuery({
-    queryKey: ['admin-inventory'],
-    queryFn: () => api<InventoryConsole>('/api/v1/admin/inventory'),
+    queryKey: ['admin-inventory', period],
+    queryFn: () => api<InventoryConsole>(`/api/v1/admin/inventory?period=${period}`),
   });
 
   // Retired providers are included so the management list can show them and
   // offer reactivation; the purchase form filters to the active ones.
   const { data: providers } = useQuery({
-    queryKey: ['asp-providers'],
+    queryKey: ['asp-providers', period],
     queryFn: () =>
-      api<{ items: ProviderSummary[] }>('/api/v1/admin/providers?includeInactive=true'),
+      api<{ items: ProviderSummary[] }>(
+        `/api/v1/admin/providers?includeInactive=true&period=${period}`,
+      ),
   });
 
   // Only fetched once the form is open: the console does not need the tenant
@@ -80,6 +98,18 @@ export function AdminInventoryPage() {
         description="Wholesale procurement, platform stock and every account's remaining balance."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <select
+              className={cx(inputClass, 'w-auto')}
+              value={period}
+              onChange={(e) => setPeriod(e.target.value)}
+              aria-label="Reporting period"
+            >
+              {PERIODS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
             <Button onClick={() => setManagingProviders(true)}>Providers</Button>
             <Button onClick={() => setEditingBuffer(true)}>Minimum buffer</Button>
             <Button
@@ -132,7 +162,10 @@ export function AdminInventoryPage() {
         </Alert>
       )}
 
-      {/* --- §15.1 the host's position ----------------------------------- */}
+      {/* --- §15.1 the host's position -----------------------------------
+          Balances, so deliberately not period-scoped: what is on the shelf
+          today is every purchase ever made minus every sale ever made. The
+          period governs the two purchase figures below them instead. */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile
           label="Net available"
@@ -157,9 +190,9 @@ export function AdminInventoryPage() {
           tone={host.daysRemaining !== null && host.daysRemaining < 30 ? 'warn' : 'neutral'}
         />
         <StatTile
-          label="Procured to date"
-          value={host.totalProcuredUnits.toLocaleString()}
-          hint={`AED ${Number(host.totalCostAed).toLocaleString()} committed`}
+          label={`Procured · ${data.period.label.toLowerCase()}`}
+          value={data.periodUnitsPurchased.toLocaleString()}
+          hint={`AED ${Number(data.periodSpendAed).toLocaleString()} in this period`}
         />
       </div>
 
@@ -233,11 +266,19 @@ export function AdminInventoryPage() {
       </Card>
 
       {/* --- §15.1 the contracts behind the stock ------------------------ */}
-      <Card title={`Provider purchases (${data.procurements.length})`}>
+      <Card title={`Provider purchases · ${data.period.label} (${data.procurements.length})`}>
         {data.procurements.length === 0 ? (
           <EmptyState
-            title="No purchases registered"
-            description="The platform cannot sell units it has not bought. Register the provider contract first."
+            title={
+              host.totalProcuredUnits > 0
+                ? 'No purchases in this period'
+                : 'No purchases registered'
+            }
+            description={
+              host.totalProcuredUnits > 0
+                ? 'Contracts exist outside this window. Widen the period above to see them.'
+                : 'The platform cannot sell units it has not bought. Register the provider contract first.'
+            }
           />
         ) : (
           <div className="overflow-x-auto">
@@ -312,6 +353,7 @@ export function AdminInventoryPage() {
       {managingProviders && (
         <ProvidersModal
           providers={providers?.items ?? []}
+          periodLabel={data.period.label}
           onClose={() => setManagingProviders(false)}
           onChanged={() => {
             queryClient.invalidateQueries({ queryKey: ['asp-providers'] });
@@ -614,7 +656,7 @@ function BufferModal({
 /**
  * The accredited provider master.
  *
- * Small by nature â€” a platform buys from one or two accredited providers â€” so
+ * Small by nature — a platform buys from one or two accredited providers — so
  * it lives in a modal on the page that uses it rather than a nav entry of its
  * own. Nothing is deleted: a provider that has sold the platform units is part
  * of the record of where its capacity came from, so retiring one takes it out
@@ -622,10 +664,12 @@ function BufferModal({
  */
 function ProvidersModal({
   providers,
+  periodLabel,
   onClose,
   onChanged,
 }: {
   providers: ProviderSummary[];
+  periodLabel: string;
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -681,6 +725,10 @@ function ProvidersModal({
           The providers this platform buys data units from. Purchases are registered against one of
           these rather than a typed-in name, so cost reporting per provider adds up.
         </p>
+        <p className="text-sm text-slate-500">
+          Contracts, units and spend below cover <strong>{periodLabel.toLowerCase()}</strong>.
+          Change the period on the page behind this dialog to widen or narrow it.
+        </p>
 
         {providers.length > 0 && (
           <div className="overflow-x-auto">
@@ -692,6 +740,7 @@ function ProvidersModal({
                   <th className="pb-2 text-right font-medium">Contracts</th>
                   <th className="pb-2 text-right font-medium">Units</th>
                   <th className="pb-2 text-right font-medium">Spend (AED)</th>
+                  <th className="pb-2 text-right font-medium">All time</th>
                   <th className="pb-2" />
                 </tr>
               </thead>
@@ -710,7 +759,7 @@ function ProvidersModal({
                       )}
                     </td>
                     <td className="py-2 font-mono text-xs text-slate-500">
-                      {provider.accreditationReference ?? 'â€”'}
+                      {provider.accreditationReference ?? '—'}
                     </td>
                     <td className="py-2 text-right tabular-nums text-slate-700">
                       {provider.contractCount}
@@ -721,10 +770,20 @@ function ProvidersModal({
                     <td className="py-2 text-right tabular-nums text-slate-700">
                       {Number(provider.totalSpendAed).toLocaleString()}
                     </td>
+                    {/* "None this period" and "none ever" are different facts,
+                        and only the second makes a provider safe to retire. */}
+                    <td className="py-2 text-right tabular-nums text-slate-400">
+                      {provider.lifetimeContractCount}
+                    </td>
                     <td className="py-2 text-right">
                       <Button
                         size="sm"
                         disabled={setActive.isPending}
+                        title={
+                          provider.isActive && provider.lifetimeContractCount > 0
+                            ? `${provider.lifetimeContractCount} contract(s) on file — they stay, only the picker loses this provider`
+                            : undefined
+                        }
                         onClick={() =>
                           setActive.mutate({ id: provider.id, isActive: !provider.isActive })
                         }
@@ -819,7 +878,7 @@ function ProvidersModal({
                 disabled={form.name.trim().length < 2 || create.isPending}
                 onClick={() => create.mutate()}
               >
-                {create.isPending ? 'Addingâ€¦' : 'Add provider'}
+                {create.isPending ? 'Adding…' : 'Add provider'}
               </Button>
             </div>
           </div>
@@ -838,7 +897,7 @@ function ProvidersModal({
 
 
 /**
- * Selling units downstream â€” Â§15.2.
+ * Selling units downstream — §15.2.
  *
  * Direct tenants and channel partners only. A managed sub-tenant is not on the
  * list because its units come from its partner's master pool, not from the
@@ -890,7 +949,7 @@ function SellBundleModal({
       ...f,
       tenantId: id,
       // A reference has to be unique per tenant and nobody enjoys inventing one,
-      // so it is suggested from the company code and the month. Still editable â€”
+      // so it is suggested from the company code and the month. Still editable —
       // a merchant with their own numbering will want to use it.
       reference:
         f.reference ||
@@ -931,10 +990,10 @@ function SellBundleModal({
               value={form.tenantId}
               onChange={(e) => chooseTenant(e.target.value)}
             >
-              <option value="">Select a tenant or partnerâ€¦</option>
+              <option value="">Select a tenant or partner…</option>
               {sellable.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.legalNameEn} Â· {TENANT_TYPE_LABELS[t.tenantType]}
+                  {t.legalNameEn} · {TENANT_TYPE_LABELS[t.tenantType]}
                 </option>
               ))}
             </select>
@@ -977,7 +1036,7 @@ function SellBundleModal({
               <option value="">Not attributed</option>
               {openContracts.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.contractReference} Â· {p.remainingUnits.toLocaleString()} left
+                  {p.contractReference} · {p.remainingUnits.toLocaleString()} left
                 </option>
               ))}
             </select>
@@ -1051,7 +1110,7 @@ function SellBundleModal({
             }
             onClick={() => create.mutate()}
           >
-            {create.isPending ? 'Sellingâ€¦' : 'Sell bundle'}
+            {create.isPending ? 'Selling…' : 'Sell bundle'}
           </Button>
         </div>
       </div>
