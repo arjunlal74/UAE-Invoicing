@@ -418,6 +418,37 @@ if (tenantAdmin) {
 }
 
 // --- 7. retirement -----------------------------------------------------------
+section('6b. §15.4 the unallocated pool a partner allocates from');
+
+if (partner) {
+  const partnerToken2 = await login('partner@gulfadvisory.local');
+  if (partnerToken2) {
+    const bal = await call('/api/v1/billing/balance', { token: partnerToken2 });
+    const masterPools = (bal.body?.bundles ?? []).filter((b) => !b.parentBundleId);
+    check('a partner sees its master pools', masterPools.length > 0, masterPools.length);
+
+    const pool = masterPools[0];
+    check(
+      'each reports what it has carved out',
+      typeof pool?.allocatedUnits === 'number',
+      pool,
+    );
+    // The two figures §15.4 keeps apart: room to onboard another client, versus
+    // capacity left to file. A pool can be fully allocated and barely used.
+    check(
+      'and what is left to allocate, distinct from what is left to file',
+      pool.unallocatedUnits === pool.purchasedUnits - pool.allocatedUnits &&
+        pool.remainingUnits === pool.purchasedUnits - pool.consumedUnits,
+      {
+        purchased: pool.purchasedUnits,
+        allocated: pool.allocatedUnits,
+        unallocated: pool.unallocatedUnits,
+        remaining: pool.remainingUnits,
+      },
+    );
+  }
+}
+
 section('7. A provider is retired, never deleted');
 
 const retired = await call(`/api/v1/admin/providers/${providerId}`, {

@@ -35,10 +35,27 @@ export interface BundleRow {
   notes: string | null;
   created_at: Date;
   tenant_name?: string | null;
+  /** Present only where the query asked for it — see BUNDLE_WITH_ALLOCATION. */
+  allocated_units?: string | null;
 }
+
+/**
+ * A bundle plus what has been carved out of it.
+ *
+ * Not folded into every bundle query: the figure only means anything for a
+ * channel partner's master pool, and a correlated subquery on a path that runs
+ * per filed invoice would be paying for it everywhere to use it in one place.
+ */
+export const BUNDLE_WITH_ALLOCATION = `
+  b.*,
+  (SELECT coalesce(sum(s.purchased_units), 0)
+   FROM data_bundles s
+   WHERE s.parent_bundle_id = b.id AND s.status <> 'EXPIRED')::text AS allocated_units
+`;
 
 export function toBundleSummary(row: BundleRow): BundleSummary {
   const remaining = row.purchased_units - row.consumed_units;
+  const allocated = Number(row.allocated_units ?? 0);
   return {
     id: row.id,
     tenantId: row.tenant_id,
@@ -58,6 +75,8 @@ export function toBundleSummary(row: BundleRow): BundleSummary {
     expiresAt: row.expires_at ? row.expires_at.toISOString().slice(0, 10) : null,
     notes: row.notes,
     createdAt: row.created_at.toISOString(),
+    allocatedUnits: allocated,
+    unallocatedUnits: row.purchased_units - allocated,
     minimumBufferUnits: row.minimum_buffer_units,
     // v2.8 §15.3: an absolute floor, separate from the percentage warnings.
     // Zero means the account has not set one, and never reads as breached.
@@ -319,10 +338,12 @@ export async function checkFilingAllowance(
 
 export async function loadBalance(tenantId: string): Promise<BalanceResponse> {
   return withPlatformAccess(async (tx) => {
-    const bundles = await tx<BundleRow[]>`
-      SELECT * FROM data_bundles WHERE tenant_id = ${tenantId}
-      ORDER BY created_at DESC
-    `;
+    const bundles = await tx.unsafe<BundleRow[]>(
+      `SELECT ${BUNDLE_WITH_ALLOCATION}
+       FROM data_bundles b WHERE b.tenant_id = $1
+       ORDER BY b.created_at DESC`,
+      [tenantId],
+    );
 
     // The partner master pool this tenant also draws down, reached through any
     // one of its slices — they all point at the same parent.

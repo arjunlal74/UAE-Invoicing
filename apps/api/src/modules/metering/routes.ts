@@ -9,7 +9,12 @@ import {
   resolveTenantId,
 } from '../../http/context.js';
 import { badRequest, notFound } from '../../lib/errors.js';
-import { loadBalance, toBundleSummary, type BundleRow } from './service.js';
+import {
+  BUNDLE_WITH_ALLOCATION,
+  loadBalance,
+  toBundleSummary,
+  type BundleRow,
+} from './service.js';
 import { assertHostStockCovers } from './inventory.js';
 
 /**
@@ -207,15 +212,16 @@ export function registerMeteringRoutes(app: FastifyInstance) {
   app.get('/api/v1/admin/bundles', { preHandler: requirePlatform() }, async (request, reply) => {
     const { tenantId } = request.query as { tenantId?: string };
 
-    const rows = await withPlatformAccess(
-      (tx) => tx<BundleRow[]>`
-        SELECT b.*, t.legal_name_en AS tenant_name
-        FROM data_bundles b
-        JOIN tenants t ON t.id = b.tenant_id
-        WHERE (${tenantId ?? null}::uuid IS NULL OR b.tenant_id = ${tenantId ?? null}::uuid)
-        ORDER BY b.created_at DESC
-        LIMIT 500
-      `,
+    const rows = await withPlatformAccess((tx) =>
+      tx.unsafe<BundleRow[]>(
+        `SELECT ${BUNDLE_WITH_ALLOCATION}, t.legal_name_en AS tenant_name
+         FROM data_bundles b
+         JOIN tenants t ON t.id = b.tenant_id
+         WHERE ($1::uuid IS NULL OR b.tenant_id = $1::uuid)
+         ORDER BY b.created_at DESC
+         LIMIT 500`,
+        [tenantId ?? null],
+      ),
     );
 
     return reply.send({ items: rows.map(toBundleSummary) });

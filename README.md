@@ -370,6 +370,19 @@ wrong formula gives a number that is plausible, stable and wrong, which is the
 worst way for an inventory to fail — hence
 `apps/api/src/modules/metering/__tests__/inventory.test.ts`.
 
+**Where the allocation happens.** Admin → **Data inventory** is the host's
+console: procurement contracts, the shelf, every account's balance against its
+floor, and a **Sell bundle** action that issues a direct tenant's bundle or a
+channel partner's master pool. A partner does the second tier itself from
+**Sub-tenants**, where each client has an **Allocate** action that carves a
+slice out of a pool the partner owns — the host cannot reach a sub-tenant's
+units directly, because those units left the shelf when the partner bought the
+pool. A tenant sees only its own side, at Settings → **Usage & balance**.
+
+The partner screen shows *unallocated* rather than *remaining*, and the two are
+not the same question: unallocated is room to onboard another client, remaining
+is capacity left to file. A pool can be fully allocated and barely used.
+
 **Floors, not percentages.** v2.7 warns at 80/90/100% of a bundle. §15.5 adds an
 absolute floor per account, because a tenant filing four thousand invoices a
 month does not care that 80% of a bundle is gone; it cares that fewer than two

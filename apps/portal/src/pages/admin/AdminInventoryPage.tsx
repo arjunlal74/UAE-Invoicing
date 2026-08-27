@@ -1,7 +1,10 @@
 import {
   TENANT_TYPE_LABELS,
   type InventoryConsole,
+  type PaginatedResult,
+  type ProcurementSummary,
   type ProviderSummary,
+  type TenantSummary,
 } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -39,6 +42,7 @@ export function AdminInventoryPage() {
   const [registering, setRegistering] = useState(false);
   const [editingBuffer, setEditingBuffer] = useState(false);
   const [managingProviders, setManagingProviders] = useState(false);
+  const [selling, setSelling] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-inventory'],
@@ -51,6 +55,15 @@ export function AdminInventoryPage() {
     queryKey: ['asp-providers'],
     queryFn: () =>
       api<{ items: ProviderSummary[] }>('/api/v1/admin/providers?includeInactive=true'),
+  });
+
+  // Only fetched once the form is open: the console does not need the tenant
+  // list to render, and a platform with hundreds of them should not pay for it
+  // on every visit.
+  const { data: tenants } = useQuery({
+    queryKey: ['admin-tenants-for-sale'],
+    queryFn: () => api<PaginatedResult<TenantSummary>>('/api/v1/admin/tenants?pageSize=200'),
+    enabled: selling,
   });
 
   const activeProviders = (providers?.items ?? []).filter((p) => p.isActive);
@@ -69,6 +82,17 @@ export function AdminInventoryPage() {
           <div className="flex flex-wrap items-center gap-2">
             <Button onClick={() => setManagingProviders(true)}>Providers</Button>
             <Button onClick={() => setEditingBuffer(true)}>Minimum buffer</Button>
+            <Button
+              disabled={host.currentStockUnits <= 0}
+              title={
+                host.currentStockUnits <= 0
+                  ? 'Register a provider purchase before selling units'
+                  : undefined
+              }
+              onClick={() => setSelling(true)}
+            >
+              Sell bundle
+            </Button>
             <Button
               variant="primary"
               disabled={activeProviders.length === 0}
@@ -151,7 +175,7 @@ export function AdminInventoryPage() {
         {data.tiers.length === 0 ? (
           <EmptyState
             title="No bundles issued"
-            description="Register a provider purchase, then sell bundles to tenants and partners."
+            description="Register a provider purchase, then sell bundles to tenants and partners with the button above."
           />
         ) : (
           <div className="overflow-x-auto">
@@ -267,6 +291,19 @@ export function AdminInventoryPage() {
           onClose={() => setRegistering(false)}
           onDone={() => {
             setRegistering(false);
+            queryClient.invalidateQueries({ queryKey: ['admin-inventory'] });
+          }}
+        />
+      )}
+
+      {selling && (
+        <SellBundleModal
+          tenants={tenants?.items ?? []}
+          procurements={data.procurements}
+          stockUnits={host.currentStockUnits}
+          onClose={() => setSelling(false)}
+          onDone={() => {
+            setSelling(false);
             queryClient.invalidateQueries({ queryKey: ['admin-inventory'] });
           }}
         />
@@ -794,6 +831,229 @@ function ProvidersModal({
             </Button>
           </div>
         )}
+      </div>
+    </Modal>
+  );
+}
+
+
+/**
+ * Selling units downstream â€” Â§15.2.
+ *
+ * Direct tenants and channel partners only. A managed sub-tenant is not on the
+ * list because its units come from its partner's master pool, not from the
+ * host's shelf; putting it here would let the host allocate around the partner
+ * and leave the partner's pool figures describing something that never happened.
+ *
+ * The shelf figure is on screen throughout, because the server will refuse a
+ * sale it cannot cover and finding that out after typing the whole form is a
+ * poor way to learn how much stock is left.
+ */
+function SellBundleModal({
+  tenants,
+  procurements,
+  stockUnits,
+  onClose,
+  onDone,
+}: {
+  tenants: TenantSummary[];
+  procurements: ProcurementSummary[];
+  stockUnits: number;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const sellable = tenants.filter(
+    (t) => t.tenantType === 'ENTERPRISE_TENANT' || t.tenantType === 'CHANNEL_PARTNER',
+  );
+
+  const [form, setForm] = useState({
+    tenantId: '',
+    reference: '',
+    purchasedUnits: '',
+    aspProcurementId: '',
+    minimumBufferUnits: '',
+    expiresAt: '',
+    allowOverage: false,
+    notes: '',
+  });
+
+  const units = Number(form.purchasedUnits) || 0;
+  const tenant = sellable.find((t) => t.id === form.tenantId);
+  const overStock = units > stockUnits;
+
+  // Contracts with nothing left cannot cover a sale, so they are not offered.
+  const openContracts = procurements.filter((p) => p.remainingUnits > 0);
+
+  const chooseTenant = (id: string) => {
+    const picked = sellable.find((t) => t.id === id);
+    setForm((f) => ({
+      ...f,
+      tenantId: id,
+      // A reference has to be unique per tenant and nobody enjoys inventing one,
+      // so it is suggested from the company code and the month. Still editable â€”
+      // a merchant with their own numbering will want to use it.
+      reference:
+        f.reference ||
+        (picked ? `BNDL-${picked.companyCode}-${new Date().toISOString().slice(0, 7)}` : ''),
+    }));
+  };
+
+  const create = useMutation({
+    mutationFn: () =>
+      api('/api/v1/billing/bundles', {
+        method: 'POST',
+        body: {
+          tenantId: form.tenantId,
+          reference: form.reference.trim(),
+          purchasedUnits: units,
+          allowOverage: form.allowOverage,
+          aspProcurementId: form.aspProcurementId || null,
+          minimumBufferUnits: Number(form.minimumBufferUnits) || 0,
+          expiresAt: form.expiresAt || null,
+          notes: form.notes.trim() || null,
+        },
+      }),
+    onSuccess: onDone,
+  });
+
+  return (
+    <Modal title="Sell a data bundle" onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-sm text-slate-600">
+          {stockUnits.toLocaleString()} unsold units on the shelf. Selling to a channel partner
+          creates the master pool they carve sub-tenant slices from.
+        </p>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Buyer">
+            <select
+              className={inputClass}
+              value={form.tenantId}
+              onChange={(e) => chooseTenant(e.target.value)}
+            >
+              <option value="">Select a tenant or partnerâ€¦</option>
+              {sellable.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.legalNameEn} Â· {TENANT_TYPE_LABELS[t.tenantType]}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Reference" hint="Unique for this account. Suggested from its code.">
+            <input
+              className={inputClass}
+              value={form.reference}
+              onChange={(e) => setForm({ ...form, reference: e.target.value })}
+              placeholder="BNDL-ALBAHAR-2026-08"
+            />
+          </Field>
+          <Field label="Units">
+            <input
+              className={inputClass}
+              inputMode="numeric"
+              value={form.purchasedUnits}
+              onChange={(e) => setForm({ ...form, purchasedUnits: e.target.value })}
+              placeholder="25000"
+            />
+          </Field>
+          <Field
+            label="Low-balance alert at"
+            hint="Units remaining before they are emailed. Blank for none."
+          >
+            <input
+              className={inputClass}
+              inputMode="numeric"
+              value={form.minimumBufferUnits}
+              onChange={(e) => setForm({ ...form, minimumBufferUnits: e.target.value })}
+              placeholder="2000"
+            />
+          </Field>
+          <Field label="From contract" hint="Which purchase these units come out of.">
+            <select
+              className={inputClass}
+              value={form.aspProcurementId}
+              onChange={(e) => setForm({ ...form, aspProcurementId: e.target.value })}
+            >
+              <option value="">Not attributed</option>
+              {openContracts.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.contractReference} Â· {p.remainingUnits.toLocaleString()} left
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Expires" hint="Leave blank if the units do not lapse.">
+            <input
+              className={inputClass}
+              type="date"
+              value={form.expiresAt}
+              onChange={(e) => setForm({ ...form, expiresAt: e.target.value })}
+            />
+          </Field>
+        </div>
+
+        <label className="flex items-start gap-2.5 rounded-md border border-slate-200 p-2.5">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={form.allowOverage}
+            onChange={(e) => setForm({ ...form, allowOverage: e.target.checked })}
+          />
+          <span>
+            <span className="block text-sm font-medium text-slate-800">Allow overage</span>
+            <span className="block text-xs text-slate-500">
+              Filing continues past the purchased figure and the excess is invoiced. Off means
+              filing stops when the bundle runs dry.
+            </span>
+          </span>
+        </label>
+
+        {overStock && (
+          <Alert kind="danger" title="More than the shelf holds">
+            {units.toLocaleString()} units against {stockUnits.toLocaleString()} unsold. Register
+            the provider purchase that covers it first.
+          </Alert>
+        )}
+
+        {tenant?.tenantType === 'CHANNEL_PARTNER' && units > 0 && !overStock && (
+          <Alert kind="info">
+            This becomes {tenant.legalNameEn}&rsquo;s master pool. They allocate slices to their own
+            sub-tenants from their portal, and each sub-tenant filing draws down both.
+          </Alert>
+        )}
+
+        <Field label="Notes">
+          <input
+            className={inputClass}
+            value={form.notes}
+            onChange={(e) => setForm({ ...form, notes: e.target.value })}
+          />
+        </Field>
+
+        {create.error && (
+          <Alert kind="danger">
+            {create.error instanceof ApiError
+              ? create.error.message
+              : 'That bundle could not be created.'}
+          </Alert>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            variant="primary"
+            disabled={
+              !form.tenantId ||
+              form.reference.trim().length < 2 ||
+              units < 1 ||
+              overStock ||
+              create.isPending
+            }
+            onClick={() => create.mutate()}
+          >
+            {create.isPending ? 'Sellingâ€¦' : 'Sell bundle'}
+          </Button>
+        </div>
       </div>
     </Modal>
   );

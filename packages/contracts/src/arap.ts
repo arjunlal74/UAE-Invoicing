@@ -483,6 +483,18 @@ export const BundleSummary = z.object({
   /** v2.8 §15.3 — absolute floor, zero when the account has not set one. */
   minimumBufferUnits: z.number(),
   belowBuffer: z.boolean(),
+  /**
+   * v2.8 §15.4 — for a channel partner's master pool, the units already carved
+   * into sub-tenant slices. Zero on a bundle nothing hangs off, which is every
+   * bundle except a partner's.
+   */
+  allocatedUnits: z.number(),
+  /**
+   * Purchased − allocated: room to onboard another sub-tenant. A different
+   * question from `remainingUnits`, which is purchased − *consumed* — a partner
+   * can have allocated every unit it owns and still have most of them unspent.
+   */
+  unallocatedUnits: z.number(),
 });
 export type BundleSummary = z.infer<typeof BundleSummary>;
 

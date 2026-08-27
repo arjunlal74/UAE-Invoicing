@@ -1,4 +1,10 @@
-import type { PaginatedResult, PartnerOverview, SubTenantSummary } from '@uae/contracts';
+import type {
+  BalanceResponse,
+  BundleSummary,
+  PaginatedResult,
+  PartnerOverview,
+  SubTenantSummary,
+} from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { EMIRATES } from '@uae/domain';
 import { useState } from 'react';
@@ -8,6 +14,7 @@ import {
   Card,
   EmptyState,
   Field,
+  Modal,
   Spinner,
   StatusBadge,
   formatDate,
@@ -25,11 +32,25 @@ import { ApiError, api, queryString } from '../../lib/api';
 export function PartnerSubTenantsPage() {
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);
+  const [allocatingTo, setAllocatingTo] = useState<SubTenantSummary | null>(null);
+  const queryClient = useQueryClient();
 
   const overview = useQuery({
     queryKey: ['partner-overview'],
     queryFn: () => api<PartnerOverview>('/api/v1/partner/overview'),
   });
+
+  // A partner's own bundles are its master pools (§15.4). The `unallocatedUnits`
+  // on each is what governs whether another slice can be cut for a client.
+  const balance = useQuery({
+    queryKey: ['partner-balance'],
+    queryFn: () => api<BalanceResponse>('/api/v1/billing/balance'),
+  });
+
+  const pools = balance.data?.bundles ?? [];
+  const unallocated = pools
+    .filter((pool) => pool.status === 'ACTIVE')
+    .reduce((sum, pool) => sum + pool.unallocatedUnits, 0);
 
   const { data, isLoading } = useQuery({
     queryKey: ['partner-sub-tenants', search],
@@ -56,12 +77,22 @@ export function PartnerSubTenantsPage() {
       </div>
 
       {overview.data && (
-        <div className="grid gap-3 sm:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-5">
           <Stat label="Sub-tenants" value={overview.data.subTenantCount} />
           <Stat label="Active" value={overview.data.activeSubTenantCount} />
           <Stat label="Invoices prepared" value={overview.data.invoiceCount} />
           <Stat label="Cleared by the FTA" value={overview.data.acceptedInvoiceCount} />
+          {/* §15.4: what is left to promise a client, which is a different
+              figure from what is left to file — see the allocation dialog. */}
+          <Stat label="Units to allocate" value={unallocated} />
         </div>
+      )}
+
+      {pools.length > 0 && unallocated === 0 && (
+        <Alert kind="warn" title="Your master pool is fully allocated">
+          Every unit has been promised to a client. Existing sub-tenants can keep filing against
+          their slices, but a new one cannot be given units until the pool is topped up.
+        </Alert>
       )}
 
       {creating && <CreateSubTenantForm onDone={() => setCreating(false)} />}
@@ -99,6 +130,7 @@ export function PartnerSubTenantsPage() {
                 <th className="px-4 py-2 text-right font-medium">Users</th>
                 <th className="px-4 py-2 text-right font-medium">Invoices</th>
                 <th className="px-4 py-2 font-medium">Onboarded</th>
+                <th className="px-4 py-2 text-right font-medium">Data units</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -118,12 +150,30 @@ export function PartnerSubTenantsPage() {
                   <td className="px-4 py-2 text-right tabular-nums">{tenant.userCount}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{tenant.invoiceCount}</td>
                   <td className="px-4 py-2 text-slate-500">{formatDate(tenant.createdAt)}</td>
+                  <td className="px-4 py-2 text-right">
+                    <Button size="sm" onClick={() => setAllocatingTo(tenant)}>
+                      Allocate
+                    </Button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
+
+      {allocatingTo && (
+        <AllocateSliceModal
+          subTenant={allocatingTo}
+          pools={pools}
+          onClose={() => setAllocatingTo(null)}
+          onDone={() => {
+            setAllocatingTo(null);
+            queryClient.invalidateQueries({ queryKey: ['partner-balance'] });
+            queryClient.invalidateQueries({ queryKey: ['partner-overview'] });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -306,3 +356,184 @@ function CreateSubTenantForm({ onDone }: { onDone: () => void }) {
     </Card>
   );
 }
+
+/**
+ * Carving a slice out of the partner's master pool â€” Â§15.4.
+ *
+ * The two figures a partner needs are different questions and both are on
+ * screen: *unallocated* is how much of the pool has not been promised to a
+ * client yet, and governs whether this slice can be cut; *remaining* is how much
+ * has not been filed. A partner can have allocated every unit it owns and still
+ * have most of them unspent, so showing only one of them would answer the wrong
+ * question half the time.
+ */
+function AllocateSliceModal({
+  subTenant,
+  pools,
+  onClose,
+  onDone,
+}: {
+  subTenant: SubTenantSummary;
+  pools: BundleSummary[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const usable = pools.filter((p) => p.status === 'ACTIVE' && p.unallocatedUnits > 0);
+
+  const [form, setForm] = useState({
+    parentBundleId: usable.length === 1 ? usable[0]!.id : '',
+    reference: `SLICE-${subTenant.companyCode}-${new Date().toISOString().slice(0, 7)}`,
+    purchasedUnits: '',
+    minimumBufferUnits: '',
+    expiresAt: '',
+  });
+
+  const units = Number(form.purchasedUnits) || 0;
+  const pool = usable.find((p) => p.id === form.parentBundleId);
+  const overPool = pool ? units > pool.unallocatedUnits : false;
+
+  const create = useMutation({
+    mutationFn: () =>
+      api('/api/v1/billing/bundles', {
+        method: 'POST',
+        body: {
+          tenantId: subTenant.id,
+          parentBundleId: form.parentBundleId,
+          reference: form.reference.trim(),
+          purchasedUnits: units,
+          allowOverage: false,
+          minimumBufferUnits: Number(form.minimumBufferUnits) || 0,
+          expiresAt: form.expiresAt || null,
+        },
+      }),
+    onSuccess: onDone,
+  });
+
+  return (
+    <Modal title={`Allocate units to ${subTenant.legalNameEn}`} onClose={onClose}>
+      <div className="space-y-4">
+        {usable.length === 0 ? (
+          <Alert kind="warn" title="No pool with units left to allocate">
+            Every unit in your master pools has already been promised to a client. Ask your account
+            manager to top up before onboarding another.
+          </Alert>
+        ) : (
+          <>
+            <p className="text-sm text-slate-600">
+              A slice comes out of your master pool. When this client files an invoice the unit is
+              deducted from their slice <em>and</em> from the pool it was cut from.
+            </p>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="From master pool">
+                <select
+                  className={inputClass}
+                  value={form.parentBundleId}
+                  onChange={(e) => setForm({ ...form, parentBundleId: e.target.value })}
+                >
+                  <option value="">Select a poolâ€¦</option>
+                  {usable.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.reference} Â· {p.unallocatedUnits.toLocaleString()} unallocated
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Reference" hint="Unique for this client.">
+                <input
+                  className={inputClass}
+                  value={form.reference}
+                  onChange={(e) => setForm({ ...form, reference: e.target.value })}
+                />
+              </Field>
+              <Field label="Units">
+                <input
+                  className={inputClass}
+                  inputMode="numeric"
+                  value={form.purchasedUnits}
+                  onChange={(e) => setForm({ ...form, purchasedUnits: e.target.value })}
+                  placeholder="5000"
+                />
+              </Field>
+              <Field
+                label="Low-balance alert at"
+                hint="Units left before you and they are emailed. Blank for none."
+              >
+                <input
+                  className={inputClass}
+                  inputMode="numeric"
+                  value={form.minimumBufferUnits}
+                  onChange={(e) => setForm({ ...form, minimumBufferUnits: e.target.value })}
+                  placeholder="500"
+                />
+              </Field>
+              <Field label="Expires" hint="Leave blank if the units do not lapse.">
+                <input
+                  className={inputClass}
+                  type="date"
+                  value={form.expiresAt}
+                  onChange={(e) => setForm({ ...form, expiresAt: e.target.value })}
+                />
+              </Field>
+            </div>
+
+            {pool && (
+              <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-700">
+                <strong>{pool.reference}</strong>:{' '}
+                <span className="tabular-nums">{pool.unallocatedUnits.toLocaleString()}</span>{' '}
+                unallocated of {pool.purchasedUnits.toLocaleString()}, and{' '}
+                <span className="tabular-nums">{pool.remainingUnits.toLocaleString()}</span> not yet
+                filed against.
+                {units > 0 && !overPool && (
+                  <>
+                    {' '}
+                    After this slice:{' '}
+                    <strong className="tabular-nums">
+                      {(pool.unallocatedUnits - units).toLocaleString()}
+                    </strong>{' '}
+                    left to allocate.
+                  </>
+                )}
+              </div>
+            )}
+
+            {overPool && (
+              <Alert kind="danger" title="More than the pool has left">
+                {units.toLocaleString()} units against {pool!.unallocatedUnits.toLocaleString()}{' '}
+                unallocated. Reduce the slice, or have your master pool topped up.
+              </Alert>
+            )}
+
+            {create.error && (
+              <Alert kind="danger">
+                {create.error instanceof ApiError
+                  ? create.error.message
+                  : 'That allocation could not be made.'}
+              </Alert>
+            )}
+          </>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>Cancel</Button>
+          {usable.length > 0 && (
+            <Button
+              variant="primary"
+              disabled={
+                !form.parentBundleId ||
+                form.reference.trim().length < 2 ||
+                units < 1 ||
+                overPool ||
+                create.isPending
+              }
+              onClick={() => create.mutate()}
+            >
+              {create.isPending ? 'Allocatingâ€¦' : 'Allocate units'}
+            </Button>
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
