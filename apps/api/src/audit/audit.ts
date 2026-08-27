@@ -64,7 +64,12 @@ export type AuditAction =
   | 'PURCHASE_INVOICE_DECIDED'
   | 'AP_RESPONSE_TRANSMITTED'
   | 'BUNDLE_CREATED'
-  | 'BUNDLE_UPDATED';
+  | 'BUNDLE_UPDATED'
+  // --- SRS v2.1 §1.2 channel 1: programmatic ERP ingestion -------------------
+  | 'API_KEY_CREATED'
+  | 'API_KEY_REVOKED'
+  | 'INVOICE_INGESTED'
+  | 'INVOICE_INGESTED_FOR_APPROVAL';
 
 export interface AuditEntry {
   action: AuditAction;
@@ -77,13 +82,28 @@ export interface AuditEntry {
 export interface AuditActor {
   actorId?: string | null;
   actorName?: string | null;
-  actorType: 'USER' | 'SYSTEM' | 'ASP_WEBHOOK';
+  actorType: 'USER' | 'SYSTEM' | 'ASP_WEBHOOK' | 'API_KEY';
   ip?: string | null;
   userAgent?: string | null;
   tenantId?: string | null;
 }
 
 export function actorFromContext(ctx: RequestContext): AuditActor {
+  // A machine on an API key is recorded as one. Filing under the name of the
+  // person who happened to mint the key months ago would put a human's name
+  // against an action they were not present for, which is the opposite of what
+  // an audit trail is for.
+  if (ctx.apiKey) {
+    return {
+      actorId: ctx.apiKey.id,
+      actorName: `${ctx.apiKey.name} (${ctx.apiKey.keyPrefix}…)`,
+      actorType: 'API_KEY',
+      ip: ctx.ip ?? null,
+      userAgent: ctx.userAgent ?? null,
+      tenantId: ctx.tenantId,
+    };
+  }
+
   return {
     actorId: ctx.userId,
     actorName: ctx.email,

@@ -19,7 +19,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit } from '../../audit/audit.js';
 import { jsonb, withTenant, type Tx } from '../../db/client.js';
-import { requireContext, requirePermission } from '../../http/context.js';
+import { ctxCan, requireContext, requirePermission } from '../../http/context.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { SUBMIT_JOB_OPTIONS, invoiceSubmitQueue } from '../../queue/queues.js';
 import { BATCH_SELECT, toBatchSummary, type BatchRow } from '../batches/routes.js';
@@ -401,7 +401,7 @@ export function registerStagingRoutes(app: FastifyInstance) {
 
       // SRS v2.1 §5: the tax approver is the only role that may file. Everyone
       // else's submission prepares the invoices and stops at the approval gate.
-      const files = can(ctx.role, 'invoice.submit');
+      const files = ctxCan(ctx, 'invoice.submit');
 
       const outcome = await withTenant(ctx.tenantId, async (tx) => {
         const tenants = await tx<{ status: string }[]>`

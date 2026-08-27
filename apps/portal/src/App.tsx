@@ -26,6 +26,7 @@ import { DraftsPage } from './pages/ar/DraftsPage';
 import { InvoiceBuilderPage } from './pages/ar/InvoiceBuilderPage';
 import { AnalyticsPage } from './pages/reports/AnalyticsPage';
 import { ReportLibraryPage } from './pages/reports/ReportLibraryPage';
+import { ApiKeysPage } from './pages/settings/ApiKeysPage';
 import { UsagePage } from './pages/settings/UsagePage';
 import { ApprovalsPage } from './pages/merchant/ApprovalsPage';
 import { BatchesPage } from './pages/merchant/BatchesPage';
@@ -229,6 +230,16 @@ export function App() {
             element={
               <RequirePermission permission="billing.read">
                 <UsagePage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/settings/api-keys"
+            element={
+              // Minting a credential that can file tax documents is an identity
+              // decision, so it sits behind the permission governing the others.
+              <RequirePermission permission="tenant.users.manage">
+                <ApiKeysPage />
               </RequirePermission>
             }
           />

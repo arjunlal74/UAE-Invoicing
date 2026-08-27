@@ -69,7 +69,7 @@ direction.
 | | Outbound (AR) | Inbound (AP) |
 |---|---|---|
 | Directory | Customers (§6) | Suppliers (§12.1) |
-| Ingestion | Excel, REST/ERP, in-app builders (§1.3) | Peppol/ASP webhook, manual XML (§12.1) |
+| Ingestion | Excel, REST API (§1.2 ch. 1), in-app builders (§1.3) | Peppol/ASP webhook, manual XML (§12.1) |
 | Authoring | Invoice builder (380/388, §7) and credit note builder (381, §8) | — |
 | Clearance | We file it with the FTA (§10) | It arrived already cleared |
 | Verdict | The **buyer** accepts, queries or rejects it (§11) | **We** accept, query or reject it (§12.3) |
@@ -126,7 +126,8 @@ fail against code that is not on disk.
 ```bash
 pnpm --filter @uae/domain test   # 43 — VAT maths, validation rules, auto-fix, credit note reversal
 pnpm --filter @uae/ubl test      # 30 — UBL 2.1 generation and reading, ApplicationResponse, QR payload
-pnpm --filter @uae/api test      # 28 — Excel round trip, the §16 permission matrix
+pnpm --filter @uae/api test      # 50 — Excel round trip, the §16 permission matrix,
+                                 #      PDF rendering, API key credentials and scopes
 pnpm --filter @uae/portal test   # 11 — staging grid and error sidebar
 ```
 
@@ -141,9 +142,17 @@ cd apps/api && node scripts/e2e.mjs              # local (:3100)
 cd apps/api && API_URL=http://localhost:8080 node scripts/e2e.mjs   # containers
 ```
 
-It is safe to run repeatedly against the same database: invoice numbers and the
-onboarded sub-tenant's TRN are per-run, and the assertions name the rows they
-care about rather than assuming the tenant has nothing else in it.
+And 42 more over the programmatic ERP API — key minting and scope limits,
+idempotent replay, validation vocabulary, the §16 approval gate, and revocation:
+
+```bash
+pnpm --filter @uae/api e2e:ingest                                        # containers
+cd apps/api && BASE=http://localhost:3100 node scripts/ingest-e2e.mjs    # local
+```
+
+Both are safe to run repeatedly against the same database: invoice numbers and
+the onboarded sub-tenant's TRN are per-run, and the assertions name the rows
+they care about rather than assuming the tenant has nothing else in it.
 
 ## Architecture
 
@@ -245,13 +254,23 @@ specification before production.
 **Phase 2 (native AS4 / Peppol).** Not implemented. The driver registration
 exists and reports that clearly rather than failing obscurely.
 
-**ERP connectors (§10.1).** The connector catalogue — SAP, Oracle/NetSuite,
-Dynamics, Tally, Zoho, QuickBooks — is not built; the SRS itself lists them as
-separately monetisable modules. `ingestion_source` names them so a document
-records which one produced it, and the §10.6 reverse push marks a cleared
-document `erp_reverse_sync_status = PENDING`, but nothing drains that queue
-until there is an ERP on the other end of it. A document composed in the browser
-is marked `NOT_APPLICABLE` rather than left pending forever.
+**ERP connectors (§10.1).** The generic REST API an ERP posts to *is* built —
+see "The programmatic API" below. What is not built is the connector catalogue
+that sits on top of it: SAP, Oracle/NetSuite, Dynamics, Tally, Zoho, QuickBooks,
+each of which is a piece of software living inside somebody else's system, and
+which the SRS itself lists as separately monetisable modules. `ingestion_source`
+names them so a document records which one produced it.
+
+The §10.6 reverse push marks a cleared document `erp_reverse_sync_status =
+PENDING`, but nothing drains that queue until there is an ERP on the other end
+of it. A document composed in the browser is marked `NOT_APPLICABLE` rather than
+left pending forever; one that arrived over the API is marked `PENDING`, because
+there genuinely is a row in a ledger somewhere waiting to hear the verdict.
+
+**SFTP ingestion (§1.2).** The third limb of channel 1. `ingestion_source` has
+the value; there is no listener. It needs a long-running file watcher and a
+per-tenant drop directory, neither of which the request/response deployment has
+a place for yet.
 
 **§10.5 FTA outage notification.** BullMQ carries the retry and dead-letter
 behaviour the SRS describes, but the automated incident notification to the FTA
@@ -281,6 +300,72 @@ flagged.
 | v2.7 §17 `UNIQUE (tenant_id, customer_code)` | Partial unique index over non-null codes | The code is optional, and a plain `UNIQUE` admits unlimited NULL rows while still reporting a uniqueness failure when a real value collides. Same for supplier codes and both TRNs. |
 | v2.7 §8 credit note as UBL Type 381 | Emitted as an `Invoice` root with `InvoiceTypeCode 381` | The SRS's own XPaths assume it: §8.2 maps the preceding-document link to `/Invoice/cac:BillingReference/…`, not to a `CreditNote` root. |
 | v2.7 §12.3 "Reject (RE)" open to the AP desk | Rejecting and querying are, accepting is not | §16 reserves "authorize AP payments" to the tax approver, and accepting a bill is what releases it for payment. An accountant flags it instead. |
+
+## The programmatic API
+
+Ingestion channel 1 of SRS §1.2 — how an ERP files invoices without anyone
+signing in. Two endpoints, which is the whole surface a sending system needs.
+
+**Credentials.** An ERP has no password to rotate and no second factor to carry,
+so it gets an API key instead: `uaeinv_live_<43 chars>`, minted under
+*Settings → API keys* by whoever holds `tenant.users.manage`. The platform
+stores a SHA-256 of it and shows it exactly once. A key carries an explicit
+scope list rather than a role, capped by `API_KEY_SCOPES`, so it can never be
+granted `platform.manage`, `tenant.users.manage` or `audit.read` — the three
+that would turn a leaked key into a foothold. Requests carrying a key run with
+role `API_CLIENT`, which holds no permissions at all, so any permission check
+in the codebase that has not been taught about keys refuses one.
+
+```
+POST /api/v1/invoices
+X-API-Key: uaeinv_live_…
+Idempotency-Key: erp-doc-88421
+
+{ "invoiceNumber": "INV-2026-00042",
+  "buyer": { "customerCode": "CUST-014" },
+  "lines": [{ "description": "Consultancy", "quantity": "10",
+              "unitPrice": "500.00", "vatCategory": "S" }] }
+```
+
+**Synchronous verdict.** The document is validated inside the request. `201`
+means it is legal and on its way; `422` returns *every* finding at once, keyed
+to this API's own field names (`lines[0].uom`) rather than to a spreadsheet
+cell for a workbook the caller has never seen. There is no draft state — nobody
+is coming back to finish it.
+
+**Amounts are computed, not accepted.** Send quantities and unit prices; line
+nets, VAT and document totals are derived. A `totals` block may be sent, and is
+*checked* rather than used: an exact mismatch is a `422` naming the figure and
+what we made it. A one-fils rounding difference does not stay one fils across
+ten thousand invoices.
+
+**Idempotency.** `Idempotency-Key` is stored with the whole response, so a
+retry after a timeout replays the original outcome — rejections included —
+rather than filing a second time. Reusing a key for a different body is a `409`,
+because that is a bug in the caller rather than a retry.
+
+**The approval gate still applies.** A key scoped `invoice.submit` files
+straight through; one scoped only `invoice.submit_for_approval` parks each
+document at `PENDING_CFO_APPROVAL` for a human, exactly as an accountant's
+submission does (§16). `holdForApproval: true` lets a filing key opt into the
+gate while an integration is being proven.
+
+```
+GET /api/v1/invoices/status/{invoiceNumber}
+```
+
+Clearance is asynchronous, so the second endpoint exists because the first
+cannot tell the caller how the story ends. Keyed by invoice number rather than
+by our id: the sending system wrote its own number on its own ledger row and has
+never seen our primary keys.
+
+**Attribution.** A machine is not a user. Documents it files carry
+`created_by_api_key_id` and a null `created_by_user_id`, and audit rows are
+written with `actor_type = 'API_KEY'` naming the key — not the person who
+minted it months earlier and was not present.
+
+Run `pnpm --filter @uae/api e2e:ingest` against a running stack to exercise all
+of the above.
 
 ## Authentication and credential lifecycle
 

@@ -12,7 +12,7 @@ import {
 import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit } from '../../audit/audit.js';
 import { withTenant } from '../../db/client.js';
-import { requireContext, requirePermission } from '../../http/context.js';
+import { ctxCan, requireContext, requirePermission } from '../../http/context.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { RESPONSE_JOB_OPTIONS, responseSendQueue } from '../../queue/queues.js';
 import { toDocumentListItem, type DocumentRow, DOCUMENT_SELECT } from '../documents/mapper.js';
@@ -233,7 +233,7 @@ export function registerApRoutes(app: FastifyInstance) {
       // §16 reserves "authorize AP payments" to the tax approver. Accepting a
       // bill is what releases it for payment, so an accountant may query or
       // reject on their own but the acceptance needs the CFO's authority.
-      if (body.responseCode === 'AP' && !can(ctx.role, 'ap.post')) {
+      if (body.responseCode === 'AP' && !ctxCan(ctx, 'ap.post')) {
         throw badRequest(
           'Accepting a purchase invoice releases it for payment, which is reserved to your tax approver. Use "Under query" to flag it for them instead.',
         );

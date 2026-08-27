@@ -1,7 +1,6 @@
 import {
   PrepareCreditNoteRequest,
   SaveDraftRequest,
-  can,
   type CreditNotePreparation,
   type DraftResponse,
   type InvoiceStatus,
@@ -11,23 +10,27 @@ import {
 } from '@uae/contracts';
 import {
   INVOICE_TYPES,
-  VAT_CATEGORIES,
   buildCreditNote,
   recalcInvoice,
   type InvoiceTypeCode,
   type StagedInvoice,
-  type StagedLine,
-  type VatCategoryCode,
 } from '@uae/domain';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit } from '../../audit/audit.js';
 import { jsonb, withTenant, type Tx } from '../../db/client.js';
-import { requireContext, requirePermission } from '../../http/context.js';
+import { ctxCan, requireContext, requirePermission } from '../../http/context.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
-import { SUBMIT_JOB_OPTIONS, invoiceSubmitQueue } from '../../queue/queues.js';
-import { checkFilingAllowance } from '../metering/service.js';
-import { buildValidationContext, validateStagedRow } from '../staging/service.js';
+import {
+  applyCustomer,
+  applySeller,
+  assertCanFile,
+  insertDocument,
+  nextNumber,
+  queueSubmission,
+  validateDocument,
+  writeLines,
+} from './documents.js';
 
 /**
  * The in-app authoring suite — SRS v2.7 §7 (Invoice Builder) and §8 (Credit
@@ -90,84 +93,6 @@ function toDraftResponse(
   };
 }
 
-/**
- * The next number in the tenant's own series (§7: "Invoice Number (Auto)").
- *
- * Derived from what has actually been issued this year rather than from a
- * counter, so a document deleted while still a draft returns its number to the
- * pool instead of leaving a permanent gap in a series a tax auditor will read.
- * The number is only a suggestion — the unique constraint is what actually
- * prevents a collision if two people compose at the same moment.
- */
-async function nextNumber(tx: Tx, tenantId: string, typeCode: string): Promise<string> {
-  const prefix = typeCode === '381' ? 'CN' : typeCode === '383' ? 'DN' : 'INV';
-  const year = new Date().getUTCFullYear();
-  const pattern = `${prefix}-${year}-%`;
-
-  const rows = await tx<{ highest: string | null }[]>`
-    SELECT max(substring(invoice_number from '[0-9]+$')) AS highest
-    FROM invoices
-    WHERE tenant_id = ${tenantId}
-      AND direction = 'OUTBOUND_SALES_AR'
-      AND invoice_number LIKE ${pattern}
-  `;
-
-  const next = Number(rows[0]?.highest ?? 0) + 1;
-  return `${prefix}-${year}-${String(next).padStart(5, '0')}`;
-}
-
-/** Copy the buyer block onto the staged document from a directory record. */
-async function applyCustomer(
-  tx: Tx,
-  tenantId: string,
-  customerId: string,
-  invoice: StagedInvoice,
-): Promise<StagedInvoice> {
-  const rows = await tx<
-    {
-      customer_name_en: string;
-      customer_type: 'B2B' | 'B2C';
-      trn: string | null;
-      emirate: string;
-      default_payment_means: string | null;
-      is_active: boolean;
-    }[]
-  >`
-    SELECT customer_name_en, customer_type, trn, emirate, default_payment_means, is_active
-    FROM customers WHERE id = ${customerId} AND tenant_id = ${tenantId}
-  `;
-
-  const customer = rows[0];
-  if (!customer) throw notFound('Customer');
-  if (!customer.is_active) {
-    throw badRequest('That customer has been deactivated. Reactivate it before invoicing them.');
-  }
-
-  return {
-    ...invoice,
-    buyerName: customer.customer_name_en,
-    buyerTrn: customer.trn ?? '',
-    buyerEmirate: customer.emirate,
-    paymentMeans: invoice.paymentMeans || customer.default_payment_means || '30',
-  };
-}
-
-/** Seller identity always comes from the tenant record, never from the client. */
-async function applySeller(
-  tx: Tx,
-  tenantId: string,
-  invoice: StagedInvoice,
-): Promise<StagedInvoice> {
-  const rows = await tx<{ trn: string | null; legal_name_en: string }[]>`
-    SELECT trn, legal_name_en FROM tenants WHERE id = ${tenantId}
-  `;
-  const tenant = rows[0];
-  if (!tenant?.trn) {
-    throw badRequest('Your company profile has no TRN, so invoices cannot be composed yet.');
-  }
-  return { ...invoice, supplierTrn: tenant.trn, supplierName: tenant.legal_name_en };
-}
-
 async function loadDraft(tx: Tx, id: string): Promise<DraftRow> {
   const rows = await tx<DraftRow[]>`
     SELECT id, invoice_number, status, customer_id, raw_payload_json,
@@ -184,33 +109,6 @@ async function loadDraft(tx: Tx, id: string): Promise<DraftRow> {
   }
   if (!row.raw_payload_json) throw badRequest('This draft has no content to edit.');
   return row;
-}
-
-/** Replace the draft's line items so the detail view matches the payload. */
-async function writeLines(tx: Tx, tenantId: string, invoiceId: string, invoice: StagedInvoice) {
-  await tx`DELETE FROM invoice_line_items WHERE invoice_id = ${invoiceId}`;
-  if (invoice.lines.length === 0) return;
-
-  await tx`
-    INSERT INTO invoice_line_items ${tx(
-      invoice.lines.map((line: StagedLine, index: number) => ({
-        tenant_id: tenantId,
-        invoice_id: invoiceId,
-        line_number: Number(line.lineNumber) || index + 1,
-        item_name: line.description,
-        hs_code: line.hsCode || null,
-        quantity: line.quantity || '0',
-        unit_of_measure: line.uom,
-        unit_price: line.unitPrice || '0',
-        discount_amount: line.lineDiscount || '0',
-        vat_category: VAT_CATEGORIES[line.vatCategory as VatCategoryCode]?.dbValue ?? 'STANDARD',
-        vat_rate: line.vatRate || '0',
-        vat_amount: line.vatAmount || '0',
-        net_amount: line.netAmount || '0',
-        total_amount: line.lineTotal || '0',
-      })),
-    )}
-  `;
 }
 
 export function registerArBuilderRoutes(app: FastifyInstance) {
@@ -414,29 +312,13 @@ export function registerArBuilderRoutes(app: FastifyInstance) {
 
       // §8.2 feature 6, and §16 for ordinary invoices: the accountant composes
       // and validates, the tax approver releases. Same gate as the batch path.
-      const files = can(ctx.role, 'invoice.submit');
+      const files = ctxCan(ctx, 'invoice.submit');
 
       const outcome = await withTenant(ctx.tenantId, async (tx) => {
         const row = await loadDraft(tx, id);
 
-        const tenants = await tx<{ status: string }[]>`
-          SELECT status FROM tenants WHERE id = ${ctx.tenantId}
-        `;
-        if (tenants[0]?.status !== 'ACTIVE') {
-          throw badRequest(
-            'Your account is not yet active with our network provider, so documents cannot be filed. Your draft is saved.',
-          );
-        }
-
-        const configs = await tx<{ status: string }[]>`
-          SELECT status FROM tenant_asp_configs WHERE tenant_id = ${ctx.tenantId} AND is_active
-        `;
-        if (configs[0]?.status !== 'ACTIVE') {
-          throw badRequest('Your provider connection is not active. Documents cannot be filed yet.');
-        }
-
-        const allowance = await checkFilingAllowance(ctx.tenantId!, 1, tx);
-        if (!allowance.allowed) throw badRequest(allowance.reason!);
+        // The same gate the Excel channel and the ERP API pass through.
+        await assertCanFile(tx, ctx.tenantId!);
 
         const validation = await validateDraft(tx, ctx.tenantId!, row);
         if (!validation.submittable) {
@@ -462,11 +344,7 @@ export function registerArBuilderRoutes(app: FastifyInstance) {
       });
 
       if (files) {
-        await invoiceSubmitQueue().add(
-          'submit',
-          { invoiceId: id, tenantId: ctx.tenantId, actorUserId: ctx.userId },
-          { ...SUBMIT_JOB_OPTIONS, jobId: `submit-${id}` },
-        );
+        await queueSubmission(id, ctx.tenantId!, ctx.userId);
       }
 
       await audit(actorFromContext(ctx), {
@@ -664,22 +542,9 @@ export function registerArBuilderRoutes(app: FastifyInstance) {
 // Shared work
 // ---------------------------------------------------------------------------
 
+/** A draft is validated by exactly the rules an ERP's submission is. */
 async function validateDraft(tx: Tx, tenantId: string, row: DraftRow) {
-  const invoice = recalcInvoice(row.raw_payload_json!);
-  const context = await buildValidationContext(tx, tenantId, [invoice.invoiceNumber], {
-    excludeInvoiceId: row.id,
-  });
-  const result = validateStagedRow(invoice, context);
-  return {
-    findings: result.findings.map((f) => ({
-      ruleCode: f.ruleCode,
-      severity: f.severity as string,
-      message: f.message,
-      field: f.field,
-      lineId: f.lineId,
-    })),
-    submittable: result.submittable,
-  };
+  return validateDocument(tx, tenantId, row.raw_payload_json!, row.id);
 }
 
 /**
@@ -759,16 +624,19 @@ async function saveDraft(
 
     const id = existingId
       ? await updateDraftRow(tx, existingId, invoice, customerId, typeDbValue, body, referenced)
-      : await insertDraftRow(
-          tx,
+      : await insertDocument(tx, {
           tenantId,
-          userId,
+          createdByUserId: userId,
           invoice,
           customerId,
-          typeDbValue,
-          body,
+          invoiceTypeDbValue: typeDbValue,
+          status: 'DRAFT',
+          sourceChannel: 'MANUAL_IN_APP_ENTRY',
           referenced,
-        );
+          creditNote: body.creditNote ?? null,
+          // Composed here, so there is no ERP row awaiting the clearance result.
+          erpReverseSyncStatus: 'NOT_APPLICABLE',
+        });
 
     await writeLines(tx, tenantId, id, invoice);
 
@@ -781,52 +649,6 @@ async function saveDraft(
       response: toDraftResponse(row, validation.findings, validation.submittable),
     };
   });
-}
-
-async function insertDraftRow(
-  tx: Tx,
-  tenantId: string,
-  userId: string,
-  invoice: StagedInvoice,
-  customerId: string | null,
-  typeDbValue: string,
-  body: SaveDraftRequest,
-  referenced: { id: string; invoice_number: string; fta_irn: string | null } | null,
-): Promise<string> {
-  const rows = await tx<{ id: string }[]>`
-    INSERT INTO invoices (
-      tenant_id, direction, source_channel, customer_id,
-      invoice_number, invoice_type, issue_date, issue_time, currency_code, exchange_rate,
-      seller_trn, seller_name, buyer_trn, buyer_name, buyer_emirate,
-      po_reference, preceding_invoice_id, payment_means,
-      line_extension_amount, tax_exclusive_amount, tax_inclusive_amount,
-      vat_total_amount, payable_amount, payable_amount_aed,
-      status, created_by_user_id, raw_payload_json,
-      referenced_invoice_id, referenced_invoice_number, referenced_fta_irn,
-      credit_note_reason_code, credit_note_reversal_mode, credit_note_notes
-    ) VALUES (
-      ${tenantId}, 'OUTBOUND_SALES_AR', 'MANUAL_IN_APP_ENTRY', ${customerId},
-      ${invoice.invoiceNumber}, ${typeDbValue}::invoice_type,
-      ${invoice.issueDate || new Date().toISOString().slice(0, 10)}::date,
-      ${invoice.issueTime || '00:00:00'}::time,
-      ${invoice.currency || 'AED'}, ${invoice.fxRate || '1.000000'},
-      ${invoice.supplierTrn}, ${invoice.supplierName},
-      ${invoice.buyerTrn || null}, ${invoice.buyerName}, ${invoice.buyerEmirate},
-      ${invoice.poReference || null}, ${invoice.precedingInvoiceId || null},
-      ${invoice.paymentMeans || null},
-      ${invoice.lineExtensionAmount}, ${invoice.taxExclusiveAmount},
-      ${invoice.taxInclusiveAmount}, ${invoice.vatTotalAmount},
-      ${invoice.payableAmount}, ${invoice.payableAmountAed},
-      'DRAFT', ${userId}, ${jsonb(tx, invoice)},
-      ${referenced?.id ?? null}, ${referenced?.invoice_number ?? null},
-      ${referenced?.fta_irn ?? null},
-      ${body.creditNote?.reasonCode ?? null}::rejection_reason_code,
-      ${body.creditNote?.reversalMode ?? null}::reversal_mode,
-      ${body.creditNote?.notes ?? null}
-    )
-    RETURNING id
-  `;
-  return rows[0]!.id;
 }
 
 async function updateDraftRow(

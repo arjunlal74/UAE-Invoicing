@@ -8,6 +8,7 @@ import { registerErrorHandler } from './lib/errors.js';
 import { logger } from './logger.js';
 import { registerAdminDashboardRoutes } from './modules/admin/dashboard.js';
 import { registerAdminRoutes } from './modules/admin/routes.js';
+import { registerApiKeyRoutes } from './modules/apikeys/routes.js';
 import { registerApRoutes } from './modules/ap/routes.js';
 import { registerArBuilderRoutes } from './modules/ar/builder.js';
 import { registerDirectoryRoutes } from './modules/directories/routes.js';
@@ -18,6 +19,7 @@ import { registerApprovalRoutes } from './modules/approvals/routes.js';
 import { registerAspRoutes } from './modules/asp/routes.js';
 import { registerBatchRoutes } from './modules/batches/routes.js';
 import { registerDashboardRoutes } from './modules/dashboard/routes.js';
+import { registerIngestionRoutes } from './modules/ingestion/routes.js';
 import { registerInvoiceRoutes } from './modules/invoices/routes.js';
 import { registerMailRoutes } from './modules/mail/routes.js';
 import { registerPartnerRoutes } from './modules/partners/routes.js';
@@ -94,6 +96,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerBatchRoutes(app);
   registerStagingRoutes(app);
   registerInvoiceRoutes(app);
+  // Ingestion channel 1 — the programmatic ERP API (§1.2), and the machine
+  // credentials it authenticates with.
+  registerIngestionRoutes(app);
+  registerApiKeyRoutes(app);
   registerApprovalRoutes(app);
   registerPartnerRoutes(app);
   registerDashboardRoutes(app);

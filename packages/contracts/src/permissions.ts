@@ -109,7 +109,40 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   ],
 
   AUDITOR: ['invoice.read', 'directory.read', 'ap.read', 'reports.read', 'audit.read'],
+
+  // Deliberately empty. A machine caller's authority is the scope list on its
+  // key, resolved into `RequestContext.scopes`; the role grants nothing on its
+  // own so that a permission check written before API keys existed fails closed.
+  API_CLIENT: [],
 };
+
+/**
+ * The scopes an API key may be granted.
+ *
+ * A machine integrates a ledger with a tax authority. It does not invite
+ * colleagues, change the company's tax profile, or read the audit trail, so
+ * those permissions are not on offer here however senior the person minting the
+ * key is. Anything an operator has to think about is a thing a stolen key can
+ * do, and this list is the whole of it.
+ *
+ * `invoice.submit` is included but is the one to hesitate over: a key holding
+ * it files with the FTA without a human release step. That is precisely what an
+ * automated ERP feed is for, and precisely why it is not the default.
+ */
+export const API_KEY_SCOPES: Permission[] = [
+  'invoice.read',
+  'invoice.edit',
+  'invoice.submit_for_approval',
+  'invoice.submit',
+  'directory.read',
+  'directory.manage',
+  'ap.read',
+  'reports.read',
+];
+
+export function isApiKeyScope(value: string): value is Permission {
+  return (API_KEY_SCOPES as string[]).includes(value);
+}
 
 export function can(role: Role, permission: Permission): boolean {
   return ROLE_PERMISSIONS[role].includes(permission);

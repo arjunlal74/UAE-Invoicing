@@ -13,7 +13,7 @@ import { actorFromContext, audit, diff } from '../../audit/audit.js';
 import { createInvite } from '../../auth/service.js';
 import { config } from '../../config.js';
 import { jsonb, sql, withPlatformAccess } from '../../db/client.js';
-import { requireAuth, requireContext, requirePlatform } from '../../http/context.js';
+import { ctxCan, requireAuth, requireContext, requirePlatform } from '../../http/context.js';
 import { badRequest, forbidden, notFound } from '../../lib/errors.js';
 import { logger } from '../../logger.js';
 import { queueActivation } from '../../mail/outbox.js';
@@ -368,7 +368,7 @@ export function registerTenantRoutes(app: FastifyInstance) {
   app.patch('/api/v1/tenant/profile', { preHandler: requireAuth() }, async (request, reply) => {
     const ctx = requireContext(request);
     if (!ctx.tenantId) throw notFound('Tenant');
-    if (!can(ctx.role, 'tenant.profile.manage')) {
+    if (!ctxCan(ctx, 'tenant.profile.manage')) {
       throw forbidden('Only a company administrator can change the company profile.');
     }
 

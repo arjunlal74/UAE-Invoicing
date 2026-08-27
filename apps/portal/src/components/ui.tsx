@@ -335,12 +335,18 @@ export function Modal({
   children,
   footer,
   width = 'md',
+  dismissOnBackdrop = true,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
   width?: 'md' | 'lg' | 'xl';
+  /**
+   * Off for a dialog showing something that cannot be recovered — an API key is
+   * displayed exactly once, and a stray click must not be what loses it.
+   */
+  dismissOnBackdrop?: boolean;
 }) {
   const widths = { md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl' };
 
@@ -350,7 +356,7 @@ export function Modal({
       // Clicking the backdrop closes; clicking the panel must not, so the
       // handler checks the target is the backdrop itself rather than a child.
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (dismissOnBackdrop && event.target === event.currentTarget) onClose();
       }}
     >
       <div

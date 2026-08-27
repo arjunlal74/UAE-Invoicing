@@ -84,6 +84,7 @@ const MODULES: Module[] = [
     items: [
       { to: '/settings', label: 'Company profile', end: true },
       { to: '/settings/usage', label: 'Usage & balance', needs: 'billing.read' },
+      { to: '/settings/api-keys', label: 'API keys', needs: 'tenant.users.manage' },
     ],
   },
 ];

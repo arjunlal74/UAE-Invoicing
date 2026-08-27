@@ -257,6 +257,16 @@ export const Role = z.enum([
   'ACCOUNTANT',
   'TAX_APPROVER_CFO',
   'AUDITOR',
+  /**
+   * Not a user role, and never stored in `users.role` — the database enum does
+   * not have it. It is the role a request carries when it arrived on an API key
+   * (§1.2 channel 1) rather than on a session, and it holds no permissions at
+   * all: everything such a request may do comes from the key's own scopes. Any
+   * code that asks `can(ctx.role, …)` about a machine caller therefore gets a
+   * refusal, which is the answer we want from a check that has not been taught
+   * about API keys yet.
+   */
+  'API_CLIENT',
 ]);
 export type Role = z.infer<typeof Role>;
 
@@ -281,6 +291,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   ACCOUNTANT: 'Data Entry / Accountant',
   TAX_APPROVER_CFO: 'Tax Approver / CFO',
   AUDITOR: 'Compliance Auditor',
+  API_CLIENT: 'ERP integration key',
 };
 
 /** One-line summary of each role, shown next to the pickers that assign them. */
@@ -291,6 +302,7 @@ export const ROLE_DESCRIPTIONS: Record<Role, string> = {
   ACCOUNTANT: 'Prepares invoices and corrects staged rows. Cannot file with the FTA.',
   TAX_APPROVER_CFO: 'The only role that can file invoices with the FTA.',
   AUDITOR: 'Read-only access to invoices, archives and the audit trail.',
+  API_CLIENT: 'A machine posting invoices over the API. Never assigned to a person.',
 };
 
 export function isPlatformRole(role: Role): boolean {
