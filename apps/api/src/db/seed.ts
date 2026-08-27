@@ -279,12 +279,28 @@ async function seed() {
     // for its own client. Without the procurement at the top the console would
     // open on a platform that has sold 110,000 units it never bought — which is
     // exactly the state v2.8 exists to make impossible.
+    //
+    // The provider is a master record rather than a name on the contract, so
+    // that two purchases from the same company add up in a cost report instead
+    // of becoming two providers because somebody typed it differently.
+    const provider = await tx<{ id: string }[]>`
+      INSERT INTO asp_providers (
+        name, accreditation_reference, contact_name, contact_email,
+        default_cost_per_unit_aed, notes
+      ) VALUES (
+        'Accredited ASP UAE', 'MOF-ASP-0042', 'Wholesale Desk',
+        'wholesale@accredited-asp.example', 0.0850,
+        'Demo provider. Replace with a real entry from the Ministry of Finance accredited list.'
+      )
+      RETURNING id
+    `;
+
     const procurement = await tx<{ id: string }[]>`
       INSERT INTO asp_bundle_procurements (
-        asp_provider_name, contract_reference, total_units,
+        asp_provider_id, contract_reference, total_units,
         cost_per_unit_aed, total_cost_aed, purchase_date, notes
       ) VALUES (
-        'Accredited ASP UAE', 'ASP-WHOLESALE-2026-001', 500000,
+        ${provider[0]!.id}, 'ASP-WHOLESALE-2026-001', 500000,
         0.0850, 42500.00, CURRENT_DATE - 30,
         'Opening wholesale purchase. Everything below is sold out of this contract.'
       )

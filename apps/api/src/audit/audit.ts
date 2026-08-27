@@ -72,7 +72,10 @@ export type AuditAction =
   | 'INVOICE_INGESTED_FOR_APPROVAL'
   // --- SRS v2.8 §15: the multi-tier inventory lifecycle ----------------------
   | 'PROCUREMENT_REGISTERED'
-  | 'INVENTORY_BUFFER_SET';
+  | 'INVENTORY_BUFFER_SET'
+  | 'PROVIDER_CREATED'
+  | 'PROVIDER_UPDATED'
+  | 'PROVIDER_RETIRED';
 
 export interface AuditEntry {
   action: AuditAction;

@@ -450,10 +450,21 @@ async function main() {
   const rejectNoNote = await api('/api/v1/approvals/reject', { method: 'POST', token: cfoToken, body: {} });
   check('rejection without a reason is refused', rejectNoNote.status === 400, `got ${rejectNoNote.status}`);
 
+  // Named explicitly rather than rejecting whatever the tenant's queue holds.
+  // The queue is fed by every ingestion channel, so an unscoped reject returns
+  // other runs' documents too and the count stops meaning anything.
+  const toReject = await api(
+    `/api/v1/invoices?status=PENDING_CFO_APPROVAL&pageSize=50&batchId=${returnBatchId}`,
+    { token: cfoToken },
+  );
+
   const rejected = await api('/api/v1/approvals/reject', {
     method: 'POST',
     token: cfoToken,
-    body: { note: 'The consulting line is disputed — confirm the rate first.' },
+    body: {
+      invoiceIds: (toReject.body?.items ?? []).map((i) => i.id),
+      note: 'The consulting line is disputed — confirm the rate first.',
+    },
   });
   check('the approver returns it', rejected.status === 200 && rejected.body.affected === 1, JSON.stringify(rejected.body));
 

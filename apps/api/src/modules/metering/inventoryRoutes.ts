@@ -28,6 +28,7 @@ import { loadHostInventory } from './inventory.js';
 
 interface ProcurementRow {
   id: string;
+  asp_provider_id: string;
   asp_provider_name: string;
   contract_reference: string;
   total_units: number;
@@ -45,6 +46,7 @@ function toProcurementSummary(row: ProcurementRow): ProcurementSummary {
   const allocated = Number(row.allocated_units);
   return {
     id: row.id,
+    aspProviderId: row.asp_provider_id,
     aspProviderName: row.asp_provider_name,
     contractReference: row.contract_reference,
     totalUnits: row.total_units,
@@ -61,7 +63,8 @@ function toProcurementSummary(row: ProcurementRow): ProcurementSummary {
 }
 
 const PROCUREMENT_SELECT = `
-  p.id, p.asp_provider_name, p.contract_reference, p.total_units,
+  p.id, p.asp_provider_id, p.contract_reference, p.total_units,
+  (SELECT v.name FROM asp_providers v WHERE v.id = p.asp_provider_id) AS asp_provider_name,
   p.cost_per_unit_aed::text AS cost_per_unit_aed, p.total_cost_aed::text AS total_cost_aed,
   p.purchase_date, p.expiry_date, p.notes, p.created_at,
   (SELECT full_name FROM users u WHERE u.id = p.created_by_user_id) AS created_by_name,
@@ -78,13 +81,39 @@ export function registerInventoryRoutes(app: FastifyInstance) {
       const ctx = requireContext(request);
       const body = CreateProcurementRequest.parse(request.body);
 
-      // Computed here rather than accepted from the client: the total is the
-      // figure the platform's stock and cost reporting are built on, and a
-      // caller that sends units, unit price and a total that disagree with each
-      // other should not get to choose which one is true.
-      const totalCost = (body.totalUnits * body.costPerUnitAed).toFixed(2);
+      // The total is what the provider invoiced and is stored as given; the
+      // rate is derived from it. The other direction loses money: 999,999 units
+      // at a rate rounded to four places multiplies back to a total that is a
+      // few fils off the contract, and the platform's cost reporting would then
+      // disagree with the provider's own paperwork.
+      const totalCost = body.totalCostAed.toFixed(2);
+      const derivedRate = body.totalCostAed / body.totalUnits;
+
+      // A stated rate is a cross-check, not an input. The tolerance is half a
+      // unit of the stored precision, so a caller that computed the same figure
+      // and rounded it agrees, while one that computed a genuinely different
+      // number is told rather than quietly overruled.
+      if (
+        body.costPerUnitAed !== undefined &&
+        Math.abs(body.costPerUnitAed - derivedRate) > 0.00005
+      ) {
+        throw badRequest(
+          `The cost per unit you sent (${body.costPerUnitAed}) does not match AED ${totalCost} over ${body.totalUnits.toLocaleString('en-GB')} units, which is ${derivedRate.toFixed(4)}. Send one or the other.`,
+          { statedRate: body.costPerUnitAed, derivedRate: Number(derivedRate.toFixed(4)) },
+        );
+      }
 
       const row = await withPlatformAccess(async (tx) => {
+        const provider = await tx<{ id: string; name: string; is_active: boolean }[]>`
+          SELECT id, name, is_active FROM asp_providers WHERE id = ${body.aspProviderId}
+        `;
+        if (!provider[0]) throw notFound('Provider');
+        if (!provider[0].is_active) {
+          throw badRequest(
+            `"${provider[0].name}" has been retired. Reactivate it, or register this contract against a current provider.`,
+          );
+        }
+
         const existing = await tx<{ id: string }[]>`
           SELECT id FROM asp_bundle_procurements
           WHERE contract_reference = ${body.contractReference}
@@ -97,11 +126,11 @@ export function registerInventoryRoutes(app: FastifyInstance) {
 
         const inserted = await tx<{ id: string }[]>`
           INSERT INTO asp_bundle_procurements (
-            asp_provider_name, contract_reference, total_units, cost_per_unit_aed,
+            asp_provider_id, contract_reference, total_units, cost_per_unit_aed,
             total_cost_aed, purchase_date, expiry_date, notes, created_by_user_id
           ) VALUES (
-            ${body.aspProviderName}, ${body.contractReference}, ${body.totalUnits},
-            ${body.costPerUnitAed}, ${totalCost},
+            ${body.aspProviderId}, ${body.contractReference}, ${body.totalUnits},
+            ${derivedRate.toFixed(4)}, ${totalCost},
             -- coalesce, not the column DEFAULT: passing an explicit NULL
             -- overrides a DEFAULT rather than falling back to it, so an
             -- omitted purchase date would violate the NOT NULL constraint.
@@ -125,10 +154,12 @@ export function registerInventoryRoutes(app: FastifyInstance) {
         resourceId: row.id,
         tenantId: null,
         changes: {
-          provider: body.aspProviderName,
+          provider: row.asp_provider_name,
+          providerId: body.aspProviderId,
           contractReference: body.contractReference,
           units: body.totalUnits,
           totalCostAed: totalCost,
+          costPerUnitAed: derivedRate.toFixed(4),
         },
       });
 

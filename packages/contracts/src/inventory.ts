@@ -14,19 +14,75 @@ import { TenantType } from './enums.js';
 const uuid = z.string().uuid();
 
 // ---------------------------------------------------------------------------
+// The accredited provider master
+// ---------------------------------------------------------------------------
+
+export const CreateProviderRequest = z.object({
+  name: z.string().trim().min(2).max(120),
+  /** The provider's entry on the MoF's published accreditation list. */
+  accreditationReference: z.string().trim().max(100).nullable().optional(),
+  contactName: z.string().trim().max(150).nullable().optional(),
+  contactEmail: z.string().trim().email().max(255).nullable().optional(),
+  contactPhone: z.string().trim().max(50).nullable().optional(),
+  website: z.string().trim().max(255).nullable().optional(),
+  /** Pre-fills the rate on a new contract; the contract's own rate governs. */
+  defaultCostPerUnitAed: z.number().min(0).max(10_000).nullable().optional(),
+  notes: z.string().trim().max(1000).nullable().optional(),
+});
+export type CreateProviderRequest = z.infer<typeof CreateProviderRequest>;
+
+/** Everything is editable, including retirement — nothing is ever deleted. */
+export const UpdateProviderRequest = CreateProviderRequest.partial().extend({
+  isActive: z.boolean().optional(),
+});
+export type UpdateProviderRequest = z.infer<typeof UpdateProviderRequest>;
+
+export const ProviderSummary = z.object({
+  id: uuid,
+  name: z.string(),
+  accreditationReference: z.string().nullable(),
+  contactName: z.string().nullable(),
+  contactEmail: z.string().nullable(),
+  contactPhone: z.string().nullable(),
+  website: z.string().nullable(),
+  defaultCostPerUnitAed: z.string().nullable(),
+  isActive: z.boolean(),
+  notes: z.string().nullable(),
+  /** What has been bought from them, so a retirement is an informed one. */
+  contractCount: z.number(),
+  totalUnitsPurchased: z.number(),
+  totalSpendAed: z.string(),
+  createdAt: z.string(),
+});
+export type ProviderSummary = z.infer<typeof ProviderSummary>;
+
+// ---------------------------------------------------------------------------
 // §15.1 Wholesale procurement
 // ---------------------------------------------------------------------------
 
 export const CreateProcurementRequest = z.object({
-  aspProviderName: z.string().trim().min(2).max(100),
+  /** A row in the provider master, not a typed-in name. */
+  aspProviderId: uuid,
   /** The provider's own contract number. Unique, because it identifies the buy. */
   contractReference: z.string().trim().min(2).max(100),
   totalUnits: z.number().int().min(1).max(1_000_000_000),
   /**
-   * Quoted in fils per unit on real wholesale contracts, so four decimals —
-   * rounding to two loses real money across a million-unit purchase.
+   * What the provider actually invoiced, and the authoritative figure.
+   *
+   * A wholesale contract is quoted as a lump sum — "1,000,000 units for AED
+   * 85,000" — and the per-unit rate is a derivation from it. Storing the rate as
+   * the source of truth and multiplying back would lose money on any unit count
+   * that does not divide evenly: 999,999 units at a rate rounded to 0.0850 comes
+   * back as AED 84,999.92, and the platform's cost reporting would then disagree
+   * with the provider's own invoice.
    */
-  costPerUnitAed: z.number().min(0).max(10_000),
+  totalCostAed: z.number().min(0).max(1_000_000_000),
+  /**
+   * Optional, and only a cross-check. The stored rate is derived from the total;
+   * sending one that disagrees is refused rather than silently resolved, because
+   * a mismatch means the two numbers came from different places.
+   */
+  costPerUnitAed: z.number().min(0).max(10_000).optional(),
   purchaseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   expiryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
@@ -35,6 +91,7 @@ export type CreateProcurementRequest = z.infer<typeof CreateProcurementRequest>;
 
 export const ProcurementSummary = z.object({
   id: uuid,
+  aspProviderId: uuid,
   aspProviderName: z.string(),
   contractReference: z.string(),
   totalUnits: z.number(),

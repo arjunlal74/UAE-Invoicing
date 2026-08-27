@@ -105,50 +105,121 @@ check(
   overreach.body?.error?.message,
 );
 
+// --- 1b. the provider master --------------------------------------------------
+section('1b. Purchases are registered against a provider, not a typed name');
+
+const created = await call('/api/v1/admin/providers', {
+  method: 'POST',
+  token: admin,
+  body: {
+    name: `E2E Provider ${stamp}`,
+    accreditationReference: `MOF-${stamp}`,
+    contactEmail: 'wholesale@example.ae',
+    defaultCostPerUnitAed: 0.085,
+  },
+});
+check('a provider is added', created.status === 201, created.body);
+const providerId = created.body?.id;
+check('with nothing bought from it yet', created.body?.contractCount === 0, created.body);
+
+const clash = await call('/api/v1/admin/providers', {
+  method: 'POST',
+  token: admin,
+  body: { name: `e2e provider ${stamp}`.toUpperCase() },
+});
+check('the same name in another case is refused', clash.status === 400, clash.body);
+
+const unknownProvider = await call('/api/v1/admin/procurements', {
+  method: 'POST',
+  token: admin,
+  body: {
+    aspProviderId: '00000000-0000-0000-0000-000000000000',
+    contractReference: `GHOST-${stamp}`,
+    totalUnits: 1000,
+    totalCostAed: 85,
+  },
+});
+check('a contract cannot name a provider that does not exist', unknownProvider.status === 404, unknownProvider.status);
+
 // --- 2. wholesale procurement ------------------------------------------------
 section('2. §15.1 wholesale procurement');
 
 const PURCHASE_UNITS = 250_000;
+const PURCHASE_TOTAL = 21_250;
 const procurement = await call('/api/v1/admin/procurements', {
   method: 'POST',
   token: admin,
   body: {
-    aspProviderName: 'Accredited ASP UAE',
+    aspProviderId: providerId,
     contractReference: `ASP-${stamp}`,
     totalUnits: PURCHASE_UNITS,
-    costPerUnitAed: 0.085,
+    totalCostAed: PURCHASE_TOTAL,
   },
 });
 check('a purchase is registered', procurement.status === 201, procurement.body);
+check('it carries the provider name from the master', procurement.body?.aspProviderName === `E2E Provider ${stamp}`, procurement.body);
 check(
-  'the total cost is computed, not accepted',
-  procurement.body?.totalCostAed === (PURCHASE_UNITS * 0.085).toFixed(2),
+  'the total is stored exactly as invoiced',
+  procurement.body?.totalCostAed === PURCHASE_TOTAL.toFixed(2),
   procurement.body?.totalCostAed,
 );
+check(
+  'and the per-unit rate is derived from it',
+  procurement.body?.costPerUnitAed === (PURCHASE_TOTAL / PURCHASE_UNITS).toFixed(4),
+  procurement.body?.costPerUnitAed,
+);
 check('nothing is allocated from it yet', procurement.body?.allocatedUnits === 0, procurement.body);
+
+// The total is authoritative, so an odd unit count keeps every fils rather than
+// losing some to a four-decimal rate multiplied back out.
+const odd = await call('/api/v1/admin/procurements', {
+  method: 'POST',
+  token: admin,
+  body: {
+    aspProviderId: providerId,
+    contractReference: `ODD-${stamp}`,
+    totalUnits: 999_999,
+    totalCostAed: 85_000,
+  },
+});
+check('an odd unit count keeps the exact total', odd.body?.totalCostAed === '85000.00', odd.body?.totalCostAed);
+
+const disagreeing = await call('/api/v1/admin/procurements', {
+  method: 'POST',
+  token: admin,
+  body: {
+    aspProviderId: providerId,
+    contractReference: `MISMATCH-${stamp}`,
+    totalUnits: 100_000,
+    totalCostAed: 8_500,
+    costPerUnitAed: 0.5,
+  },
+});
+check('a stated rate that contradicts the total is refused', disagreeing.status === 400, disagreeing.body);
 
 const duplicate = await call('/api/v1/admin/procurements', {
   method: 'POST',
   token: admin,
   body: {
-    aspProviderName: 'Accredited ASP UAE',
+    aspProviderId: providerId,
     contractReference: `ASP-${stamp}`,
     totalUnits: 1000,
-    costPerUnitAed: 0.1,
+    totalCostAed: 100,
   },
 });
 check('a contract reference cannot be registered twice', duplicate.status === 400, duplicate.status);
 
 const afterBuy = await call('/api/v1/admin/inventory', { token: admin });
 const host1 = afterBuy.body?.host;
+const BOUGHT = PURCHASE_UNITS + 999_999;
 check(
   'the shelf grows by exactly what was bought',
-  host1.currentStockUnits === host0.currentStockUnits + PURCHASE_UNITS,
+  host1.currentStockUnits === host0.currentStockUnits + BOUGHT,
   { before: host0.currentStockUnits, after: host1.currentStockUnits },
 );
 check(
   'and so does the net balance',
-  host1.netAvailableUnits === host0.netAvailableUnits + PURCHASE_UNITS,
+  host1.netAvailableUnits === host0.netAvailableUnits + BOUGHT,
   { before: host0.netAvailableUnits, after: host1.netAvailableUnits },
 );
 
@@ -334,14 +405,59 @@ if (tenantAdmin) {
     method: 'POST',
     token: tenantAdmin,
     body: {
-      aspProviderName: 'x',
+      aspProviderId: providerId,
       contractReference: `SNEAK-${stamp}`,
       totalUnits: 1,
-      costPerUnitAed: 0,
+      totalCostAed: 1,
     },
   });
   check('nor register a purchase', peekBuy.status === 403, peekBuy.status);
+
+  const peekProviders = await call('/api/v1/admin/providers', { token: tenantAdmin });
+  check('nor read the provider list', peekProviders.status === 403, peekProviders.status);
 }
+
+// --- 7. retirement -----------------------------------------------------------
+section('7. A provider is retired, never deleted');
+
+const retired = await call(`/api/v1/admin/providers/${providerId}`, {
+  method: 'PATCH',
+  token: admin,
+  body: { isActive: false },
+});
+check('a provider can be retired', retired.status === 200 && retired.body?.isActive === false, retired.body);
+check('and keeps its purchase history', retired.body?.contractCount >= 2, retired.body?.contractCount);
+check(
+  'including what was spent with it',
+  Number(retired.body?.totalSpendAed) > 0,
+  retired.body?.totalSpendAed,
+);
+
+const afterRetire = await call('/api/v1/admin/procurements', {
+  method: 'POST',
+  token: admin,
+  body: {
+    aspProviderId: providerId,
+    contractReference: `RETIRED-${stamp}`,
+    totalUnits: 100,
+    totalCostAed: 10,
+  },
+});
+check('a retired provider cannot take new contracts', afterRetire.status === 400, afterRetire.body);
+
+const activeOnly = await call('/api/v1/admin/providers', { token: admin });
+check(
+  'and drops out of the picker',
+  !(activeOnly.body?.items ?? []).some((p) => p.id === providerId),
+  activeOnly.body?.items?.length,
+);
+
+const withRetired = await call('/api/v1/admin/providers?includeInactive=true', { token: admin });
+check(
+  'but is still listed, for reactivation',
+  (withRetired.body?.items ?? []).some((p) => p.id === providerId),
+  withRetired.body?.items?.length,
+);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

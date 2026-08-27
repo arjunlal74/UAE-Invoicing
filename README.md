@@ -310,6 +310,8 @@ flagged.
 | v2.8 §17 adds a `tenant_bundle_allocations` table | Columns added to `data_bundles` | Same grain, same parent/slice relationship, same foreign keys and policies. A second table would hold the same rows twice and need every constraint rebuilt on it. |
 | v2.8 §17 `GENERATED ALWAYS AS` balance columns | Computed in the query | A stored balance is a number that can disagree with its own history. At this cardinality — contracts and bundles, not invoices — the aggregate is free. |
 | v2.8 §15.5 names one threshold per tier | Threshold plus a severity split at half of it | An account at 40% of its floor is a reorder prompt; one at 4% is about to stop filing, and the subject line should not be the same. |
+| v2.8 §17 `asp_bundle_procurements.asp_provider_name` free text | `asp_provider_id` into an `asp_providers` master | Two spellings of one company are two providers to a cost report, which is the report the column exists for. |
+| v2.8 §17 stores `cost_per_unit_aed` and `total_cost_aed` as given | Total stored as given, rate derived from it | A contract is quoted as a lump sum. Multiplying a rounded rate back out loses fils on odd unit counts, so the platform's spend would disagree with the provider's invoice. |
 
 ## Data bundle inventory (SRS v2.8 §15)
 
@@ -326,6 +328,31 @@ sold out of that stock. `POST /api/v1/billing/bundles` now refuses to issue more
 than the shelf holds. A partner's slice is exempt from that check — those units
 left the host when the partner bought its master pool, and deducting them again
 would make one sale cost the host twice.
+
+**Providers are a master, not a text field.** §15.1 has the host typing a
+provider name onto each contract. Two contracts keyed "Accredited ASP UAE" and
+"accredited asp uae" are then two providers as far as any cost report is
+concerned, which defeats the point of recording the cost — so `asp_providers`
+holds them, with the MoF accreditation reference, a billing contact and a usual
+rate that pre-fills a new contract. Names collide case-insensitively. Nothing is
+deleted: a provider that has sold the platform units is part of the record of
+where its capacity came from, so retiring one takes it out of the picker and
+leaves its contracts legible.
+
+This is procurement-side only. `tenant_asp_configs` records which provider
+*routes* a given tenant's invoices — a per-tenant connection with credentials
+and an endpoint — which is a different question from who the host buys units
+from, even when the answer is the same company.
+
+**The total is what the provider invoiced; the rate is derived.** A wholesale
+contract is quoted as a lump sum — "1,000,000 units for AED 85,000" — and it is
+the total that has to survive. Storing a four-decimal rate as the source of
+truth and multiplying back loses money on any unit count that does not divide
+evenly: 999,999 units at a rate rounded to 0.0850 comes back as AED 84,999.92,
+and the platform's spend would then disagree with the provider's own invoice.
+The form accepts either figure and fills in the other; the server stores the
+total as given, derives the rate, and refuses a stated rate that contradicts the
+total rather than silently picking one.
 
 **Three balances, and they are not interchangeable.** The formulas in §15.1–15.4
 read alike in prose and answer different questions:
@@ -369,7 +396,9 @@ number rather than a bug. Both the host and per-bundle floors therefore default
 to zero — alert off — so the first sweep after the migration does not mail
 everybody about a shortfall that is really a missing data-entry step.
 
-Exercise the whole chain with `pnpm --filter @uae/api e2e:inventory`.
+Exercise the whole chain — provider master, procurement, the stock guard, the
+three balances, partner slicing, the floors and retirement — with
+`pnpm --filter @uae/api e2e:inventory`.
 
 ## The programmatic API
 

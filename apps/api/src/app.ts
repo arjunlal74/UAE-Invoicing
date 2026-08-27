@@ -13,6 +13,7 @@ import { registerApRoutes } from './modules/ap/routes.js';
 import { registerArBuilderRoutes } from './modules/ar/builder.js';
 import { registerDirectoryRoutes } from './modules/directories/routes.js';
 import { registerInventoryRoutes } from './modules/metering/inventoryRoutes.js';
+import { registerProviderRoutes } from './modules/metering/providers.js';
 import { registerMeteringRoutes } from './modules/metering/routes.js';
 import { registerModuleDashboardRoutes } from './modules/dashboard/module.js';
 import { registerReportRoutes } from './modules/reports/routes.js';
@@ -114,6 +115,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerMeteringRoutes(app);
   // v2.8 §15 — the wholesale half of the bundle lifecycle.
   registerInventoryRoutes(app);
+  registerProviderRoutes(app);
   registerModuleDashboardRoutes(app);
 
   registerMailRoutes(app);

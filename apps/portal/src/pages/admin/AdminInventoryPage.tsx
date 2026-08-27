@@ -1,4 +1,8 @@
-import { TENANT_TYPE_LABELS, type InventoryConsole } from '@uae/contracts';
+import {
+  TENANT_TYPE_LABELS,
+  type InventoryConsole,
+  type ProviderSummary,
+} from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import {
@@ -34,11 +38,22 @@ export function AdminInventoryPage() {
   const queryClient = useQueryClient();
   const [registering, setRegistering] = useState(false);
   const [editingBuffer, setEditingBuffer] = useState(false);
+  const [managingProviders, setManagingProviders] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-inventory'],
     queryFn: () => api<InventoryConsole>('/api/v1/admin/inventory'),
   });
+
+  // Retired providers are included so the management list can show them and
+  // offer reactivation; the purchase form filters to the active ones.
+  const { data: providers } = useQuery({
+    queryKey: ['asp-providers'],
+    queryFn: () =>
+      api<{ items: ProviderSummary[] }>('/api/v1/admin/providers?includeInactive=true'),
+  });
+
+  const activeProviders = (providers?.items ?? []).filter((p) => p.isActive);
 
   if (isLoading || !data) return <Spinner label="Loading inventory…" />;
 
@@ -52,8 +67,18 @@ export function AdminInventoryPage() {
         description="Wholesale procurement, platform stock and every account's remaining balance."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => setManagingProviders(true)}>Providers</Button>
             <Button onClick={() => setEditingBuffer(true)}>Minimum buffer</Button>
-            <Button variant="primary" onClick={() => setRegistering(true)}>
+            <Button
+              variant="primary"
+              disabled={activeProviders.length === 0}
+              title={
+                activeProviders.length === 0
+                  ? 'Add an accredited provider before registering a purchase'
+                  : undefined
+              }
+              onClick={() => setRegistering(true)}
+            >
               Register purchase
             </Button>
           </div>
@@ -66,6 +91,13 @@ export function AdminInventoryPage() {
           {host.minimumBufferUnits.toLocaleString()}
           {host.daysRemaining !== null && ` — about ${host.daysRemaining} days at the current rate`}.
           Register a further provider purchase before it runs out.
+        </Alert>
+      )}
+
+      {activeProviders.length === 0 && (
+        <Alert kind="info" title="No accredited provider on file">
+          A purchase is registered against a provider, so add the one you buy from before
+          registering a contract. The Ministry of Finance publishes the accredited list.
         </Alert>
       )}
 
@@ -231,9 +263,21 @@ export function AdminInventoryPage() {
 
       {registering && (
         <RegisterPurchaseModal
+          providers={activeProviders}
           onClose={() => setRegistering(false)}
           onDone={() => {
             setRegistering(false);
+            queryClient.invalidateQueries({ queryKey: ['admin-inventory'] });
+          }}
+        />
+      )}
+
+      {managingProviders && (
+        <ProvidersModal
+          providers={providers?.items ?? []}
+          onClose={() => setManagingProviders(false)}
+          onChanged={() => {
+            queryClient.invalidateQueries({ queryKey: ['asp-providers'] });
             queryClient.invalidateQueries({ queryKey: ['admin-inventory'] });
           }}
         />
@@ -253,34 +297,99 @@ export function AdminInventoryPage() {
   );
 }
 
+/**
+ * Registering a contract.
+ *
+ * Units and total cost are what the provider's invoice actually says, so those
+ * are the inputs and the per-unit rate is derived beside them. Typing into the
+ * rate works too and back-fills the total — some contracts are quoted that way
+ * round — but the total is what the server stores as authoritative, because
+ * multiplying a four-decimal rate back out loses fils on odd unit counts.
+ */
 function RegisterPurchaseModal({
+  providers,
   onClose,
   onDone,
 }: {
+  providers: ProviderSummary[];
   onClose: () => void;
   onDone: () => void;
 }) {
   const [form, setForm] = useState({
-    aspProviderName: '',
+    // One provider on file is not a choice, so it is made for them.
+    aspProviderId: providers.length === 1 ? providers[0]!.id : '',
     contractReference: '',
     totalUnits: '',
+    totalCostAed: '',
     costPerUnitAed: '',
     expiryDate: '',
     notes: '',
   });
 
   const units = Number(form.totalUnits) || 0;
+  const total = Number(form.totalCostAed) || 0;
   const perUnit = Number(form.costPerUnitAed) || 0;
+
+  /** Whichever of the money pair was not typed is recomputed from the other. */
+  const setUnits = (value: string) => {
+    const next = Number(value) || 0;
+    setForm((f) => ({
+      ...f,
+      totalUnits: value,
+      costPerUnitAed:
+        next > 0 && Number(f.totalCostAed) > 0
+          ? (Number(f.totalCostAed) / next).toFixed(4)
+          : f.costPerUnitAed,
+    }));
+  };
+
+  const setTotal = (value: string) => {
+    const next = Number(value) || 0;
+    setForm((f) => ({
+      ...f,
+      totalCostAed: value,
+      costPerUnitAed:
+        next > 0 && Number(f.totalUnits) > 0 ? (next / Number(f.totalUnits)).toFixed(4) : '',
+    }));
+  };
+
+  const setPerUnit = (value: string) => {
+    const next = Number(value) || 0;
+    setForm((f) => ({
+      ...f,
+      costPerUnitAed: value,
+      totalCostAed:
+        next > 0 && Number(f.totalUnits) > 0 ? (next * Number(f.totalUnits)).toFixed(2) : '',
+    }));
+  };
+
+  const chooseProvider = (id: string) => {
+    const provider = providers.find((p) => p.id === id);
+    const rate = provider?.defaultCostPerUnitAed;
+    setForm((f) => ({
+      ...f,
+      aspProviderId: id,
+      // Only pre-fill an untouched rate. Never overwrite a figure the operator
+      // has already read off the contract in front of them.
+      ...(rate && !f.costPerUnitAed
+        ? {
+            costPerUnitAed: rate,
+            totalCostAed:
+              Number(f.totalUnits) > 0 ? (Number(rate) * Number(f.totalUnits)).toFixed(2) : '',
+          }
+        : {}),
+    }));
+  };
 
   const create = useMutation({
     mutationFn: () =>
       api('/api/v1/admin/procurements', {
         method: 'POST',
         body: {
-          aspProviderName: form.aspProviderName.trim(),
+          aspProviderId: form.aspProviderId,
           contractReference: form.contractReference.trim(),
           totalUnits: units,
-          costPerUnitAed: perUnit,
+          totalCostAed: total,
           expiryDate: form.expiryDate || null,
           notes: form.notes.trim() || null,
         },
@@ -292,13 +401,19 @@ function RegisterPurchaseModal({
     <Modal title="Register a provider purchase" onClose={onClose}>
       <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Provider">
-            <input
+          <Field label="Provider" hint="From the accredited provider list.">
+            <select
               className={inputClass}
-              value={form.aspProviderName}
-              onChange={(e) => setForm({ ...form, aspProviderName: e.target.value })}
-              placeholder="e.g. Accredited ASP UAE"
-            />
+              value={form.aspProviderId}
+              onChange={(e) => chooseProvider(e.target.value)}
+            >
+              <option value="">Select a provider…</option>
+              {providers.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.name}
+                </option>
+              ))}
+            </select>
           </Field>
           <Field label="Contract reference" hint="The provider's own number. Registered once.">
             <input
@@ -313,16 +428,31 @@ function RegisterPurchaseModal({
               className={inputClass}
               inputMode="numeric"
               value={form.totalUnits}
-              onChange={(e) => setForm({ ...form, totalUnits: e.target.value })}
+              onChange={(e) => setUnits(e.target.value)}
               placeholder="1000000"
             />
           </Field>
-          <Field label="Cost per unit (AED)" hint="Four decimal places; wholesale is quoted in fils.">
+          <Field
+            label="Total cost (AED)"
+            hint="What the provider invoiced. This is the figure that is stored."
+          >
+            <input
+              className={inputClass}
+              inputMode="decimal"
+              value={form.totalCostAed}
+              onChange={(e) => setTotal(e.target.value)}
+              placeholder="85000.00"
+            />
+          </Field>
+          <Field
+            label="Cost per unit (AED)"
+            hint="Derived from the total. Type here instead and the total is filled in."
+          >
             <input
               className={inputClass}
               inputMode="decimal"
               value={form.costPerUnitAed}
-              onChange={(e) => setForm({ ...form, costPerUnitAed: e.target.value })}
+              onChange={(e) => setPerUnit(e.target.value)}
               placeholder="0.0850"
             />
           </Field>
@@ -336,14 +466,19 @@ function RegisterPurchaseModal({
           </Field>
         </div>
 
-        {units > 0 && perUnit > 0 && (
+        {units > 0 && total > 0 && (
           <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-700">
-            Total contract value:{' '}
+            <strong className="tabular-nums">{units.toLocaleString()}</strong> units for{' '}
             <strong className="tabular-nums">
-              AED {(units * perUnit).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-            </strong>
-            {/* Shown, not entered — the server computes the same figure from
-                units × unit price, so a typed total could only ever disagree. */}
+              AED {total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </strong>{' '}
+            — <span className="tabular-nums">{(total / units).toFixed(4)}</span> per unit.
+            {perUnit > 0 && Math.abs(perUnit - total / units) > 0.00005 && (
+              <span className="ml-1 font-medium text-warn-700">
+                That rate does not divide the total exactly, so {(total / units).toFixed(4)} is what
+                will be stored.
+              </span>
+            )}
           </div>
         )}
 
@@ -368,9 +503,10 @@ function RegisterPurchaseModal({
           <Button
             variant="primary"
             disabled={
-              !form.aspProviderName.trim() ||
+              !form.aspProviderId ||
               !form.contractReference.trim() ||
               units < 1 ||
+              total <= 0 ||
               create.isPending
             }
             onClick={() => create.mutate()}
@@ -437,3 +573,229 @@ function BufferModal({
     </Modal>
   );
 }
+
+/**
+ * The accredited provider master.
+ *
+ * Small by nature â€” a platform buys from one or two accredited providers â€” so
+ * it lives in a modal on the page that uses it rather than a nav entry of its
+ * own. Nothing is deleted: a provider that has sold the platform units is part
+ * of the record of where its capacity came from, so retiring one takes it out
+ * of the picker and leaves its contracts legible.
+ */
+function ProvidersModal({
+  providers,
+  onClose,
+  onChanged,
+}: {
+  providers: ProviderSummary[];
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [adding, setAdding] = useState(providers.length === 0);
+  const [form, setForm] = useState({
+    name: '',
+    accreditationReference: '',
+    contactName: '',
+    contactEmail: '',
+    contactPhone: '',
+    defaultCostPerUnitAed: '',
+  });
+
+  const create = useMutation({
+    mutationFn: () =>
+      api('/api/v1/admin/providers', {
+        method: 'POST',
+        body: {
+          name: form.name.trim(),
+          accreditationReference: form.accreditationReference.trim() || null,
+          contactName: form.contactName.trim() || null,
+          contactEmail: form.contactEmail.trim() || null,
+          contactPhone: form.contactPhone.trim() || null,
+          defaultCostPerUnitAed: form.defaultCostPerUnitAed
+            ? Number(form.defaultCostPerUnitAed)
+            : null,
+        },
+      }),
+    onSuccess: () => {
+      setForm({
+        name: '',
+        accreditationReference: '',
+        contactName: '',
+        contactEmail: '',
+        contactPhone: '',
+        defaultCostPerUnitAed: '',
+      });
+      setAdding(false);
+      onChanged();
+    },
+  });
+
+  const setActive = useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
+      api(`/api/v1/admin/providers/${id}`, { method: 'PATCH', body: { isActive } }),
+    onSuccess: onChanged,
+  });
+
+  return (
+    <Modal title="Accredited providers" onClose={onClose} width="lg">
+      <div className="space-y-4">
+        <p className="text-sm text-slate-600">
+          The providers this platform buys data units from. Purchases are registered against one of
+          these rather than a typed-in name, so cost reporting per provider adds up.
+        </p>
+
+        {providers.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="pb-2 font-medium">Provider</th>
+                  <th className="pb-2 font-medium">Accreditation</th>
+                  <th className="pb-2 text-right font-medium">Contracts</th>
+                  <th className="pb-2 text-right font-medium">Units</th>
+                  <th className="pb-2 text-right font-medium">Spend (AED)</th>
+                  <th className="pb-2" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {providers.map((provider) => (
+                  <tr key={provider.id} className={cx(!provider.isActive && 'text-slate-400')}>
+                    <td className="py-2">
+                      <span className="font-medium text-slate-800">{provider.name}</span>
+                      {!provider.isActive && (
+                        <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                          retired
+                        </span>
+                      )}
+                      {provider.contactEmail && (
+                        <p className="text-xs text-slate-500">{provider.contactEmail}</p>
+                      )}
+                    </td>
+                    <td className="py-2 font-mono text-xs text-slate-500">
+                      {provider.accreditationReference ?? 'â€”'}
+                    </td>
+                    <td className="py-2 text-right tabular-nums text-slate-700">
+                      {provider.contractCount}
+                    </td>
+                    <td className="py-2 text-right tabular-nums text-slate-700">
+                      {provider.totalUnitsPurchased.toLocaleString()}
+                    </td>
+                    <td className="py-2 text-right tabular-nums text-slate-700">
+                      {Number(provider.totalSpendAed).toLocaleString()}
+                    </td>
+                    <td className="py-2 text-right">
+                      <Button
+                        size="sm"
+                        disabled={setActive.isPending}
+                        onClick={() =>
+                          setActive.mutate({ id: provider.id, isActive: !provider.isActive })
+                        }
+                      >
+                        {provider.isActive ? 'Retire' : 'Reactivate'}
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {setActive.error && (
+          <Alert kind="danger">
+            {setActive.error instanceof ApiError
+              ? setActive.error.message
+              : 'That provider could not be updated.'}
+          </Alert>
+        )}
+
+        {adding ? (
+          <div className="space-y-3 rounded-md border border-slate-200 p-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Name">
+                <input
+                  className={inputClass}
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder="e.g. Accredited ASP UAE"
+                />
+              </Field>
+              <Field
+                label="Accreditation reference"
+                hint="Their entry on the Ministry of Finance list."
+              >
+                <input
+                  className={inputClass}
+                  value={form.accreditationReference}
+                  onChange={(e) => setForm({ ...form, accreditationReference: e.target.value })}
+                />
+              </Field>
+              <Field label="Billing contact">
+                <input
+                  className={inputClass}
+                  value={form.contactName}
+                  onChange={(e) => setForm({ ...form, contactName: e.target.value })}
+                />
+              </Field>
+              <Field label="Contact email">
+                <input
+                  className={inputClass}
+                  type="email"
+                  value={form.contactEmail}
+                  onChange={(e) => setForm({ ...form, contactEmail: e.target.value })}
+                />
+              </Field>
+              <Field label="Contact phone">
+                <input
+                  className={inputClass}
+                  value={form.contactPhone}
+                  onChange={(e) => setForm({ ...form, contactPhone: e.target.value })}
+                />
+              </Field>
+              <Field
+                label="Usual rate (AED/unit)"
+                hint="Optional. Pre-fills a new contract; the contract's own figure wins."
+              >
+                <input
+                  className={inputClass}
+                  inputMode="decimal"
+                  value={form.defaultCostPerUnitAed}
+                  onChange={(e) => setForm({ ...form, defaultCostPerUnitAed: e.target.value })}
+                  placeholder="0.0850"
+                />
+              </Field>
+            </div>
+
+            {create.error && (
+              <Alert kind="danger">
+                {create.error instanceof ApiError
+                  ? create.error.message
+                  : 'That provider could not be added.'}
+              </Alert>
+            )}
+
+            <div className="flex justify-end gap-2">
+              {providers.length > 0 && <Button onClick={() => setAdding(false)}>Cancel</Button>}
+              <Button
+                variant="primary"
+                disabled={form.name.trim().length < 2 || create.isPending}
+                onClick={() => create.mutate()}
+              >
+                {create.isPending ? 'Addingâ€¦' : 'Add provider'}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex justify-between">
+            <Button onClick={() => setAdding(true)}>Add a provider</Button>
+            <Button variant="primary" onClick={onClose}>
+              Done
+            </Button>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
