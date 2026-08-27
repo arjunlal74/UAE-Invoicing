@@ -151,7 +151,7 @@ success, duplicate refusal, receipts, and revocation closing the directory):
 
 ```bash
 pnpm --filter @uae/api e2e:ingest    # REST
-pnpm --filter @uae/api e2e:sftp      # SFTP — needs the `sftp` container running
+pnpm --filter @uae/api e2e:sftp      # SFTP — needs the `sftp` container; one run at a time
 ```
 
 And one over the §15 bundle inventory — wholesale procurement, the stock guard,

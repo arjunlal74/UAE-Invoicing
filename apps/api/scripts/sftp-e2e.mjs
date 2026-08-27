@@ -12,6 +12,12 @@
  * SFTP client is needed. What is exercised is the platform's half — which is
  * the half this repository owns.
  *
+ * Run one instance at a time. Unlike the other suites this one cannot be
+ * parallelised: there is a single drop directory and the account name binding
+ * it to a key is unique platform-wide, so two instances fight over the same
+ * inbox and the first to reach the revocation step closes the directory under
+ * the other. That is a property of the transport, not of the test.
+ *
  * Usage: node scripts/sftp-e2e.mjs
  *   BASE=http://localhost:8080          the API
  *   SFTP_CONTAINER=uae-invoicing-sftp-1 the container holding the share
