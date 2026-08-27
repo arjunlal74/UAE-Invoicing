@@ -9,6 +9,7 @@ import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { LoginPage } from './pages/LoginPage';
 import { SecurityPage } from './pages/SecurityPage';
 import { AdminAuditPage } from './pages/admin/AdminAuditPage';
+import { AdminInventoryPage } from './pages/admin/AdminInventoryPage';
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
 import { AdminMailPage } from './pages/admin/AdminMailPage';
 import { AdminStaffPage } from './pages/admin/AdminStaffPage';
@@ -279,6 +280,7 @@ export function App() {
           <Route path="/admin/tenants" element={<AdminTenantsPage />} />
           <Route path="/admin/tenants/:tenantId" element={<AdminTenantDetailPage />} />
           <Route path="/admin/transmissions" element={<AdminTransmissionsPage />} />
+          <Route path="/admin/inventory" element={<AdminInventoryPage />} />
           <Route path="/admin/audit" element={<AdminAuditPage />} />
           <Route path="/admin/staff" element={<AdminStaffPage />} />
           <Route path="/admin/mail" element={<AdminMailPage />} />

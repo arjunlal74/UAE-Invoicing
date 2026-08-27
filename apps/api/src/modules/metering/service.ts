@@ -30,6 +30,8 @@ export interface BundleRow {
   valid_from: Date;
   expires_at: Date | null;
   alerted_threshold: number;
+  minimum_buffer_units: number;
+  buffer_alerted_at: Date | null;
   notes: string | null;
   created_at: Date;
   tenant_name?: string | null;
@@ -56,6 +58,10 @@ export function toBundleSummary(row: BundleRow): BundleSummary {
     expiresAt: row.expires_at ? row.expires_at.toISOString().slice(0, 10) : null,
     notes: row.notes,
     createdAt: row.created_at.toISOString(),
+    minimumBufferUnits: row.minimum_buffer_units,
+    // v2.8 §15.3: an absolute floor, separate from the percentage warnings.
+    // Zero means the account has not set one, and never reads as breached.
+    belowBuffer: row.minimum_buffer_units > 0 && remaining < row.minimum_buffer_units,
   };
 }
 

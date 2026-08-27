@@ -16,6 +16,7 @@ import {
   renderInboundPurchaseInvoice,
   renderPasswordChanged,
   renderPasswordReset,
+  renderInventoryBuffer,
   renderQuotaThreshold,
   type RenderedMail,
 } from './templates.js';
@@ -249,6 +250,44 @@ export async function queueQuotaThreshold(params: {
       remainingUnits: params.remainingUnits,
       hardCap: params.hardCap,
       balanceUrl: `${config().PORTAL_ORIGIN}/settings/usage`,
+    }),
+    { userId: params.userId, tenantId: params.tenantId },
+  );
+}
+
+/**
+ * Template G — the §15.5 minimum buffer alert.
+ *
+ * Reuses the QUOTA_ALERT purpose rather than adding one: to a mail server and
+ * to the delivery log these are the same kind of message about the same
+ * subject, and splitting them would only fragment the reporting.
+ */
+export async function queueInventoryBuffer(params: {
+  to: string;
+  contactName: string;
+  accountName: string;
+  tierLabel: string;
+  thresholdUnits: number;
+  remainingUnits: number;
+  dailyRunRate: number;
+  critical: boolean;
+  /** Where the recipient can actually do something about it. */
+  consolePath: string;
+  userId?: string | null;
+  tenantId?: string | null;
+}): Promise<QueueResult> {
+  return enqueue(
+    'QUOTA_ALERT',
+    params.to,
+    renderInventoryBuffer({
+      contactName: params.contactName,
+      accountName: params.accountName,
+      tierLabel: params.tierLabel,
+      thresholdUnits: params.thresholdUnits,
+      remainingUnits: params.remainingUnits,
+      dailyRunRate: params.dailyRunRate,
+      critical: params.critical,
+      consoleUrl: `${config().PORTAL_ORIGIN}${params.consolePath}`,
     }),
     { userId: params.userId, tenantId: params.tenantId },
   );

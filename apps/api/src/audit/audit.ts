@@ -69,7 +69,10 @@ export type AuditAction =
   | 'API_KEY_CREATED'
   | 'API_KEY_REVOKED'
   | 'INVOICE_INGESTED'
-  | 'INVOICE_INGESTED_FOR_APPROVAL';
+  | 'INVOICE_INGESTED_FOR_APPROVAL'
+  // --- SRS v2.8 §15: the multi-tier inventory lifecycle ----------------------
+  | 'PROCUREMENT_REGISTERED'
+  | 'INVENTORY_BUFFER_SET';
 
 export interface AuditEntry {
   action: AuditAction;

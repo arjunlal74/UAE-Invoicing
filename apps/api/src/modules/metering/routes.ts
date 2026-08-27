@@ -10,6 +10,7 @@ import {
 } from '../../http/context.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { loadBalance, toBundleSummary, type BundleRow } from './service.js';
+import { assertHostStockCovers } from './inventory.js';
 
 /**
  * Data bundles and consumption (SRS v2.7 §15).
@@ -157,14 +158,26 @@ export function registerMeteringRoutes(app: FastifyInstance) {
           }
         }
 
+        // v2.8 §15.1: a bundle the host issues comes off the host's shelf, and
+        // the shelf is only stocked by a registered provider purchase. Before
+        // this the platform could sell units it had never bought, and the first
+        // anyone would know was a provider refusing to clear an invoice.
+        // A partner slice is exempt: those units left the host when the partner
+        // bought its master pool, and double-counting them here would make the
+        // host's stock fall twice for one sale.
+        if (!body.parentBundleId) {
+          await assertHostStockCovers(tx, body.purchasedUnits);
+        }
+
         const rows = await tx<{ id: string }[]>`
           INSERT INTO data_bundles (
             tenant_id, parent_bundle_id, reference, purchased_units,
-            allow_overage, expires_at, notes
+            allow_overage, expires_at, notes, asp_procurement_id, minimum_buffer_units
           ) VALUES (
             ${body.tenantId}, ${body.parentBundleId ?? null}, ${body.reference},
             ${body.purchasedUnits}, ${body.allowOverage},
-            ${body.expiresAt ?? null}::date, ${body.notes ?? null}
+            ${body.expiresAt ?? null}::date, ${body.notes ?? null},
+            ${body.aspProcurementId ?? null}, ${body.minimumBufferUnits ?? 0}
           )
           RETURNING id
         `;

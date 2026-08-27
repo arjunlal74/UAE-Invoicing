@@ -603,3 +603,96 @@ export function renderQuotaThreshold(params: {
     text,
   };
 }
+
+/**
+ * Template G — low data inventory buffer alert (SRS v2.8 §5.7).
+ *
+ * Distinct from the percentage alert above, and the difference is the point.
+ * "80% used" is a fact about a bundle; "1,420 units left, ~180 a day" is a fact
+ * about next Tuesday. The run rate is what turns the number into a deadline,
+ * which is the only form in which a reorder warning actually gets acted on.
+ */
+export function renderInventoryBuffer(params: {
+  contactName: string;
+  /** The account the alert is about — host, partner, tenant or sub-tenant. */
+  accountName: string;
+  tierLabel: string;
+  thresholdUnits: number;
+  remainingUnits: number;
+  /** Units a day over the last 30 days. Zero when nothing has been filed yet. */
+  dailyRunRate: number;
+  critical: boolean;
+  consoleUrl: string;
+}): RenderedMail {
+  const { name, supportEmail } = platform();
+
+  const remaining = Math.max(0, params.remainingUnits);
+  const daysLeft =
+    params.dailyRunRate > 0 ? Math.floor(remaining / params.dailyRunRate) : null;
+
+  const runRate =
+    params.dailyRunRate > 0
+      ? `~${params.dailyRunRate.toLocaleString()} units/day`
+      : 'no consumption recorded in the last 30 days';
+
+  const urgency =
+    remaining <= 0
+      ? 'This account has no units left. Filing is blocked until it is topped up.'
+      : daysLeft !== null
+        ? `At the current rate that is about ${daysLeft} more day${daysLeft === 1 ? '' : 's'}.`
+        : 'There is no recent consumption to project a run-out date from.';
+
+  const heading = params.critical
+    ? `Urgent: data units running out for ${params.accountName}`
+    : `Data units below the minimum buffer for ${params.accountName}`;
+
+  const html = layout(
+    heading,
+    `<p style="margin:0 0 12px;font-size:14px;line-height:1.6;">Dear ${escapeHtml(params.contactName)},</p>
+     <p style="margin:0 0 16px;font-size:14px;line-height:1.6;">
+       The available data unit balance for <strong>${escapeHtml(params.accountName)}</strong> has
+       fallen below the configured minimum safety buffer.
+     </p>
+     ${detailRows([
+       ['Account tier', params.tierLabel],
+       ['Minimum threshold', `${params.thresholdUnits.toLocaleString()} units`],
+       ['Currently available', `${remaining.toLocaleString()} units`],
+       ['Consumption run-rate', runRate],
+     ])}
+     <p style="margin:0 0 4px;font-size:14px;line-height:1.6;">${escapeHtml(urgency)}</p>
+     <p style="margin:0 0 4px;font-size:14px;line-height:1.6;">
+       To prevent an interruption to invoice clearance, procure or allocate additional units now.
+     </p>
+     ${actionButton(params.consoleUrl, 'Open the data bundle console')}
+     <p style="margin:0;font-size:13px;color:#475569;">
+       For procurement assistance, contact ${escapeHtml(supportEmail)}.
+     </p>`,
+  );
+
+  const text = [
+    `Dear ${params.contactName},`,
+    '',
+    `The available data unit balance for ${params.accountName} has fallen below the configured minimum safety buffer.`,
+    '',
+    `  Account tier:         ${params.tierLabel}`,
+    `  Minimum threshold:    ${params.thresholdUnits.toLocaleString()} units`,
+    `  Currently available:  ${remaining.toLocaleString()} units`,
+    `  Consumption run-rate: ${runRate}`,
+    '',
+    urgency,
+    '',
+    'To prevent an interruption to invoice clearance, procure or allocate additional units now.',
+    '',
+    params.consoleUrl,
+    '',
+    `For procurement assistance, contact ${supportEmail}.`,
+  ].join('\n');
+
+  return {
+    subject: params.critical
+      ? `${name}: URGENT — data units running out for ${params.accountName}`
+      : `${name}: data inventory below minimum threshold for ${params.accountName}`,
+    html,
+    text,
+  };
+}

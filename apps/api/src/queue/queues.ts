@@ -46,8 +46,15 @@ export interface SendMailJob {
 }
 
 export interface PollStatusJob {
-  /** Empty payload: the sweeper finds its own work. */
-  reason: 'sweep';
+  /**
+   * Which sweep to run. Both are low-frequency singleton housekeeping that
+   * finds its own work, so they share a lane rather than each carrying a queue,
+   * a worker and a shutdown path of their own:
+   *
+   *   `sweep`     — ask the provider about invoices it has gone quiet on (§10.6)
+   *   `inventory` — check every tier against its minimum buffer (v2.8 §15.5)
+   */
+  reason: 'sweep' | 'inventory';
 }
 
 /**

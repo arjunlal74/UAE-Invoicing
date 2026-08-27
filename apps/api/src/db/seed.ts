@@ -272,30 +272,60 @@ async function seed() {
       )
     `;
 
-    // --- §15 prepaid data bundles ------------------------------------------
-    // The direct tenant buys from the host; the partner buys a master pool and
-    // carves a slice out of it for its client. That two-tier arrangement is the
-    // one worth having in the seed, because it is the one the dual-deduction
-    // logic exists for and the one nobody would set up by hand to test.
-    await tx`
-      INSERT INTO data_bundles (tenant_id, reference, purchased_units, consumed_units, notes)
-      VALUES (${activeId}, 'BNDL-ALBAHAR-2026', 10000, 0,
-              'Annual prepaid capacity sold directly by the host.')
-    `;
-
-    const masterBundle = await tx<{ id: string }[]>`
-      INSERT INTO data_bundles (tenant_id, reference, purchased_units, consumed_units, notes)
-      VALUES (${partnerId}, 'BNDL-GULFADV-MASTER', 100000, 0,
-              'Channel partner master pool. Sub-tenant slices are carved from this.')
+    // --- §15 the data bundle supply chain -----------------------------------
+    // v2.8 makes this a chain rather than a set of standalone balances, so the
+    // seed builds the whole of it: the host buys wholesale from a provider,
+    // sells to a direct tenant and to a partner, and the partner carves a slice
+    // for its own client. Without the procurement at the top the console would
+    // open on a platform that has sold 110,000 units it never bought — which is
+    // exactly the state v2.8 exists to make impossible.
+    const procurement = await tx<{ id: string }[]>`
+      INSERT INTO asp_bundle_procurements (
+        asp_provider_name, contract_reference, total_units,
+        cost_per_unit_aed, total_cost_aed, purchase_date, notes
+      ) VALUES (
+        'Accredited ASP UAE', 'ASP-WHOLESALE-2026-001', 500000,
+        0.0850, 42500.00, CURRENT_DATE - 30,
+        'Opening wholesale purchase. Everything below is sold out of this contract.'
+      )
       RETURNING id
     `;
+    const procurementId = procurement[0]!.id;
 
     await tx`
       INSERT INTO data_bundles (
-        tenant_id, parent_bundle_id, reference, purchased_units, consumed_units, notes
+        tenant_id, reference, purchased_units, consumed_units, notes,
+        asp_procurement_id, minimum_buffer_units
+      ) VALUES (
+        ${activeId}, 'BNDL-ALBAHAR-2026', 10000, 0,
+        'Annual prepaid capacity sold directly by the host.',
+        ${procurementId}, 2000
+      )
+    `;
+
+    const masterBundle = await tx<{ id: string }[]>`
+      INSERT INTO data_bundles (
+        tenant_id, reference, purchased_units, consumed_units, notes,
+        asp_procurement_id, minimum_buffer_units
+      ) VALUES (
+        ${partnerId}, 'BNDL-GULFADV-MASTER', 100000, 0,
+        'Channel partner master pool. Sub-tenant slices are carved from this.',
+        ${procurementId}, 10000
+      )
+      RETURNING id
+    `;
+
+    // No procurement link on a slice: these units left the host when the
+    // partner bought the master pool, and pointing the slice at the contract
+    // as well would have one purchase counted against it twice.
+    await tx`
+      INSERT INTO data_bundles (
+        tenant_id, parent_bundle_id, reference, purchased_units, consumed_units,
+        notes, minimum_buffer_units
       ) VALUES (
         ${subTenantId}, ${masterBundle[0]!.id}, 'BNDL-DESERTLOG-2026', 5000, 0,
-        'Slice allocated by Gulf Advisory Partners. Consumption is also deducted from their master pool.'
+        'Slice allocated by Gulf Advisory Partners. Consumption is also deducted from their master pool.',
+        500
       )
     `;
 

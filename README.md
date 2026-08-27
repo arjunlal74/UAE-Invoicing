@@ -126,9 +126,10 @@ fail against code that is not on disk.
 ```bash
 pnpm --filter @uae/domain test   # 43 — VAT maths, validation rules, auto-fix, credit note reversal
 pnpm --filter @uae/ubl test      # 30 — UBL 2.1 generation and reading, ApplicationResponse, QR payload
-pnpm --filter @uae/api test      # 64 — Excel round trip, the §16 permission matrix,
+pnpm --filter @uae/api test      # 78 — Excel round trip, the §16 permission matrix,
                                  #      PDF rendering, API key credentials and scopes,
-                                 #      SFTP claim / stability / recovery semantics
+                                 #      SFTP claim / stability / recovery semantics,
+                                 #      the §15 inventory formulas
 pnpm --filter @uae/portal test   # 11 — staging grid and error sidebar
 ```
 
@@ -151,6 +152,14 @@ success, duplicate refusal, receipts, and revocation closing the directory):
 ```bash
 pnpm --filter @uae/api e2e:ingest    # REST
 pnpm --filter @uae/api e2e:sftp      # SFTP — needs the `sftp` container running
+```
+
+And one over the §15 bundle inventory — wholesale procurement, the stock guard,
+the three balances moving independently, partner slicing and the §15.5 floors:
+
+```bash
+pnpm --filter @uae/api e2e:inventory
+pnpm --filter @uae/api inventory:sweep   # run the buffer check now, not in an hour
 ```
 
 All of them are safe to run repeatedly against the same database: invoice numbers and
@@ -298,6 +307,69 @@ flagged.
 | v2.7 §17 `UNIQUE (tenant_id, customer_code)` | Partial unique index over non-null codes | The code is optional, and a plain `UNIQUE` admits unlimited NULL rows while still reporting a uniqueness failure when a real value collides. Same for supplier codes and both TRNs. |
 | v2.7 §8 credit note as UBL Type 381 | Emitted as an `Invoice` root with `InvoiceTypeCode 381` | The SRS's own XPaths assume it: §8.2 maps the preceding-document link to `/Invoice/cac:BillingReference/…`, not to a `CreditNote` root. |
 | v2.7 §12.3 "Reject (RE)" open to the AP desk | Rejecting and querying are, accepting is not | §16 reserves "authorize AP payments" to the tax approver, and accepting a bill is what releases it for payment. An accountant flags it instead. |
+| v2.8 §17 adds a `tenant_bundle_allocations` table | Columns added to `data_bundles` | Same grain, same parent/slice relationship, same foreign keys and policies. A second table would hold the same rows twice and need every constraint rebuilt on it. |
+| v2.8 §17 `GENERATED ALWAYS AS` balance columns | Computed in the query | A stored balance is a number that can disagree with its own history. At this cardinality — contracts and bundles, not invoices — the aggregate is free. |
+| v2.8 §15.5 names one threshold per tier | Threshold plus a severity split at half of it | An account at 40% of its floor is a reorder prompt; one at 4% is about to stop filing, and the subject line should not be the same. |
+
+## Data bundle inventory (SRS v2.8 §15)
+
+v2.7 metered the retail half of this: a tenant holds a prepaid bundle, a channel
+partner carves slices out of a master pool, and clearing an invoice deducts from
+both. What it never modelled is where the host's units come from — so a platform
+administrator could sell a hundred thousand units the platform had never bought,
+and the first anyone would know was a provider refusing to clear a tax document.
+An inventory that only counts what leaves is not an inventory.
+
+**The supply chain, closed.** A wholesale purchase from an accredited provider
+is registered with its contract reference, unit count and cost; bundles are then
+sold out of that stock. `POST /api/v1/billing/bundles` now refuses to issue more
+than the shelf holds. A partner's slice is exempt from that check — those units
+left the host when the partner bought its master pool, and deducting them again
+would make one sale cost the host twice.
+
+**Three balances, and they are not interchangeable.** The formulas in §15.1–15.4
+read alike in prose and answer different questions:
+
+| Figure | Formula | The question it answers |
+|---|---|---|
+| Current stock | opening + purchases − sold/allocated | What is left to sell |
+| Net available | opening + purchases − consumed | What is left to file against |
+| Partner unallocated | opening + master purchases − slices carved | Whether another sub-tenant can be onboarded |
+| Partner net | master purchases − sub-tenant consumption | Whether its clients can keep filing |
+
+A platform can be out of stock while 90% of its capacity is unused, and it can
+have plenty to sell while five thousand units from a standstill. Picking the
+wrong formula gives a number that is plausible, stable and wrong, which is the
+worst way for an inventory to fail — hence
+`apps/api/src/modules/metering/__tests__/inventory.test.ts`.
+
+**Floors, not percentages.** v2.7 warns at 80/90/100% of a bundle. §15.5 adds an
+absolute floor per account, because a tenant filing four thousand invoices a
+month does not care that 80% of a bundle is gone; it cares that fewer than two
+thousand units remain, because that is a week. The tenant sets its own — only
+the person filing knows whether two thousand units is a fortnight or an
+afternoon — and the host sets the platform's.
+
+A breach sends **Template G** (§5.7) to whoever can act on it: global admins for
+the host tier, the partner for a sub-tenant's slice, the company admin and tax
+approver for a direct tenant. It carries the 30-day run rate, so the mail says
+"about four days" rather than "1,420 units". Announced once, re-armed when the
+balance climbs back over the line.
+
+Evaluated by an hourly sweep rather than at the point of consumption, because a
+floor is breached two ways — the balance falls, or somebody raises the threshold
+— and only the first passes through `consumeUnits`. It also catches the case
+that would otherwise never fire: an account that stops filing entirely sits
+below its buffer indefinitely with no further deduction to trigger anything.
+
+**Upgrading an existing deployment.** The host's net balance is procured minus
+consumed, so a platform that has been filing invoices without recorded purchases
+reads *negative* until its contract history is backfilled. That is the honest
+number rather than a bug. Both the host and per-bundle floors therefore default
+to zero — alert off — so the first sweep after the migration does not mail
+everybody about a shortfall that is really a missing data-entry step.
+
+Exercise the whole chain with `pnpm --filter @uae/api e2e:inventory`.
 
 ## The programmatic API
 

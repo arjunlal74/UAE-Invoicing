@@ -2,6 +2,7 @@ import { Worker } from 'bullmq';
 import { config } from './config.js';
 import { closeDb } from './db/client.js';
 import { parseBatchJob } from './jobs/parseBatch.js';
+import { inventorySweepJob } from './jobs/inventorySweep.js';
 import { pollStatusJob } from './jobs/pollStatus.js';
 import { sendMailJob } from './jobs/sendMail.js';
 import { sendResponseJob } from './jobs/sendResponse.js';
@@ -73,9 +74,11 @@ async function main() {
     { connection, concurrency: 4 },
   );
 
+  // Two sweeps share this lane — see PollStatusJob. Both find their own work
+  // and neither is urgent, so one serial worker is the right shape for both.
   const pollWorker = new Worker<PollStatusJob>(
     QUEUE_POLL,
-    async () => pollStatusJob(),
+    async (job) => (job.data.reason === 'inventory' ? inventorySweepJob() : pollStatusJob()),
     { connection, concurrency: 1 },
   );
 
@@ -105,6 +108,21 @@ async function main() {
     {
       repeat: { every: 5 * 60_000 },
       jobId: 'status-poll-sweep',
+      removeOnComplete: { count: 20 },
+      removeOnFail: { count: 20 },
+    },
+  );
+
+  // v2.8 §15.5. Hourly rather than every five minutes: a data bundle running
+  // low is a procurement decision measured in days, and an alert that could
+  // arrive an hour later costs nothing while a tighter loop would put a full
+  // tier scan on the database twelve times as often for no earlier action.
+  await statusPollQueue().add(
+    'inventory',
+    { reason: 'inventory' },
+    {
+      repeat: { every: 60 * 60_000 },
+      jobId: 'inventory-buffer-sweep',
       removeOnComplete: { count: 20 },
       removeOnFail: { count: 20 },
     },

@@ -480,6 +480,9 @@ export const BundleSummary = z.object({
   expiresAt: z.string().nullable(),
   notes: z.string().nullable(),
   createdAt: z.string(),
+  /** v2.8 §15.3 — absolute floor, zero when the account has not set one. */
+  minimumBufferUnits: z.number(),
+  belowBuffer: z.boolean(),
 });
 export type BundleSummary = z.infer<typeof BundleSummary>;
 
@@ -492,6 +495,14 @@ export const CreateBundleRequest = z.object({
   allowOverage: z.boolean().default(false),
   expiresAt: z.string().nullable().optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
+  /**
+   * v2.8 §15.2: the wholesale contract this sale is drawn from. Optional
+   * because a partner carving a slice is not selling host stock — the units
+   * left the host when the partner bought its master pool.
+   */
+  aspProcurementId: uuid.nullable().optional(),
+  /** v2.8 §15.3: the floor this account should be warned at. */
+  minimumBufferUnits: z.number().int().min(0).max(100_000_000).optional(),
 });
 export type CreateBundleRequest = z.infer<typeof CreateBundleRequest>;
 

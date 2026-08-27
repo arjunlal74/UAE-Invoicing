@@ -94,6 +94,7 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin', label: 'Dashboard', end: true },
   { to: '/admin/tenants', label: 'Tenants' },
   { to: '/admin/transmissions', label: 'Transmissions' },
+  { to: '/admin/inventory', label: 'Data inventory' },
   { to: '/admin/audit', label: 'Audit log' },
   { to: '/admin/staff', label: 'Staff' },
   { to: '/admin/mail', label: 'Mail' },

@@ -1,7 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DIRECTION_SHORT,
   type BalanceResponse,
+  type BundleSummary,
   type PaginatedResult,
   type UsageLedgerItem,
 } from '@uae/contracts';
@@ -9,6 +10,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Alert,
+  Button,
   Card,
   EmptyState,
   PageHeader,
@@ -19,6 +21,7 @@ import {
   cx,
   formatDate,
   formatDateTime,
+  inputClass,
 } from '../../components/ui';
 import { api, queryString } from '../../lib/api';
 
@@ -115,6 +118,7 @@ export function UsagePage() {
                   </div>
                 </div>
                 <BundleBar bundle={bundle} />
+                <BufferControl bundle={bundle} />
               </div>
             ))}
           </div>
@@ -205,6 +209,83 @@ function BundleBar({ bundle }: { bundle: BalanceResponse['bundles'][number] }) {
           {Math.max(0, bundle.remainingUnits).toLocaleString()} remaining
         </span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The §15.3 minimum safety buffer.
+ *
+ * Deliberately the tenant's to set rather than the host's. The platform knows
+ * how many units are left; only the person filing knows whether two thousand of
+ * them is a fortnight or an afternoon, and that is the whole difference between
+ * a useful warning and one people learn to ignore.
+ */
+function BufferControl({ bundle }: { bundle: BundleSummary }) {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(String(bundle.minimumBufferUnits));
+
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/api/v1/billing/bundles/${bundle.id}/buffer`, {
+        method: 'PATCH',
+        body: { minimumBufferUnits: Number(value) || 0 },
+      }),
+    onSuccess: () => {
+      setEditing(false);
+      queryClient.invalidateQueries({ queryKey: ['billing-balance'] });
+    },
+  });
+
+  if (!editing) {
+    return (
+      <p className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+        <span>
+          {bundle.minimumBufferUnits > 0 ? (
+            <>
+              Alert below{' '}
+              <strong className="tabular-nums text-slate-700">
+                {bundle.minimumBufferUnits.toLocaleString()}
+              </strong>{' '}
+              units
+              {bundle.belowBuffer && (
+                <span className="ml-1 font-medium text-danger-700">— currently below it</span>
+              )}
+            </>
+          ) : (
+            'No low-balance alert set'
+          )}
+        </span>
+        <button
+          className="text-brand-600 underline"
+          onClick={() => {
+            setValue(String(bundle.minimumBufferUnits));
+            setEditing(true);
+          }}
+        >
+          change
+        </button>
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <input
+        className={cx(inputClass, 'w-32')}
+        inputMode="numeric"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        aria-label="Minimum units before we warn you"
+      />
+      <span className="text-xs text-slate-500">units remaining before we email you (0 = off)</span>
+      <Button size="sm" variant="primary" disabled={save.isPending} onClick={() => save.mutate()}>
+        {save.isPending ? 'Saving…' : 'Save'}
+      </Button>
+      <Button size="sm" onClick={() => setEditing(false)}>
+        Cancel
+      </Button>
     </div>
   );
 }
