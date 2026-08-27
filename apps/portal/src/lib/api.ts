@@ -133,6 +133,52 @@ export async function apiBlob(path: string): Promise<{ blob: Blob; filename: str
   return { blob: await response.blob(), filename: match?.[1] ?? 'download' };
 }
 
+/** Save a server-rendered PDF to disk under the filename the API chose. */
+export async function downloadPdf(path: string): Promise<void> {
+  const { blob, filename } = await apiBlob(path);
+  downloadBlob(blob, filename);
+}
+
+/**
+ * Print a server-rendered PDF.
+ *
+ * Asks for `disposition=inline` and hands the bytes to a hidden iframe, because
+ * a PDF served as an attachment goes to the downloads folder and never reaches
+ * a print dialog. Printing the rendered PDF rather than the page it came from
+ * means the paper copy and the downloaded file are the same document — a print
+ * stylesheet over the React view would be a second layout to keep in step.
+ */
+export async function printPdf(path: string): Promise<void> {
+  const { blob } = await apiBlob(`${path}${path.includes('?') ? '&' : '?'}disposition=inline`);
+
+  const url = URL.createObjectURL(blob);
+  const frame = document.createElement('iframe');
+  frame.setAttribute('aria-hidden', 'true');
+  frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+
+  frame.onload = () => {
+    try {
+      frame.contentWindow?.focus();
+      frame.contentWindow?.print();
+    } catch {
+      // Safari will not print a PDF out of an iframe. Opening it gives the user
+      // the viewer's own print control, which is one click rather than none.
+      window.open(url, '_blank', 'noopener');
+    }
+    // There is no event for "the print dialog closed", and revoking the URL
+    // while the dialog is still open leaves it printing a blank page. A long
+    // timer costs one object URL for a minute; getting this wrong costs the
+    // print job.
+    window.setTimeout(() => {
+      frame.remove();
+      URL.revokeObjectURL(url);
+    }, 60_000);
+  };
+
+  frame.src = url;
+  document.body.appendChild(frame);
+}
+
 export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');

@@ -7,6 +7,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatAmount } from '@uae/domain';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { PdfActions } from '../../components/PdfActions';
 import {
   Alert,
   Button,
@@ -62,7 +63,8 @@ export function InvoiceDetailPage() {
           </h1>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <PdfActions path={`/api/v1/invoices/${invoiceId}/pdf`} label="Download PDF" />
           {data.ublXmlUri && (
             <Button
               onClick={async () => {

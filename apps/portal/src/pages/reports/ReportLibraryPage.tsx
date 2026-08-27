@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { REPORT_CATALOG, type ReportKey } from '@uae/contracts';
 import { useState } from 'react';
+import { PdfActions } from '../../components/PdfActions';
 import {
   Button,
   Card,
@@ -16,10 +17,11 @@ import { api, downloadBlob, queryString } from '../../lib/api';
 /**
  * The §13.2 report library.
  *
- * Reports come back as columns and rows rather than as a rendered file, and the
- * CSV is produced in the browser from exactly the data on screen. That is the
- * only arrangement in which the export and the table are guaranteed to agree —
- * a server-side renderer would be a second query to drift from the first.
+ * Reports come back as columns and rows, and the CSV is produced in the browser
+ * from exactly the data on screen — the export and the table cannot disagree
+ * because they are the same array. The PDF is rendered server-side, where the
+ * pagination and column fitting a printed table needs actually live, but from
+ * the same query behind the same date filters, so it cannot drift either.
  */
 
 interface ReportResult {
@@ -28,6 +30,8 @@ interface ReportResult {
   module: 'AR' | 'AP' | 'BOTH';
   columns: string[];
   rows: string[][];
+  /** The query hit its row cap and there may be more. */
+  truncated: boolean;
 }
 
 const MODULE_STYLES: Record<string, string> = {
@@ -66,11 +70,18 @@ export function ReportLibraryPage() {
     <div className="space-y-4">
       <PageHeader
         title="Report library"
-        description="Standard AR and AP reports, filtered by issue date and exportable to CSV."
+        description="Standard AR and AP reports, filtered by issue date and exportable to CSV or PDF."
         actions={
-          <Button variant="primary" onClick={exportCsv} disabled={!data?.rows.length}>
-            Export CSV
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <PdfActions
+              path={`/api/v1/reports/${selected}/pdf${queryString({ dateFrom, dateTo })}`}
+              disabled={!data?.rows.length}
+              label="Export PDF"
+            />
+            <Button variant="primary" onClick={exportCsv} disabled={!data?.rows.length}>
+              Export CSV
+            </Button>
+          </div>
         }
       />
 
@@ -189,6 +200,8 @@ export function ReportLibraryPage() {
               <div className="border-t border-slate-200 px-4 py-2 text-xs text-slate-500">
                 {data.rows.length.toLocaleString()} row
                 {data.rows.length === 1 ? '' : 's'}
+                {data.truncated &&
+                  ' — capped at the query limit. Narrow the date range to see the rest.'}
               </div>
             )}
           </div>

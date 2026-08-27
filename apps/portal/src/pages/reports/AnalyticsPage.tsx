@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { REASON_CODE_LABELS, type DisputeAnalytics } from '@uae/contracts';
 import { formatAmount } from '@uae/domain';
 import { Link } from 'react-router-dom';
+import { PdfActions } from '../../components/PdfActions';
 import {
   Alert,
   Card,
@@ -36,6 +37,7 @@ export function AnalyticsPage() {
       <PageHeader
         title="Dispute analytics"
         description="Outbound sales disputes and inbound purchase rejections across both modules."
+        actions={<PdfActions path="/api/v1/reports/analytics/pdf" label="Export PDF" />}
       />
 
       {kpis.unresolvedOver30Days > 0 && (

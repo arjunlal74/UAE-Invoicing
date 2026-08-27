@@ -9,10 +9,13 @@ import { actorFromContext, audit } from '../../audit/audit.js';
 import { withTenant } from '../../db/client.js';
 import { requireContext, requirePermission } from '../../http/context.js';
 import { badRequest, notFound } from '../../lib/errors.js';
+import { renderInvoicePdf } from '../../pdf/invoice.js';
+import { sendPdf } from '../../pdf/reply.js';
 import { SUBMIT_JOB_OPTIONS, invoiceSubmitQueue } from '../../queue/queues.js';
 import { getObject, keyFromUri } from '../../storage/objectStore.js';
 import { DOCUMENT_SELECT, toInvoiceListItem, type DocumentRow } from '../documents/mapper.js';
 import { loadResponses } from '../responses/service.js';
+import { loadPrintableDocument } from './printable.js';
 
 /**
  * Document search and detail.
@@ -298,6 +301,32 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
         .header('content-type', 'application/xml; charset=utf-8')
         .header('content-disposition', `attachment; filename="${row.invoice_number}.xml"`)
         .send(buffer);
+    },
+  );
+
+  // --- Printable document --------------------------------------------------
+  /**
+   * The invoice, credit note or debit note as a PDF.
+   *
+   * Rendered on demand rather than stored: the face of the document changes as
+   * the filing does — a draft gains an IRN and loses its watermark, a cleared
+   * invoice picks up the buyer's rejection — and a PDF written once at
+   * submission time would be a stale claim about the current state within a day.
+   * The archived UBL XML, which does not change, remains the evidentiary record;
+   * this is the human-readable view of it.
+   */
+  app.get(
+    '/api/v1/invoices/:id/pdf',
+    { preHandler: requirePermission('invoice.read') },
+    async (request, reply) => {
+      const ctx = requireContext(request);
+      const { id } = request.params as { id: string };
+      if (!ctx.tenantId) throw notFound('Tenant');
+
+      const document = await loadPrintableDocument(ctx.tenantId, id);
+      const pdf = await renderInvoicePdf(document);
+
+      return sendPdf(request, reply, pdf, document.invoiceNumber);
     },
   );
 
