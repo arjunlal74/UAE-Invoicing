@@ -450,14 +450,9 @@ if (partner) {
 }
 
 // --- 6c. period-scoped reporting ---------------------------------------------
-section('6c. Reporting figures are scoped to a period');
+section('6c. The provider roll-up is scoped to a period');
 
-// Baselines taken before the back-dated purchase, so the assertions below hold
-// on a re-run: every previous run of this script left its own 2021 contract
-// behind, and an absolute difference between the two windows would grow by one
-// contract each time.
-const baseRecent = await call('/api/v1/admin/inventory?period=6', { token: admin });
-const baseAll = await call('/api/v1/admin/inventory?period=all', { token: admin });
+const beforeOld = await call('/api/v1/admin/inventory', { token: admin });
 
 // Dated years back, so it is unambiguously outside any recent window while
 // remaining part of the provider's history.
@@ -511,52 +506,6 @@ check(
   allRow?.totalSpendAed,
 );
 
-const consoleRecent = await call('/api/v1/admin/inventory?period=6', { token: admin });
-const consoleAll = await call('/api/v1/admin/inventory?period=all', { token: admin });
-check(
-  'the console reports the window it was asked for',
-  consoleRecent.body?.period?.label === 'Last 6 months',
-  consoleRecent.body?.period,
-);
-check(
-  'the contract list is filtered by it',
-  !(consoleRecent.body?.procurements ?? []).some((c) => c.contractReference === `OLD-${stamp}`) &&
-    (consoleAll.body?.procurements ?? []).some((c) => c.contractReference === `OLD-${stamp}`),
-  {
-    recent: consoleRecent.body?.procurements?.length,
-    all: consoleAll.body?.procurements?.length,
-  },
-);
-check(
-  'the recent window does not count the old contract',
-  consoleRecent.body?.periodUnitsPurchased === baseRecent.body?.periodUnitsPurchased,
-  {
-    before: baseRecent.body?.periodUnitsPurchased,
-    after: consoleRecent.body?.periodUnitsPurchased,
-  },
-);
-check(
-  'while all time grows by exactly its units',
-  consoleAll.body?.periodUnitsPurchased - baseAll.body?.periodUnitsPurchased === OLD_UNITS,
-  {
-    before: baseAll.body?.periodUnitsPurchased,
-    after: consoleAll.body?.periodUnitsPurchased,
-  },
-);
-check(
-  'and by exactly its cost',
-  Number(consoleAll.body?.periodSpendAed) - Number(baseAll.body?.periodSpendAed) === OLD_SPEND,
-  { before: baseAll.body?.periodSpendAed, after: consoleAll.body?.periodSpendAed },
-);
-// Balances are not reporting figures. What is on the shelf today is every
-// purchase ever made minus every sale ever made, whatever window is asked for.
-check(
-  'while the shelf itself ignores the period',
-  consoleRecent.body?.host?.currentStockUnits === consoleAll.body?.host?.currentStockUnits &&
-    consoleRecent.body?.host?.netAvailableUnits === consoleAll.body?.host?.netAvailableUnits,
-  { recent: consoleRecent.body?.host, all: consoleAll.body?.host },
-);
-
 const explicit = await call('/api/v1/admin/providers?from=2021-01-01&to=2021-12-31', {
   token: admin,
 });
@@ -568,9 +517,27 @@ check(
   explicitRow?.totalSpendAed,
 );
 
+// The console is the other half of the decision: its figures are balances and a
+// contract list, so a purchase dated 2021 belongs in both regardless of window.
+const afterOld = await call('/api/v1/admin/inventory', { token: admin });
+check(
+  'the shelf counts the old contract like any other',
+  afterOld.body?.host?.currentStockUnits ===
+    beforeOld.body?.host?.currentStockUnits + OLD_UNITS,
+  {
+    before: beforeOld.body?.host?.currentStockUnits,
+    after: afterOld.body?.host?.currentStockUnits,
+  },
+);
+check(
+  'and the console lists it without asking for a period',
+  (afterOld.body?.procurements ?? []).some((c) => c.contractReference === `OLD-${stamp}`),
+  afterOld.body?.procurements?.length,
+);
+
 // A mistyped bound that quietly widened to all time would be a spend report
 // that reads as a quarter and is not one, so each is refused out loud.
-const badPeriod = await call('/api/v1/admin/inventory?period=forever', { token: admin });
+const badPeriod = await call('/api/v1/admin/providers?period=forever', { token: admin });
 check('a nonsense period is refused', badPeriod.status === 400, badPeriod.body);
 const badDate = await call('/api/v1/admin/providers?from=01-03-2021', { token: admin });
 check('so is a date in the wrong shape', badDate.status === 400, badDate.body);

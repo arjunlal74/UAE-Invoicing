@@ -312,7 +312,7 @@ flagged.
 | v2.8 §15.5 names one threshold per tier | Threshold plus a severity split at half of it | An account at 40% of its floor is a reorder prompt; one at 4% is about to stop filing, and the subject line should not be the same. |
 | v2.8 §17 `asp_bundle_procurements.asp_provider_name` free text | `asp_provider_id` into an `asp_providers` master | Two spellings of one company are two providers to a cost report, which is the report the column exists for. |
 | v2.8 §17 stores `cost_per_unit_aed` and `total_cost_aed` as given | Total stored as given, rate derived from it | A contract is quoted as a lump sum. Multiplying a rounded rate back out loses fils on odd unit counts, so the platform's spend would disagree with the provider's invoice. |
-| v2.8 §15.1 reports contracts, units and spend as running totals | Scoped to a reporting period, default the last 12 months | A lifetime total only grows. By the second year it can no longer say whether a provider is still in use or what a renewal should cost — which is the question the roll-up exists to answer. Balances stay cumulative. |
+| v2.8 §15.1 reports per-provider contracts, units and spend as running totals | Scoped to a reporting period, default the last 12 months | A lifetime total only grows. By the second year it can no longer say whether a provider is still in use or what a renewal should cost — which is the question the roll-up exists to answer. Balances stay cumulative. |
 
 ## Data bundle inventory (SRS v2.8 §15)
 
@@ -371,21 +371,24 @@ wrong formula gives a number that is plausible, stable and wrong, which is the
 worst way for an inventory to fail — hence
 `apps/api/src/modules/metering/__tests__/inventory.test.ts`.
 
-**Reporting takes a period; balances do not.** Contracts registered, units
-bought and money spent are running totals in §15.1, and a running total stops
-being informative the moment it is larger than a year's worth — it cannot
-distinguish a provider bought from every quarter from one used once in 2026. The
-console and the provider roll-up therefore take a window (`?period=` in months
-or `all`, or an explicit `from`/`to`), defaulting to the last twelve months, and
-name it on screen so no one reads a quarter's spend as a lifetime figure. A
-mistyped bound is refused rather than quietly widened.
+**The provider roll-up takes a period; nothing else does.** Contracts
+registered, units bought and money spent per provider are running totals in
+§15.1, and a running total stops being informative the moment it is larger than
+a year's worth — it cannot distinguish a provider bought from every quarter from
+one used once in 2026. `/api/v1/admin/providers` therefore takes a window
+(`?period=` in months or `all`, or an explicit `from`/`to`), defaulting to the
+last twelve months. The selector sits inside the **Providers** dialog, next to
+the columns it governs, so the window is chosen where it is read. A mistyped
+bound is refused rather than quietly widened to all time.
 
-The two balance columns are deliberately outside it: what is on the shelf today
-is every purchase ever made minus every sale ever made, and scoping that to a
-quarter produces a number that looks like a balance and is not one. One figure
-also stays unscoped on purpose — each provider's lifetime contract count sits
-beside its period figures, because "nothing bought this year" and "nothing ever
-bought" are different facts and only the second makes a provider safe to retire.
+The console itself stays cumulative: what is on the shelf today is every
+purchase ever made minus every sale ever made, and scoping that to a quarter
+produces a number that looks like a balance and is not one. Its contract list is
+most recent first and unfiltered, so a back-dated purchase is never hidden by a
+window nobody chose. One column in the dialog is unscoped too — each provider's
+lifetime contract count, beside its period figures, because "nothing bought this
+year" and "nothing ever bought" are different facts and only the second makes a
+provider safe to retire.
 
 **Where the allocation happens.** Admin → **Data inventory** is the host's
 console: procurement contracts, the shelf, every account's balance against its

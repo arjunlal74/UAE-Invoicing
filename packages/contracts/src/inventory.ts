@@ -162,13 +162,13 @@ export const InventoryTierRow = z.object({
 export type InventoryTierRow = z.infer<typeof InventoryTierRow>;
 
 /**
- * The window the *reporting* figures cover.
+ * The window the per-provider roll-up covers.
  *
- * Balances are deliberately excluded from it. Stock and net available are
- * cumulative by definition — what is on the shelf today is every purchase ever
- * made minus every sale ever made — and scoping them to a quarter would produce
- * a number that looks like a balance and is not one. Only spend, unit counts
- * and the contract list take a period.
+ * Only that roll-up takes one. The console's own figures are balances — what is
+ * on the shelf today is every purchase ever made minus every sale ever made —
+ * and scoping those to a quarter would produce a number that looks like a
+ * balance and is not one. What does need a window is the provider table, whose
+ * contracts, units and spend would otherwise only ever grow.
  */
 export const ReportingPeriod = z.object({
   from: z.string().nullable(),
@@ -181,11 +181,6 @@ export const InventoryConsole = z.object({
   host: HostInventorySummary,
   procurements: z.array(ProcurementSummary),
   tiers: z.array(InventoryTierRow),
-  /** Which window `procurements` and the per-provider roll-ups were computed over. */
-  period: ReportingPeriod,
-  /** Purchases and spend inside the period, as against the lifetime host figures. */
-  periodUnitsPurchased: z.number(),
-  periodSpendAed: z.string(),
 });
 export type InventoryConsole = z.infer<typeof InventoryConsole>;
 

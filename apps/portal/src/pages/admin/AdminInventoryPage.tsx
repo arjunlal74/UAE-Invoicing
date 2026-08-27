@@ -4,6 +4,7 @@ import {
   type PaginatedResult,
   type ProcurementSummary,
   type ProviderSummary,
+  type ReportingPeriod,
   type TenantSummary,
 } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -37,42 +38,24 @@ import { ApiError, api } from '../../lib/api';
  * warned at — because the alert mail goes to the account holder, and the host
  * needs to know it went out before the phone rings.
  */
-/**
- * The windows on offer.
- *
- * "All time" is last and is not the default: a lifetime total only grows, and
- * once it is bigger than a year's worth it can no longer tell you whether a
- * provider is still in use or what a renewal ought to cost.
- */
-const PERIODS = [
-  { value: '3', label: 'Last 3 months' },
-  { value: '6', label: 'Last 6 months' },
-  { value: '12', label: 'Last 12 months' },
-  { value: '24', label: 'Last 24 months' },
-  { value: 'all', label: 'All time' },
-];
-
 export function AdminInventoryPage() {
   const queryClient = useQueryClient();
   const [registering, setRegistering] = useState(false);
   const [editingBuffer, setEditingBuffer] = useState(false);
   const [managingProviders, setManagingProviders] = useState(false);
   const [selling, setSelling] = useState(false);
-  const [period, setPeriod] = useState('12');
 
   const { data, isLoading } = useQuery({
-    queryKey: ['admin-inventory', period],
-    queryFn: () => api<InventoryConsole>(`/api/v1/admin/inventory?period=${period}`),
+    queryKey: ['admin-inventory'],
+    queryFn: () => api<InventoryConsole>('/api/v1/admin/inventory'),
   });
 
   // Retired providers are included so the management list can show them and
   // offer reactivation; the purchase form filters to the active ones.
   const { data: providers } = useQuery({
-    queryKey: ['asp-providers', period],
+    queryKey: ['asp-providers', 'picker'],
     queryFn: () =>
-      api<{ items: ProviderSummary[] }>(
-        `/api/v1/admin/providers?includeInactive=true&period=${period}`,
-      ),
+      api<{ items: ProviderSummary[] }>('/api/v1/admin/providers?includeInactive=true'),
   });
 
   // Only fetched once the form is open: the console does not need the tenant
@@ -98,18 +81,6 @@ export function AdminInventoryPage() {
         description="Wholesale procurement, platform stock and every account's remaining balance."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <select
-              className={cx(inputClass, 'w-auto')}
-              value={period}
-              onChange={(e) => setPeriod(e.target.value)}
-              aria-label="Reporting period"
-            >
-              {PERIODS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
             <Button onClick={() => setManagingProviders(true)}>Providers</Button>
             <Button onClick={() => setEditingBuffer(true)}>Minimum buffer</Button>
             <Button
@@ -162,10 +133,7 @@ export function AdminInventoryPage() {
         </Alert>
       )}
 
-      {/* --- §15.1 the host's position -----------------------------------
-          Balances, so deliberately not period-scoped: what is on the shelf
-          today is every purchase ever made minus every sale ever made. The
-          period governs the two purchase figures below them instead. */}
+      {/* --- §15.1 the host's position ----------------------------------- */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile
           label="Net available"
@@ -190,9 +158,9 @@ export function AdminInventoryPage() {
           tone={host.daysRemaining !== null && host.daysRemaining < 30 ? 'warn' : 'neutral'}
         />
         <StatTile
-          label={`Procured · ${data.period.label.toLowerCase()}`}
-          value={data.periodUnitsPurchased.toLocaleString()}
-          hint={`AED ${Number(data.periodSpendAed).toLocaleString()} in this period`}
+          label="Procured to date"
+          value={host.totalProcuredUnits.toLocaleString()}
+          hint={`AED ${Number(host.totalCostAed).toLocaleString()} committed`}
         />
       </div>
 
@@ -266,19 +234,11 @@ export function AdminInventoryPage() {
       </Card>
 
       {/* --- §15.1 the contracts behind the stock ------------------------ */}
-      <Card title={`Provider purchases · ${data.period.label} (${data.procurements.length})`}>
+      <Card title={`Provider purchases (${data.procurements.length})`}>
         {data.procurements.length === 0 ? (
           <EmptyState
-            title={
-              host.totalProcuredUnits > 0
-                ? 'No purchases in this period'
-                : 'No purchases registered'
-            }
-            description={
-              host.totalProcuredUnits > 0
-                ? 'Contracts exist outside this window. Widen the period above to see them.'
-                : 'The platform cannot sell units it has not bought. Register the provider contract first.'
-            }
+            title="No purchases registered"
+            description="The platform cannot sell units it has not bought. Register the provider contract first."
           />
         ) : (
           <div className="overflow-x-auto">
@@ -352,8 +312,7 @@ export function AdminInventoryPage() {
 
       {managingProviders && (
         <ProvidersModal
-          providers={providers?.items ?? []}
-          periodLabel={data.period.label}
+          fallback={providers?.items ?? []}
           onClose={() => setManagingProviders(false)}
           onChanged={() => {
             queryClient.invalidateQueries({ queryKey: ['asp-providers'] });
@@ -662,18 +621,45 @@ function BufferModal({
  * of the record of where its capacity came from, so retiring one takes it out
  * of the picker and leaves its contracts legible.
  */
+const PERIODS = [
+  { value: '3', label: 'Last 3 months' },
+  { value: '6', label: 'Last 6 months' },
+  { value: '12', label: 'Last 12 months' },
+  { value: '24', label: 'Last 24 months' },
+  { value: 'all', label: 'All time' },
+];
+
 function ProvidersModal({
-  providers,
-  periodLabel,
+  fallback,
   onClose,
   onChanged,
 }: {
-  providers: ProviderSummary[];
-  periodLabel: string;
+  /** The picker's copy of the list — what the table shows until this dialog's own query lands. */
+  fallback: ProviderSummary[];
   onClose: () => void;
   onChanged: () => void;
 }) {
-  const [adding, setAdding] = useState(providers.length === 0);
+  /**
+   * The window the roll-up columns cover, and it lives here because this is
+   * where they are read. Twelve months rather than all time: a lifetime total
+   * only grows, and once it is larger than a year's worth it can no longer say
+   * whether a provider is still in use or what a renewal ought to cost.
+   */
+  const [period, setPeriod] = useState('12');
+
+  const { data, isFetching } = useQuery({
+    queryKey: ['asp-providers', period],
+    queryFn: () =>
+      api<{ items: ProviderSummary[]; period: ReportingPeriod }>(
+        `/api/v1/admin/providers?includeInactive=true&period=${period}`,
+      ),
+    // Keep the previous window's rows on screen while the next one loads, so
+    // changing the period re-labels a table rather than emptying it.
+    placeholderData: (previous) => previous,
+  });
+
+  const providers = data?.items ?? fallback;
+  const [adding, setAdding] = useState(fallback.length === 0);
   const [form, setForm] = useState({
     name: '',
     accreditationReference: '',
@@ -725,10 +711,24 @@ function ProvidersModal({
           The providers this platform buys data units from. Purchases are registered against one of
           these rather than a typed-in name, so cost reporting per provider adds up.
         </p>
-        <p className="text-sm text-slate-500">
-          Contracts, units and spend below cover <strong>{periodLabel.toLowerCase()}</strong>.
-          Change the period on the page behind this dialog to widen or narrow it.
-        </p>
+        <div className="flex flex-wrap items-center gap-2 rounded-md bg-slate-50 px-3 py-2">
+          <label className="text-sm text-slate-600" htmlFor="provider-period">
+            Contracts, units and spend cover
+          </label>
+          <select
+            id="provider-period"
+            className={cx(inputClass, 'w-auto')}
+            value={period}
+            onChange={(event) => setPeriod(event.target.value)}
+          >
+            {PERIODS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label.toLowerCase()}
+              </option>
+            ))}
+          </select>
+          {isFetching && <span className="text-xs text-slate-400">updating…</span>}
+        </div>
 
         {providers.length > 0 && (
           <div className="overflow-x-auto">
