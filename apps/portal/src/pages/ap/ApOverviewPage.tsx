@@ -47,7 +47,7 @@ export function ApOverviewPage() {
         </Alert>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <StatTile
           label="Needs review"
           value={data.needsAction}
@@ -66,6 +66,17 @@ export function ApOverviewPage() {
           value={rejected}
           tone={rejected > 0 ? 'danger' : 'neutral'}
           onClick={() => navigate('/ap/inbox?status=REJECTED_COMMERCIAL')}
+        />
+        {/* The two tiles above count verdicts; this counts arguments still
+            running. They overlap on purpose — a bill can be under query for a
+            week without anyone thinking of it as a dispute, and it is the one
+            figure on this page that maps to a desk you can work. */}
+        <StatTile
+          label="Open supplier disputes"
+          value={data.openDisputes}
+          hint="Queried or rejected, awaiting the supplier"
+          tone={data.openDisputes > 0 ? 'danger' : 'ok'}
+          onClick={() => navigate('/ap/disputes')}
         />
       </div>
 
