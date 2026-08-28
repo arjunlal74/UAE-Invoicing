@@ -24,13 +24,28 @@ export function Detail({
   mono,
 }: {
   label: string;
-  value: string;
+  /**
+   * Null renders as a dash rather than the caller omitting the field. On a
+   * filed document an empty identifier is itself the finding — an invoice the
+   * FTA rejected has no IRN, and a row that simply is not there reads as though
+   * nobody looked.
+   */
+  value: string | null | undefined;
   mono?: boolean;
 }) {
+  const empty = value === null || value === undefined || value === '';
   return (
     <div>
       <dt className="text-xs font-medium text-slate-500">{label}</dt>
-      <dd className={cx('mt-0.5', mono && 'break-all font-mono text-xs')}>{value}</dd>
+      <dd
+        className={cx(
+          'mt-0.5',
+          mono && !empty && 'break-all font-mono text-xs',
+          empty && 'text-slate-400',
+        )}
+      >
+        {empty ? '—' : value}
+      </dd>
     </div>
   );
 }

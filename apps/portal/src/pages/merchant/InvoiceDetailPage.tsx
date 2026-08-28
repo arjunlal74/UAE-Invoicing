@@ -50,6 +50,11 @@ export function InvoiceDetailPage() {
   // identical invoices and wrong for the one that made somebody open it: an
   // approver who wants to read a document before releasing it had to decide
   // from a list, or read it here and then go back and find the row again.
+  //
+  // The card sits at the foot of the page deliberately. Releasing an invoice to
+  // the tax authority is the approver attesting to what is on it, and buttons
+  // above the line items invite a decision made from the header alone. Reaching
+  // these means the document has gone past.
   const [approvalNote, setApprovalNote] = useState('');
   const [approvalOutcome, setApprovalOutcome] = useState<{
     kind: 'ok' | 'danger';
@@ -100,6 +105,10 @@ export function InvoiceDetailPage() {
     );
   }
 
+  // "Has this been sent?" rather than "did it succeed?" — a rejected invoice
+  // was submitted, and its empty identifiers are what the reader came for.
+  const submitted = Boolean(data.submittedAt);
+
   const canRetry =
     canFile(user) && (data.status === 'REJECTED_BY_FTA' || data.status === 'VALIDATION_FAILED');
 
@@ -135,56 +144,6 @@ export function InvoiceDetailPage() {
           )}
         </div>
       </div>
-
-      {approvalOutcome && (
-        <Alert kind={approvalOutcome.kind}>
-          {approvalOutcome.text}{' '}
-          <Link to={origin.to} className="font-medium underline">
-            Back to {origin.label.toLowerCase()}
-          </Link>
-        </Alert>
-      )}
-
-      {/* Only the role that can file sees this, and only while the document is
-          actually waiting. After a verdict the card goes and the status badge
-          above carries the answer. */}
-      {data.status === 'PENDING_CFO_APPROVAL' && canFile(user) && (
-        <Card title="Waiting for your approval">
-          <p className="text-sm text-slate-600">
-            You are the only role that can release this invoice to the FTA. Returning it withdraws
-            it and reopens the preparer's staged rows for correction.
-          </p>
-
-          <textarea
-            className={`${inputClass} mt-3 h-20`}
-            placeholder="Note (required when returning to the preparer)"
-            value={approvalNote}
-            onChange={(event) => setApprovalNote(event.target.value)}
-          />
-
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Button
-              variant="primary"
-              disabled={decide.isPending}
-              onClick={() => decide.mutate('approve')}
-            >
-              {decide.isPending ? 'Working…' : 'Approve and file with the FTA'}
-            </Button>
-            <Button
-              variant="danger"
-              disabled={decide.isPending || approvalNote.trim().length === 0}
-              onClick={() => decide.mutate('reject')}
-              title={
-                approvalNote.trim().length === 0
-                  ? 'Give a reason so the preparer knows what to correct'
-                  : undefined
-              }
-            >
-              Return to preparer
-            </Button>
-          </div>
-        </Card>
-      )}
 
       {retry.error && (
         <Alert kind="danger">
@@ -293,10 +252,13 @@ export function InvoiceDetailPage() {
               <Detail label="Rate to AED" value={data.exchangeRate} />
             )}
             <Detail label="Peppol UUID" value={data.peppolUuid} mono />
-            {/* SRS v2.7 §10.6 — the identifier the FTA issued, and the one an
-                auditor or a buyer's AP desk will search on. */}
-            {data.ftaIrn && <Detail label="FTA IRN" value={data.ftaIrn} mono />}
-            {data.mlsStatus && <Detail label="Message status" value={data.mlsStatus} />}
+            {/* SRS v2.7 §10.6 — the three network identifiers, held open on any
+                document that has been sent even when they came back empty. An
+                invoice the FTA rejected has no IRN, and that absence is the
+                point: hiding the field made a rejected filing look like a
+                document nobody had tried to file. */}
+            {submitted && <Detail label="FTA IRN" value={data.ftaIrn} mono />}
+            {submitted && <Detail label="Message status" value={data.mlsStatus} />}
             {data.poReference && <Detail label="PO reference" value={data.poReference} />}
           </dl>
 
@@ -435,6 +397,56 @@ export function InvoiceDetailPage() {
           </table>
         )}
       </Card>
+
+      {approvalOutcome && (
+        <Alert kind={approvalOutcome.kind}>
+          {approvalOutcome.text}{' '}
+          <Link to={origin.to} className="font-medium underline">
+            Back to {origin.label.toLowerCase()}
+          </Link>
+        </Alert>
+      )}
+
+      {/* Only the role that can file sees this, and only while the document is
+          actually waiting. After a verdict the card goes and the status badge
+          above carries the answer. */}
+      {data.status === 'PENDING_CFO_APPROVAL' && canFile(user) && (
+        <Card title="Waiting for your approval">
+          <p className="text-sm text-slate-600">
+            You are the only role that can release this invoice to the FTA. Returning it withdraws
+            it and reopens the preparer's staged rows for correction.
+          </p>
+
+          <textarea
+            className={`${inputClass} mt-3 h-20`}
+            placeholder="Note (required when returning to the preparer)"
+            value={approvalNote}
+            onChange={(event) => setApprovalNote(event.target.value)}
+          />
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button
+              variant="primary"
+              disabled={decide.isPending}
+              onClick={() => decide.mutate('approve')}
+            >
+              {decide.isPending ? 'Working…' : 'Approve and file with the FTA'}
+            </Button>
+            <Button
+              variant="danger"
+              disabled={decide.isPending || approvalNote.trim().length === 0}
+              onClick={() => decide.mutate('reject')}
+              title={
+                approvalNote.trim().length === 0
+                  ? 'Give a reason so the preparer knows what to correct'
+                  : undefined
+              }
+            >
+              Return to preparer
+            </Button>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
