@@ -9,6 +9,7 @@ import {
   ResponseStatusCode,
   ReversalMode,
 } from './enums.js';
+import { ReportingPeriod } from './inventory.js';
 import { StagedInvoiceDto, StagedLineDto, emirate, trn, uuid } from './schemas.js';
 
 /**
@@ -581,13 +582,24 @@ export const USAGE_REASON_LABELS: Record<string, string> = {
 export const ModuleDashboardResponse = z.object({
   direction: InvoiceDirection,
   counts: z.record(z.string(), z.number()),
+  /**
+   * Every figure below is scoped to `period`.
+   *
+   * Worth knowing what that means for the queue counts: `needsAction` is then
+   * "issued in this window and still unreviewed", not "unreviewed". A bill
+   * older than the window is not counted however long it has sat there, so a
+   * short period can read as a clear desk while work is outstanding behind it.
+   * The screens showing these label the window on every tile for that reason,
+   * and the verification desk itself is unwindowed.
+   */
   totalDocuments: z.number(),
   /** AR: awaiting the CFO. AP: awaiting the verification desk. */
   needsAction: z.number(),
   openDisputes: z.number(),
-  /** AR: output VAT filed. AP: input VAT claimable. */
+  /** AR: output VAT filed. AP: input VAT claimable. Scoped to `period`. */
   vatTotalAed: z.string(),
   amountTotalAed: z.string(),
+  period: ReportingPeriod,
   erpSyncStatus: z.record(z.string(), z.number()),
 });
 export type ModuleDashboardResponse = z.infer<typeof ModuleDashboardResponse>;

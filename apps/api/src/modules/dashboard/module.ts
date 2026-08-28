@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { withTenant } from '../../db/client.js';
 import { requireContext, requirePermission } from '../../http/context.js';
 import { notFound } from '../../lib/errors.js';
+import { parsePeriod, toReportingPeriod } from '../metering/period.js';
 
 /**
  * Per-module landing pages (SRS v2.7 §1.2).
@@ -26,12 +27,18 @@ export function registerModuleDashboardRoutes(app: FastifyInstance) {
         (request.query as { direction?: string }).direction ?? 'OUTBOUND_SALES_AR',
       );
       const outbound = direction === 'OUTBOUND_SALES_AR';
+      // Every figure on the page takes the same window. It reads as one report
+      // rather than a mixture, which is what a picker at the top of a page
+      // promises — see the caveat on `needsAction` in the contract.
+      const period = parsePeriod(request.query);
 
       const data = await withTenant(ctx.tenantId, async (tx) => {
         const statusCounts = await tx<{ status: string; count: string }[]>`
           SELECT status::text AS status, count(*)::text AS count
           FROM invoices
           WHERE tenant_id = ${ctx.tenantId} AND direction = ${direction}::invoice_direction
+            AND (${period.from}::date IS NULL OR issue_date >= ${period.from}::date)
+            AND (${period.to}::date IS NULL OR issue_date <= ${period.to}::date)
           GROUP BY status
         `;
 
@@ -60,6 +67,8 @@ export function registerModuleDashboardRoutes(app: FastifyInstance) {
               AS amount_total
           FROM invoices
           WHERE tenant_id = ${ctx.tenantId} AND direction = ${direction}::invoice_direction
+            AND (${period.from}::date IS NULL OR issue_date >= ${period.from}::date)
+            AND (${period.to}::date IS NULL OR issue_date <= ${period.to}::date)
         `;
 
         const erp = await tx<{ status: string; count: string }[]>`
@@ -68,6 +77,8 @@ export function registerModuleDashboardRoutes(app: FastifyInstance) {
           WHERE tenant_id = ${ctx.tenantId}
             AND direction = ${direction}::invoice_direction
             AND erp_reverse_sync_status <> 'NOT_APPLICABLE'
+            AND (${period.from}::date IS NULL OR issue_date >= ${period.from}::date)
+            AND (${period.to}::date IS NULL OR issue_date <= ${period.to}::date)
           GROUP BY erp_reverse_sync_status
         `;
 
@@ -82,6 +93,7 @@ export function registerModuleDashboardRoutes(app: FastifyInstance) {
         openDisputes: Number(data.totals.open_disputes),
         vatTotalAed: data.totals.vat_total,
         amountTotalAed: data.totals.amount_total,
+        period: toReportingPeriod(period),
         erpSyncStatus: Object.fromEntries(data.erp.map((r) => [r.status, Number(r.count)])),
       };
 
