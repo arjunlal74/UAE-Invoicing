@@ -589,13 +589,5 @@ export const ModuleDashboardResponse = z.object({
   vatTotalAed: z.string(),
   amountTotalAed: z.string(),
   erpSyncStatus: z.record(z.string(), z.number()),
-  last30Days: z.array(
-    z.object({
-      date: z.string(),
-      created: z.number(),
-      cleared: z.number(),
-      disputed: z.number(),
-    }),
-  ),
 });
 export type ModuleDashboardResponse = z.infer<typeof ModuleDashboardResponse>;

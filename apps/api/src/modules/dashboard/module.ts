@@ -71,29 +71,7 @@ export function registerModuleDashboardRoutes(app: FastifyInstance) {
           GROUP BY erp_reverse_sync_status
         `;
 
-        const trend = await tx<
-          { date: string; created: string; cleared: string; disputed: string }[]
-        >`
-          SELECT to_char(d.day, 'YYYY-MM-DD') AS date,
-                 count(i.id)::text AS created,
-                 count(i.id) FILTER (
-                   WHERE i.status IN ('ACCEPTED_BY_FTA', 'DELIVERED_TO_BUYER', 'ACKNOWLEDGED',
-                                      'ACCEPTED_BY_BUYER')
-                 )::text AS cleared,
-                 count(i.id) FILTER (WHERE i.is_commercial_dispute)::text AS disputed
-          FROM generate_series(
-                 CURRENT_DATE - interval '29 days', CURRENT_DATE, interval '1 day'
-               ) AS d(day)
-          LEFT JOIN invoices i
-            ON i.tenant_id = ${ctx.tenantId}
-           AND i.direction = ${direction}::invoice_direction
-           AND i.status <> 'DRAFT'
-           AND i.created_at::date = d.day::date
-          GROUP BY d.day
-          ORDER BY d.day
-        `;
-
-        return { statusCounts, totals: totals[0]!, erp, trend };
+        return { statusCounts, totals: totals[0]!, erp };
       });
 
       const response: ModuleDashboardResponse = {
@@ -105,12 +83,6 @@ export function registerModuleDashboardRoutes(app: FastifyInstance) {
         vatTotalAed: data.totals.vat_total,
         amountTotalAed: data.totals.amount_total,
         erpSyncStatus: Object.fromEntries(data.erp.map((r) => [r.status, Number(r.count)])),
-        last30Days: data.trend.map((t) => ({
-          date: t.date,
-          created: Number(t.created),
-          cleared: Number(t.cleared),
-          disputed: Number(t.disputed),
-        })),
       };
 
       return reply.send(response);

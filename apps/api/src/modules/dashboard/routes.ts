@@ -115,22 +115,6 @@ export function registerDashboardRoutes(app: FastifyInstance) {
         [ctx.tenantId],
       );
 
-      const trend = await tx<{ date: string; submitted: string; accepted: string; rejected: string }[]>`
-        SELECT
-          to_char(d.day, 'YYYY-MM-DD') AS date,
-          count(i.id) FILTER (WHERE i.id IS NOT NULL)::text AS submitted,
-          count(i.id) FILTER (WHERE i.status = 'ACCEPTED_BY_FTA')::text AS accepted,
-          count(i.id) FILTER (WHERE i.status = 'REJECTED_BY_FTA')::text AS rejected
-        FROM generate_series(CURRENT_DATE - interval '29 days', CURRENT_DATE, interval '1 day') AS d(day)
-        LEFT JOIN invoices i
-          ON i.tenant_id = ${ctx.tenantId}
-         AND i.direction = 'OUTBOUND_SALES_AR'
-         AND i.status <> 'DRAFT'
-         AND i.created_at::date = d.day::date
-        GROUP BY d.day
-        ORDER BY d.day
-      `;
-
       return {
         tenants,
         configs,
@@ -139,7 +123,6 @@ export function registerDashboardRoutes(app: FastifyInstance) {
         responseCounts,
         awaiting: awaiting[0]!,
         recentBatches,
-        trend,
       };
     });
 
@@ -165,12 +148,6 @@ export function registerDashboardRoutes(app: FastifyInstance) {
         awaitingResponse: Number(data.awaiting.count),
       },
       recentBatches: data.recentBatches.map(toBatchSummary),
-      last30Days: data.trend.map((t) => ({
-        date: t.date,
-        submitted: Number(t.submitted),
-        accepted: Number(t.accepted),
-        rejected: Number(t.rejected),
-      })),
     });
   });
 }

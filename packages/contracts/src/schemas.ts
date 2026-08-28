@@ -682,9 +682,6 @@ export const DashboardResponse = z.object({
     awaitingResponse: z.number(),
   }),
   recentBatches: z.array(BatchSummary),
-  last30Days: z.array(
-    z.object({ date: z.string(), submitted: z.number(), accepted: z.number(), rejected: z.number() }),
-  ),
 });
 export type DashboardResponse = z.infer<typeof DashboardResponse>;
 
