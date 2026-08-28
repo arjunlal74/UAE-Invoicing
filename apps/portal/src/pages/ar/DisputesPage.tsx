@@ -1,16 +1,18 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { REASON_CODE_LABELS, RESPONSE_CODE_LABELS, type RejectionReasonCode } from '@uae/contracts';
 import { formatAmount } from '@uae/domain';
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Button,
   EmptyState,
+  Modal,
   PageHeader,
   Spinner,
   cx,
   formatDate,
+  inputClass,
 } from '../../components/ui';
 import { api, queryString } from '../../lib/api';
 import { can, useAuthStore } from '../../stores/auth';
@@ -43,13 +45,33 @@ interface DisputeItem {
   daysOpen: number;
   creditNoteId: string | null;
   creditNoteNumber: string | null;
+  conditionMet: boolean;
+  conditionMetAt: string | null;
+  conditionMetNote: string | null;
 }
 
+const STATES = ['open', 'resolved', 'conditions'] as const;
+type DisputeState = (typeof STATES)[number];
+
+const STATE_LABELS: Record<DisputeState, string> = {
+  open: 'Open',
+  resolved: 'Resolved',
+  conditions: 'Conditions',
+};
+
 export function DisputesPage() {
-  const [state, setState] = useState<'open' | 'resolved'>('open');
+  // In the URL rather than in component state: the dashboard tiles link
+  // straight to a list, and a link that lands on the wrong one is how the
+  // conditional-acceptance tile came to point at a page it was filtered out of.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requested = searchParams.get('state') as DisputeState | null;
+  const state: DisputeState = requested && STATES.includes(requested) ? requested : 'open';
+  const setState = (next: DisputeState) => setSearchParams(next === 'open' ? {} : { state: next });
+
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const canCredit = can(user, 'invoice.edit');
+  const [signingOff, setSigningOff] = useState<DisputeItem | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['disputes', state],
@@ -61,22 +83,26 @@ export function DisputesPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Customer disputes"
-        description="Cleared sales invoices a buyer has queried or rejected over the Peppol network."
+        title="Customer responses"
+        description={
+          state === 'conditions'
+            ? 'Invoices a buyer accepted subject to a condition. The invoice is settled; the condition is not.'
+            : 'Cleared sales invoices a buyer has queried or rejected over the Peppol network.'
+        }
         actions={
           <div className="flex rounded-md border border-slate-300 p-0.5">
-            {(['open', 'resolved'] as const).map((option) => (
+            {STATES.map((option) => (
               <button
                 key={option}
                 onClick={() => setState(option)}
                 className={cx(
-                  'rounded px-3 py-1 text-sm capitalize transition-colors',
+                  'rounded px-3 py-1 text-sm transition-colors',
                   state === option
                     ? 'bg-brand-600 text-white'
                     : 'text-slate-600 hover:bg-slate-100',
                 )}
               >
-                {option}
+                {STATE_LABELS[option]}
               </button>
             ))}
           </div>
@@ -98,11 +124,19 @@ export function DisputesPage() {
           </div>
         ) : !data?.items.length ? (
           <EmptyState
-            title={state === 'open' ? 'No open disputes' : 'No resolved disputes'}
+            title={
+              state === 'open'
+                ? 'No open disputes'
+                : state === 'resolved'
+                  ? 'No resolved disputes'
+                  : 'No outstanding conditions'
+            }
             description={
               state === 'open'
                 ? 'Buyers have not queried or rejected any of your cleared invoices.'
-                : 'Disputes closed by a corrective credit note appear here.'
+                : state === 'resolved'
+                  ? 'Disputes closed by a corrective credit note appear here.'
+                  : 'Every conditional acceptance has been signed off.'
             }
           />
         ) : (
@@ -115,7 +149,7 @@ export function DisputesPage() {
                 <th className="px-4 py-2 font-medium">Status</th>
                 <th className="px-4 py-2 font-medium">Reason</th>
                 <th className="px-4 py-2 font-medium">
-                  {state === 'open' ? 'Open for' : 'Resolved'}
+                  {state === 'open' ? 'Open for' : state === 'resolved' ? 'Resolved' : 'Outstanding'}
                 </th>
                 <th className="px-4 py-2" />
               </tr>
@@ -163,7 +197,9 @@ export function DisputesPage() {
                     )}
                   </td>
                   <td className="px-4 py-2">
-                    {state === 'open' ? (
+                    {state === 'resolved' ? (
+                      <span className="text-slate-600">{formatDate(dispute.resolvedAt)}</span>
+                    ) : (
                       <span
                         className={cx(
                           'tabular-nums',
@@ -172,12 +208,16 @@ export function DisputesPage() {
                       >
                         {dispute.daysOpen} day{dispute.daysOpen === 1 ? '' : 's'}
                       </span>
-                    ) : (
-                      <span className="text-slate-600">{formatDate(dispute.resolvedAt)}</span>
                     )}
                   </td>
                   <td className="px-4 py-2 text-right">
-                    {dispute.creditNoteId ? (
+                    {state === 'conditions' ? (
+                      canCredit && (
+                        <Button size="sm" variant="primary" onClick={() => setSigningOff(dispute)}>
+                          Mark condition met
+                        </Button>
+                      )
+                    ) : dispute.creditNoteId ? (
                       <Link
                         to={`/invoices/${dispute.creditNoteId}`}
                         className="text-sm text-brand-700 hover:underline"
@@ -204,6 +244,81 @@ export function DisputesPage() {
           </table>
         )}
       </div>
+
+      {signingOff && (
+        <SignOffModal
+          dispute={signingOff}
+          onClose={() => setSigningOff(null)}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * Signing off a conditional acceptance.
+ *
+ * The note is optional but pressed for: six months on, "why was this condition
+ * closed?" is answerable only from what somebody typed here — the buyer's half
+ * of the exchange is on the invoice, ours is nowhere else.
+ */
+function SignOffModal({ dispute, onClose }: { dispute: DisputeItem; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [note, setNote] = useState('');
+
+  const signOff = useMutation({
+    mutationFn: () =>
+      api(`/api/v1/ar/disputes/${dispute.id}/condition-met`, {
+        method: 'POST',
+        body: { note: note.trim() || undefined },
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['disputes'] });
+      // The dashboard tile counts the same rows; leaving it stale would show a
+      // number the desk has just worked off.
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      onClose();
+    },
+  });
+
+  return (
+    <Modal
+      title={`Condition on ${dispute.invoiceNumber}`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={() => signOff.mutate()} disabled={signOff.isPending}>
+            {signOff.isPending ? 'Saving…' : 'Mark condition met'}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">The buyer asked for</div>
+          <p className="mt-1 rounded bg-slate-50 p-3 text-sm italic text-slate-700">
+            {dispute.comment ? `“${dispute.comment}”` : 'No condition was recorded with the acceptance.'}
+          </p>
+        </div>
+
+        <label className="block">
+          <span className="text-sm font-medium text-slate-700">What was done</span>
+          <textarea
+            className={`${inputClass} mt-1 h-24`}
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="Replacement delivered 12 Aug, GRN 44821."
+          />
+          <span className="mt-1 block text-xs text-slate-500">
+            Optional, but it is the only record of how the condition was settled.
+          </span>
+        </label>
+
+        {signOff.isError && (
+          <Alert kind="danger">That condition could not be signed off. Refresh and try again.</Alert>
+        )}
+      </div>
+    </Modal>
   );
 }

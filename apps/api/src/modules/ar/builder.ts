@@ -475,7 +475,11 @@ export function registerArBuilderRoutes(app: FastifyInstance) {
       const ctx = requireContext(request);
       if (!ctx.tenantId) throw notFound('Tenant');
 
-      const { state } = request.query as { state?: 'open' | 'resolved' };
+      // A conditional acceptance is not a dispute — the buyer said yes — but it
+      // is unfinished business on the same desk, so it lives here as a third
+      // list rather than on a screen of its own.
+      const { state } = request.query as { state?: 'open' | 'resolved' | 'conditions' };
+      const conditions = state === 'conditions';
       const resolved = state === 'resolved';
 
       const rows = await withTenant(
@@ -494,6 +498,9 @@ export function registerArBuilderRoutes(app: FastifyInstance) {
             dispute_resolved_at: Date | null;
             corrective_credit_note_id: string | null;
             corrective_credit_note_number: string | null;
+            condition_met: boolean;
+            condition_met_at: Date | null;
+            condition_met_note: string | null;
             days_open: string;
           }[]
         >`
@@ -501,18 +508,30 @@ export function registerArBuilderRoutes(app: FastifyInstance) {
                  i.latest_response_code::text AS latest_response_code,
                  i.latest_response_reason_code, i.latest_response_comment,
                  i.dispute_opened_at, i.dispute_resolved_at, i.corrective_credit_note_id,
+                 i.condition_met, i.condition_met_at, i.condition_met_note,
                  (SELECT c.invoice_number FROM invoices c WHERE c.id = i.corrective_credit_note_id)
                    AS corrective_credit_note_number,
                  coalesce(
-                   extract(day from now() - coalesce(i.dispute_resolved_at, i.dispute_opened_at, now())),
+                   extract(day from now() - coalesce(
+                     i.dispute_resolved_at,
+                     i.dispute_opened_at,
+                     -- A conditional acceptance has no dispute clock, so its age
+                     -- is counted from the invoice date. It is still the number
+                     -- that matters: a condition outstanding for two months is
+                     -- two months of unpaid invoice.
+                     CASE WHEN ${conditions} THEN i.issue_date::timestamptz END,
+                     now()
+                   )),
                    0
                  )::int::text AS days_open
           FROM invoices i
           WHERE i.tenant_id = ${ctx.tenantId}
             AND i.direction = 'OUTBOUND_SALES_AR'
-            AND i.is_commercial_dispute
-            AND i.dispute_resolved = ${resolved}
-          ORDER BY i.dispute_opened_at NULLS LAST
+            AND CASE WHEN ${conditions}
+                     THEN i.latest_response_code = 'CA' AND NOT i.condition_met
+                     ELSE i.is_commercial_dispute AND i.dispute_resolved = ${resolved}
+                END
+          ORDER BY coalesce(i.dispute_opened_at, i.issue_date::timestamptz) NULLS LAST
           LIMIT 500
         `,
       );
@@ -532,8 +551,68 @@ export function registerArBuilderRoutes(app: FastifyInstance) {
           daysOpen: Number(row.days_open),
           creditNoteId: row.corrective_credit_note_id,
           creditNoteNumber: row.corrective_credit_note_number,
+          conditionMet: row.condition_met,
+          conditionMetAt: row.condition_met_at?.toISOString() ?? null,
+          conditionMetNote: row.condition_met_note,
         })),
       });
+    },
+  );
+
+  // --- §11 signing off a conditional acceptance ----------------------------
+  app.post(
+    '/api/v1/ar/disputes/:id/condition-met',
+    { preHandler: requirePermission('invoice.edit') },
+    async (request, reply) => {
+      const ctx = requireContext(request);
+      if (!ctx.tenantId) throw notFound('Invoice');
+
+      const { id } = request.params as { id: string };
+      const { note } = (request.body ?? {}) as { note?: string };
+
+      const invoiceNumber = await withTenant(ctx.tenantId, async (tx) => {
+        const rows = await tx<
+          { invoice_number: string; latest_response_code: string | null; condition_met: boolean }[]
+        >`
+          SELECT invoice_number, latest_response_code::text AS latest_response_code, condition_met
+          FROM invoices
+          WHERE id = ${id} AND tenant_id = ${ctx.tenantId}
+            AND direction = 'OUTBOUND_SALES_AR'
+          FOR UPDATE
+        `;
+
+        const invoice = rows[0];
+        if (!invoice) throw notFound('Invoice');
+        // Signing off a condition nobody attached would leave a note on the
+        // record explaining something that never happened.
+        if (invoice.latest_response_code !== 'CA') {
+          throw badRequest('That invoice was not conditionally accepted.');
+        }
+        if (invoice.condition_met) {
+          throw conflict('That condition has already been signed off.');
+        }
+
+        await tx`
+          UPDATE invoices SET
+            condition_met = TRUE,
+            condition_met_at = CURRENT_TIMESTAMP,
+            condition_met_by_user_id = ${ctx.userId},
+            condition_met_note = ${note?.trim() || null}
+          WHERE id = ${id}
+        `;
+
+        return invoice.invoice_number;
+      });
+
+      await audit(actorFromContext(ctx), {
+        action: 'CONDITION_MET',
+        resourceType: 'INVOICE',
+        resourceId: id,
+        tenantId: ctx.tenantId,
+        changes: { invoiceNumber, note: note?.trim() || null },
+      });
+
+      return reply.send({ id, conditionMet: true });
     },
   );
 }

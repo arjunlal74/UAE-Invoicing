@@ -634,6 +634,28 @@ export const DashboardResponse = z.object({
     batchesWithErrors: z.number(),
     rejectedInvoices: z.number(),
     stuckTransmissions: z.number(),
+    /**
+     * Buyer verdicts that leave work on the merchant's desk (§11). A query and
+     * a refusal are separate counts because they are separate jobs: one is
+     * answered with an explanation, the other only closes with a credit note.
+     */
+    customerQueries: z.number(),
+    customerRejections: z.number(),
+    /** Accepted subject to a condition somebody still has to read and meet. */
+    conditionalAcceptances: z.number(),
+  }),
+  /**
+   * What the buyer did with the invoice after it cleared (§11).
+   *
+   * A separate axis from `counts`, not more of the same: clearance says the FTA
+   * accepted the filing, this says whether the customer accepted the trade. An
+   * invoice can be cleared and rejected at once, and the merchant has to see
+   * both.
+   */
+  customerResponses: z.object({
+    byCode: z.record(ResponseStatusCode, z.number()),
+    /** With the buyer, no verdict returned yet. */
+    awaitingResponse: z.number(),
   }),
   recentBatches: z.array(BatchSummary),
   last30Days: z.array(

@@ -1,4 +1,4 @@
-import type { InvoiceStatus } from '@uae/contracts';
+import type { InvoiceStatus, ResponseStatusCode } from '@uae/contracts';
 import type { FastifyInstance } from 'fastify';
 import { withTenant } from '../../db/client.js';
 import { requireContext, requirePermission } from '../../http/context.js';
@@ -37,6 +37,9 @@ export function registerDashboardRoutes(app: FastifyInstance) {
         batches_with_errors: string;
         rejected_invoices: string;
         stuck_transmissions: string;
+        customer_queries: string;
+        customer_rejections: string;
+        conditional_acceptances: string;
       }[]>`
         SELECT
           (SELECT count(*) FROM batch_uploads
@@ -53,7 +56,54 @@ export function registerDashboardRoutes(app: FastifyInstance) {
             WHERE tenant_id = ${ctx.tenantId} AND direction = 'OUTBOUND_SALES_AR'
               AND status = 'SUBMITTED_TO_ASP'
               AND submitted_at < now() - interval '1 hour')::text
-            AS stuck_transmissions
+            AS stuck_transmissions,
+          -- Cleared by the FTA and held up by the buyer anyway. Nothing else on
+          -- this page would show these: the clearance tiles still count them as
+          -- accepted, because they are.
+          --
+          -- Split by verdict rather than reported as one dispute figure: the
+          -- answer to a query is an explanation, the answer to a rejection is a
+          -- credit note, and a merchant sizing up the morning needs to know
+          -- which of the two is waiting.
+          (SELECT count(*) FROM invoices
+            WHERE tenant_id = ${ctx.tenantId} AND direction = 'OUTBOUND_SALES_AR'
+              AND latest_response_code = 'UQ'
+              AND is_commercial_dispute AND NOT dispute_resolved)::text
+            AS customer_queries,
+          -- Covers a technical rejection as well as a commercial one: both
+          -- arrive as RE and both open a dispute, they simply differ in whether
+          -- the buyer is arguing about the XML or about the trade.
+          (SELECT count(*) FROM invoices
+            WHERE tenant_id = ${ctx.tenantId} AND direction = 'OUTBOUND_SALES_AR'
+              AND latest_response_code = 'RE'
+              AND is_commercial_dispute AND NOT dispute_resolved)::text
+            AS customer_rejections,
+          -- A conditional acceptance closes the dispute but not the matter: the
+          -- condition rides in the buyer's comment and somebody has to meet it.
+          -- Signing it off on the dispute desk is what retires one.
+          (SELECT count(*) FROM invoices
+            WHERE tenant_id = ${ctx.tenantId} AND direction = 'OUTBOUND_SALES_AR'
+              AND latest_response_code = 'CA' AND NOT condition_met)::text
+            AS conditional_acceptances
+      `;
+
+      // §11. The buyer verdict is a second axis over the same invoices, so this
+      // is grouped by response code rather than by status: AP and CA both land
+      // on ACCEPTED_BY_BUYER, and a merchant chasing a conditional acceptance
+      // needs them apart.
+      const responseCounts = await tx<{ code: ResponseStatusCode; count: string }[]>`
+        SELECT latest_response_code::text AS code, count(*)::text AS count
+        FROM invoices
+        WHERE tenant_id = ${ctx.tenantId} AND direction = 'OUTBOUND_SALES_AR'
+          AND latest_response_code IS NOT NULL
+        GROUP BY latest_response_code
+      `;
+
+      const awaiting = await tx<{ count: string }[]>`
+        SELECT count(*)::text AS count FROM invoices
+        WHERE tenant_id = ${ctx.tenantId} AND direction = 'OUTBOUND_SALES_AR'
+          AND status IN ('ACCEPTED_BY_FTA', 'DELIVERED_TO_BUYER')
+          AND latest_response_code IS NULL
       `;
 
       const recentBatches = await tx.unsafe<BatchRow[]>(
@@ -81,7 +131,16 @@ export function registerDashboardRoutes(app: FastifyInstance) {
         ORDER BY d.day
       `;
 
-      return { tenants, configs, statusCounts, attention: attention[0]!, recentBatches, trend };
+      return {
+        tenants,
+        configs,
+        statusCounts,
+        attention: attention[0]!,
+        responseCounts,
+        awaiting: awaiting[0]!,
+        recentBatches,
+        trend,
+      };
     });
 
     const counts = Object.fromEntries(
@@ -97,6 +156,13 @@ export function registerDashboardRoutes(app: FastifyInstance) {
         batchesWithErrors: Number(data.attention.batches_with_errors),
         rejectedInvoices: Number(data.attention.rejected_invoices),
         stuckTransmissions: Number(data.attention.stuck_transmissions),
+        customerQueries: Number(data.attention.customer_queries),
+        customerRejections: Number(data.attention.customer_rejections),
+        conditionalAcceptances: Number(data.attention.conditional_acceptances),
+      },
+      customerResponses: {
+        byCode: Object.fromEntries(data.responseCounts.map((r) => [r.code, Number(r.count)])),
+        awaitingResponse: Number(data.awaiting.count),
       },
       recentBatches: data.recentBatches.map(toBatchSummary),
       last30Days: data.trend.map((t) => ({
