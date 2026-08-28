@@ -42,7 +42,7 @@ export function ErrorSidebar({
 
   return (
     <aside className="w-80 shrink-0">
-      <div className="sticky top-4 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="sticky top-28 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <header className="border-b border-slate-200 px-4 py-3">
           <h3 className="text-sm font-semibold text-slate-800">
             {errors.length > 0

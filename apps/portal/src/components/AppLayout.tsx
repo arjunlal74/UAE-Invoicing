@@ -38,24 +38,26 @@ const OUTBOUND_PATHS = ['/upload', '/batches', '/invoices', '/approvals', '/ar']
 const MODULES: Module[] = [
   {
     key: 'ar',
-    label: 'Outbound (AR)',
+    label: 'Outbound',
     home: '/',
     match: (path) => path === '/' || OUTBOUND_PATHS.some((p) => path.startsWith(p)),
+    // Ordered the way the work runs: set up who you are billing, raise the
+    // document, then push it out in bulk, and only then look at what came back.
     items: [
       { to: '/', label: 'Overview', end: true },
+      { to: '/ar/customers', label: 'Customers', needs: 'directory.read' },
       { to: '/ar/new-invoice', label: 'New invoice', needs: 'invoice.edit' },
       { to: '/ar/drafts', label: 'Drafts', needs: 'invoice.edit' },
-      { to: '/invoices', label: 'Sales documents' },
-      { to: '/ar/disputes', label: 'Disputes' },
-      { to: '/ar/customers', label: 'Customers', needs: 'directory.read' },
       { to: '/upload', label: 'Excel upload', needs: 'invoice.edit' },
       { to: '/batches', label: 'Batches' },
+      { to: '/invoices', label: 'Sales documents' },
+      { to: '/ar/disputes', label: 'Disputes' },
       { to: '/approvals', label: 'Approvals', needs: 'invoice.submit' },
     ],
   },
   {
     key: 'ap',
-    label: 'Inbound (AP)',
+    label: 'Inbound',
     home: '/ap',
     match: (path) => path.startsWith('/ap'),
     needs: 'ap.read',
@@ -142,7 +144,10 @@ export function AppLayout() {
 
   return (
     <div className="min-h-screen">
-      <header className="border-b border-slate-200 bg-brand-700 text-white">
+      {/* Pinned: the nav and the module menu are how you get anywhere, and the
+          dashboards and grids below are long enough that scrolling back up to
+          reach them was a tax on every navigation. */}
+      <header className="sticky top-0 z-40 border-b border-slate-200 bg-brand-700 text-white shadow-sm">
         <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-2.5">
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-2">

@@ -1,4 +1,5 @@
 import type { BatchStatus, InvoiceStatus, TenantStatus } from '@uae/contracts';
+import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 
 /** Small shared primitives. Kept in one file — none is big enough to earn its own. */
@@ -163,6 +164,49 @@ const STATUS_LABELS: Record<string, string> = {
   DISABLED: 'Disabled',
 };
 
+/** Left intact when an enum value is made readable — 'Asp' helps nobody. */
+const ACRONYMS = new Set(['ASP', 'FTA', 'TRN', 'VAT', 'API', 'PO', 'CFO', 'SFTP', 'UAE']);
+
+/**
+ * Turns a SCREAMING_SNAKE enum into a sentence: `ASP_CONFIG_UPDATED` becomes
+ * `ASP config updated`. For anything a person picks from a menu or reads in a
+ * column — the raw token is an implementation detail.
+ */
+export function humanise(value: string): string {
+  return value
+    .split('_')
+    .map((word, index) => {
+      if (ACRONYMS.has(word)) return word;
+      const lower = word.toLowerCase();
+      return index === 0 ? lower.charAt(0).toUpperCase() + lower.slice(1) : lower;
+    })
+    .join(' ');
+}
+
+/**
+ * The one name a status goes by. A filter menu offering 'accepted by fta' beside
+ * a table of badges reading 'Cleared by FTA' reads as two different things.
+ */
+export function statusLabel(status: string): string {
+  return STATUS_LABELS[status] ?? humanise(status);
+}
+
+/**
+ * Document types as a person names them. The formal UBL labels in
+ * `INVOICE_TYPES` — 'Commercial Tax Invoice (B2B)' — are what you pick from
+ * when composing one; these are what a column has room for.
+ */
+const INVOICE_TYPE_LABELS: Record<string, string> = {
+  TAX_INVOICE: 'Tax invoice',
+  SIMPLIFIED_TAX_INVOICE: 'Simplified tax invoice',
+  CREDIT_NOTE: 'Credit note',
+  DEBIT_NOTE: 'Debit note',
+};
+
+export function invoiceTypeLabel(type: string): string {
+  return INVOICE_TYPE_LABELS[type] ?? humanise(type);
+}
+
 export function StatusBadge({
   status,
   className,
@@ -178,7 +222,7 @@ export function StatusBadge({
         className,
       )}
     >
-      {STATUS_LABELS[status] ?? status}
+      {statusLabel(status)}
     </span>
   );
 }
@@ -329,6 +373,42 @@ export function formatDate(iso: string | null): string {
  * renders a modal from inside a stacking context that would clip it, and the
  * simpler tree is easier to test.
  */
+/**
+ * How many modals are open. A counter rather than a boolean because the
+ * inner one unmounting must not hand scrolling back while an outer one is
+ * still covering the page.
+ */
+let openModals = 0;
+
+/**
+ * Holds the page still while a modal is over it. Without this the wheel falls
+ * through to the list behind the dialog, which scrolls away underneath it.
+ */
+function useScrollLock() {
+  useEffect(() => {
+    const root = document.documentElement;
+    if (openModals === 0) {
+      // Taking the scrollbar away widens the page; pad by exactly what it
+      // occupied so the content — and the pinned header — do not jump sideways.
+      const gutter = window.innerWidth - root.clientWidth;
+      root.dataset.scrollLock = `${root.style.overflow}|${root.style.paddingRight}`;
+      root.style.overflow = 'hidden';
+      if (gutter > 0) root.style.paddingRight = `${gutter}px`;
+    }
+    openModals += 1;
+
+    return () => {
+      openModals -= 1;
+      if (openModals === 0) {
+        const [overflow = '', paddingRight = ''] = (root.dataset.scrollLock ?? '').split('|');
+        root.style.overflow = overflow;
+        root.style.paddingRight = paddingRight;
+        delete root.dataset.scrollLock;
+      }
+    };
+  }, []);
+}
+
 export function Modal({
   title,
   onClose,
@@ -349,6 +429,8 @@ export function Modal({
   dismissOnBackdrop?: boolean;
 }) {
   const widths = { md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl' };
+
+  useScrollLock();
 
   return (
     <div

@@ -7,6 +7,7 @@ import {
   Pagination,
   Spinner,
   formatDateTime,
+  humanise,
   inputClass,
 } from '../../components/ui';
 import { api, queryString } from '../../lib/api';
@@ -77,7 +78,7 @@ export function AdminAuditPage() {
             <option value="">All actions</option>
             {ACTIONS.map((action) => (
               <option key={action} value={action}>
-                {action.replace(/_/g, ' ').toLowerCase()}
+                {humanise(action)}
               </option>
             ))}
           </select>
@@ -137,7 +138,7 @@ export function AdminAuditPage() {
                         <span className="block text-xs text-slate-400">{entry.actorType}</span>
                       </td>
                       <td className="px-4 py-2 font-medium">
-                        {entry.action.replace(/_/g, ' ').toLowerCase()}
+                        {humanise(entry.action)}
                       </td>
                       <td className="px-4 py-2 text-slate-600">
                         {entry.resourceType}

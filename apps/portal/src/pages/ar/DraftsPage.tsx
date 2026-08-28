@@ -7,6 +7,7 @@ import {
   PageHeader,
   Spinner,
   formatDateTime,
+  invoiceTypeLabel,
 } from '../../components/ui';
 import { api } from '../../lib/api';
 
@@ -31,13 +32,6 @@ interface DraftListItem {
   createdByName: string | null;
   updatedAt: string;
 }
-
-const TYPE_LABELS: Record<string, string> = {
-  TAX_INVOICE: 'Tax invoice',
-  SIMPLIFIED_TAX_INVOICE: 'Simplified',
-  CREDIT_NOTE: 'Credit note',
-  DEBIT_NOTE: 'Debit note',
-};
 
 export function DraftsPage() {
   const queryClient = useQueryClient();
@@ -108,7 +102,7 @@ export function DraftsPage() {
                     </Link>
                   </td>
                   <td className="px-4 py-2 text-slate-600">
-                    {TYPE_LABELS[draft.invoiceType] ?? draft.invoiceType}
+                    {invoiceTypeLabel(draft.invoiceType)}
                   </td>
                   <td className="px-4 py-2 text-slate-700">{draft.buyerName || '—'}</td>
                   <td className="px-4 py-2 font-mono text-xs text-slate-600">

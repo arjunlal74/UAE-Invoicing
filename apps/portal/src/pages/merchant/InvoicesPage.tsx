@@ -12,6 +12,8 @@ import {
   StatusBadge,
   formatDate,
   inputClass,
+  invoiceTypeLabel,
+  statusLabel,
 } from '../../components/ui';
 import { api, queryString } from '../../lib/api';
 
@@ -88,7 +90,7 @@ export function InvoicesPage() {
             <option value="">All statuses</option>
             {STATUSES.map((status) => (
               <option key={status} value={status}>
-                {status.replace(/_/g, ' ').toLowerCase()}
+                {statusLabel(status)}
               </option>
             ))}
           </select>
@@ -155,7 +157,7 @@ export function InvoicesPage() {
                         {invoice.invoiceNumber}
                       </Link>
                       <div className="text-xs text-slate-400">
-                        {invoice.invoiceType.replace(/_/g, ' ').toLowerCase()}
+                        {invoiceTypeLabel(invoice.invoiceType)}
                       </div>
                     </td>
                     <td className="px-4 py-2 text-slate-600">{formatDate(invoice.issueDate)}</td>

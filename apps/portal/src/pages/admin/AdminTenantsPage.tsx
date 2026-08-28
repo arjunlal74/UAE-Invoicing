@@ -10,6 +10,7 @@ import {
   Card,
   EmptyState,
   Field,
+  Modal,
   Spinner,
   StatusBadge,
   formatDate,
@@ -44,12 +45,10 @@ export function AdminTenantsPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold text-slate-900">Tenants</h1>
-        <Button variant="primary" onClick={() => setCreating((v) => !v)}>
-          {creating ? 'Cancel' : 'Onboard a tenant'}
+        <Button variant="primary" onClick={() => setCreating(true)}>
+          Onboard a tenant
         </Button>
       </div>
-
-      {creating && <CreateTenantForm onDone={() => setCreating(false)} />}
 
       <Card>
         <div className="flex flex-wrap gap-3">
@@ -147,11 +146,13 @@ export function AdminTenantsPage() {
           </table>
         )}
       </div>
+
+      {creating && <CreateTenantModal onClose={() => setCreating(false)} />}
     </div>
   );
 }
 
-function CreateTenantForm({ onDone }: { onDone: () => void }) {
+function CreateTenantModal({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
@@ -197,7 +198,7 @@ function CreateTenantForm({ onDone }: { onDone: () => void }) {
       setError(null);
       setInviteUrl(result.inviteUrl);
       queryClient.invalidateQueries({ queryKey: ['admin-tenants'] });
-      if (!result.inviteUrl) onDone();
+      if (!result.inviteUrl) onClose();
     },
     onError: (err) =>
       setError(err instanceof ApiError ? err.message : 'That tenant could not be created.'),
@@ -205,7 +206,18 @@ function CreateTenantForm({ onDone }: { onDone: () => void }) {
 
   if (inviteUrl) {
     return (
-      <Card title="Tenant created">
+      // The invitation is shown exactly once, so a stray click on the backdrop
+      // must not be what loses it.
+      <Modal
+        title="Tenant created"
+        onClose={onClose}
+        dismissOnBackdrop={false}
+        footer={
+          <Button variant="primary" onClick={onClose}>
+            Done
+          </Button>
+        }
+      >
         <Alert kind="ok" title="Send this invitation to the tenant administrator">
           <p className="mt-2 break-all rounded bg-white/60 p-2 font-mono text-xs">{inviteUrl}</p>
           <p className="mt-2 text-xs">
@@ -213,22 +225,47 @@ function CreateTenantForm({ onDone }: { onDone: () => void }) {
             the tenant page, then activate them.
           </p>
         </Alert>
-        <div className="mt-4">
-          <Button onClick={onDone}>Done</Button>
-        </div>
-      </Card>
+      </Modal>
     );
   }
 
   return (
-    <Card title="Onboard a tenant">
+    <Modal
+      title="Onboard a tenant"
+      onClose={onClose}
+      width="lg"
+      footer={
+        <div className="flex flex-1 items-center justify-between gap-4">
+          <p className="text-xs text-slate-500">
+            The tenant is created as <strong>Pending</strong>. They can upload and correct invoices
+            immediately, but cannot submit until their provider connection is active.
+          </p>
+          <div className="flex shrink-0 gap-2">
+            <Button onClick={onClose}>Cancel</Button>
+            <Button
+              variant="primary"
+              onClick={() => create.mutate()}
+              disabled={
+                create.isPending ||
+                !form.companyCode ||
+                !form.legalNameEn ||
+                !form.legalNameAr ||
+                (form.tenantType !== 'CHANNEL_PARTNER' && form.trn.length !== 15)
+              }
+            >
+              {create.isPending ? 'Creating…' : 'Create tenant'}
+            </Button>
+          </div>
+        </div>
+      }
+    >
       {error && (
         <div className="mb-4">
           <Alert kind="danger">{error}</Alert>
         </div>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2">
         <Field
           label="Tier"
           hint="Managed sub-tenants are onboarded by their channel partner, not here."
@@ -337,26 +374,6 @@ function CreateTenantForm({ onDone }: { onDone: () => void }) {
           />
         </Field>
       </div>
-
-      <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
-        <p className="text-xs text-slate-500">
-          The tenant is created as <strong>Pending</strong>. They can upload and correct invoices
-          immediately, but cannot submit until their provider connection is active.
-        </p>
-        <Button
-          variant="primary"
-          onClick={() => create.mutate()}
-          disabled={
-            create.isPending ||
-            !form.companyCode ||
-            !form.legalNameEn ||
-            !form.legalNameAr ||
-            (form.tenantType !== 'CHANNEL_PARTNER' && form.trn.length !== 15)
-          }
-        >
-          {create.isPending ? 'Creating…' : 'Create tenant'}
-        </Button>
-      </div>
-    </Card>
+    </Modal>
   );
 }

@@ -17,6 +17,7 @@ import {
   cx,
   formatDate,
   formatDateTime,
+  invoiceTypeLabel,
 } from '../../components/ui';
 import { ApiError, api, apiBlob, downloadBlob } from '../../lib/api';
 import { canEdit, canFile, useAuthStore } from '../../stores/auth';
@@ -179,7 +180,7 @@ export function InvoiceDetailPage() {
       <div className="grid gap-4 lg:grid-cols-3">
         <Card title="Invoice" className="lg:col-span-2">
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
-            <Detail label="Type" value={data.invoiceType.replace(/_/g, ' ').toLowerCase()} />
+            <Detail label="Type" value={invoiceTypeLabel(data.invoiceType)} />
             <Detail label="Issue date" value={formatDate(data.issueDate)} />
             <Detail label="Issue time" value={data.issueTime} />
             <Detail label="Currency" value={data.currencyCode} />
