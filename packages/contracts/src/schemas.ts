@@ -435,6 +435,17 @@ export const InvoiceSearchQuery = z.object({
    */
   direction: InvoiceDirection.default('OUTBOUND_SALES_AR'),
   status: InvoiceStatus.optional(),
+  /**
+   * The three verdicts on a document, filtered apart (§10, §11).
+   *
+   * `status` answers whichever of them was written last, so filtering on it
+   * cannot ask "what did the FTA say?" about an invoice a buyer has since
+   * replied to. These three ask one question each and compose: cleared by the
+   * authority AND rejected by the customer is a real and interesting row.
+   */
+  documentState: z.enum(['draft', 'approval', 'ready', 'failed', 'filed', 'archived']).optional(),
+  ftaState: z.enum(['unsubmitted', 'awaiting', 'cleared', 'rejected']).optional(),
+  buyerState: z.enum(['none', 'AB', 'IP', 'UQ', 'CA', 'AP', 'RE']).optional(),
   type: InvoiceTypeDb.optional(),
   buyerTrn: z.string().trim().optional(),
   batchId: uuid.optional(),
@@ -466,6 +477,16 @@ export const InvoiceListItem = z.object({
   isCommercialDispute: z.boolean(),
   disputeResolved: z.boolean(),
   ftaIrn: z.string().nullable(),
+  /**
+   * The buyer's own verdict, which `status` cannot be read for.
+   *
+   * A buyer response overwrites the status — ACCEPTED_BY_FTA becomes
+   * ACCEPTED_BY_BUYER — so a list showing only the status can say what the
+   * customer thought or what the tax authority ruled, never both. These two
+   * carry the clearance half that the overwrite would otherwise lose.
+   */
+  latestResponseCode: ResponseStatusCode.nullable(),
+  clearedAt: z.string().nullable(),
   createdAt: z.string(),
 });
 export type InvoiceListItem = z.infer<typeof InvoiceListItem>;

@@ -97,6 +97,16 @@ export function registerApRoutes(app: FastifyInstance) {
                    WHERE r.invoice_id = invoices.id
                      AND r.response_direction = 'OUTBOUND_TO_SUPPLIER'
                      AND r.response_code IN ('RE', 'UQ'))))
+
+        -- The three verdicts, asked one at a time: the authority's, this
+        -- desk's, and our ledger's.
+        AND ($11::text IS NULL OR ap_posting_status::text = $11)
+        AND ($12::text IS NULL OR
+             ($12 = 'cleared' AND fta_irn IS NOT NULL) OR
+             ($12 = 'uncleared' AND fta_irn IS NULL))
+        AND ($13::text IS NULL OR
+             ($13 = 'none' AND latest_response_code IS NULL) OR
+             ($13 <> 'none' AND latest_response_code::text = $13))
       `;
 
       const filterValues = [
@@ -110,6 +120,9 @@ export function registerApRoutes(app: FastifyInstance) {
         query.q ?? null,
         query.responseCode ?? null,
         query.disputes ?? null,
+        query.postingState ?? null,
+        query.ftaState ?? null,
+        query.verdict ?? null,
       ];
 
       const result = await withTenant(ctx.tenantId, async (tx) => {
@@ -120,7 +133,7 @@ export function registerApRoutes(app: FastifyInstance) {
            -- Unreviewed first: the desk exists to clear a queue, and a bill
            -- someone has already ruled on is reference material.
            ORDER BY (latest_response_code IS NULL) DESC, issue_date DESC, created_at DESC
-           LIMIT $11 OFFSET $12`,
+           LIMIT $14 OFFSET $15`,
           [...filterValues, query.pageSize, offset],
         );
 

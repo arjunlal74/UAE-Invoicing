@@ -171,6 +171,8 @@ export function toInvoiceListItem(row: DocumentRow): InvoiceListItem {
     isCommercialDispute: row.is_commercial_dispute,
     disputeResolved: row.dispute_resolved,
     ftaIrn: row.fta_irn,
+    latestResponseCode: row.latest_response_code,
+    clearedAt: iso(row.cleared_at),
     createdAt: row.created_at.toISOString(),
   };
 }

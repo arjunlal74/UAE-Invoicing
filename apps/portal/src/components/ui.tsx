@@ -207,6 +207,144 @@ export function invoiceTypeLabel(type: string): string {
   return INVOICE_TYPE_LABELS[type] ?? humanise(type);
 }
 
+/**
+ * The three verdicts on one sales document, told apart.
+ *
+ * `status` is a single column carrying three different questions, and the last
+ * writer wins: a buyer answering AP turns ACCEPTED_BY_FTA into
+ * ACCEPTED_BY_BUYER, so a list showing the status alone can report what the
+ * customer decided or what the tax authority ruled, never both. That is fine on
+ * a detail page with room to explain and wrong in a column an accountant scans
+ * to find the invoices that did not clear.
+ *
+ * So the clearance half is recovered from the facts the overwrite cannot touch
+ * — the IRN and the cleared timestamp — and the buyer half is read from the
+ * response code rather than from the status it displaced.
+ */
+export interface DocumentStates {
+  document: { label: string; tone: string };
+  fta: { label: string; tone: string };
+  buyer: { label: string; tone: string };
+}
+
+const NEUTRAL = 'bg-slate-100 text-slate-600';
+const QUIET = 'text-slate-400';
+
+export function documentStates(item: {
+  status: string;
+  ftaIrn?: string | null;
+  clearedAt?: string | null;
+  latestResponseCode?: string | null;
+  isCommercialDispute?: boolean;
+  disputeResolved?: boolean;
+}): DocumentStates {
+  const cleared = Boolean(item.clearedAt ?? item.ftaIrn);
+
+  // Where the document sits in our own workflow, which is the only one of the
+  // three a person here can act on directly.
+  const document =
+    item.status === 'DRAFT'
+      ? { label: 'Draft', tone: NEUTRAL }
+      : item.status === 'PENDING_CFO_APPROVAL'
+        ? { label: 'Awaiting approval', tone: 'bg-warn-50 text-warn-700' }
+        : item.status === 'VALIDATION_FAILED'
+          ? { label: 'Failed checks', tone: 'bg-danger-50 text-danger-700' }
+          : item.status === 'VALIDATED'
+            ? { label: 'Ready to submit', tone: 'bg-brand-50 text-brand-600' }
+            : item.status === 'ARCHIVED'
+              ? { label: 'Archived', tone: NEUTRAL }
+              : { label: 'Filed', tone: 'bg-slate-100 text-slate-700' };
+
+  const fta =
+    item.status === 'REJECTED_BY_FTA'
+      ? { label: 'Rejected', tone: 'bg-danger-50 text-danger-700' }
+      : cleared
+        ? { label: 'Cleared', tone: 'bg-ok-50 text-ok-700' }
+        : item.status === 'SUBMITTED_TO_ASP'
+          ? { label: 'Awaiting', tone: 'bg-warn-50 text-warn-700' }
+          : { label: 'Not submitted', tone: QUIET };
+
+  // A buyer cannot have an opinion about a document that never reached them.
+  const buyer = !cleared
+    ? { label: '—', tone: QUIET }
+    : item.latestResponseCode === 'RE'
+      ? { label: 'Rejected', tone: 'bg-danger-50 text-danger-700' }
+      : item.latestResponseCode === 'UQ'
+        ? { label: 'Under query', tone: 'bg-warn-50 text-warn-700' }
+        : item.latestResponseCode === 'AP'
+          ? { label: 'Accepted', tone: 'bg-ok-50 text-ok-700' }
+          : item.latestResponseCode === 'CA'
+            ? { label: 'Accepted with conditions', tone: 'bg-ok-50 text-ok-700' }
+            : item.latestResponseCode === 'AB'
+              ? { label: 'Acknowledged', tone: 'bg-brand-50 text-brand-600' }
+              : item.latestResponseCode === 'IP'
+                ? { label: 'In process', tone: 'bg-brand-50 text-brand-600' }
+                : { label: 'No reply', tone: QUIET };
+
+  return { document, fta, buyer };
+}
+
+/**
+ * The same three questions asked of a bill we received.
+ *
+ * The parties are the same three — the tax authority, the trading partner, and
+ * our own ledger — but two of them swap roles. On an outbound document the
+ * partner passes judgement on us; here we pass judgement on them, so the middle
+ * column is our verdict rather than theirs. And the ledger question is real
+ * money: a bill can be cleared and accepted and still be unposted.
+ */
+export function purchaseStates(item: {
+  ftaIrn?: string | null;
+  apPostingStatus?: string | null;
+  latestResponseCode?: string | null;
+}): DocumentStates {
+  const fta = item.ftaIrn
+    ? { label: 'Cleared', tone: 'bg-ok-50 text-ok-700' }
+    : { label: 'No IRN', tone: QUIET };
+
+  const verdict =
+    item.latestResponseCode === 'RE'
+      ? { label: 'Rejected', tone: 'bg-danger-50 text-danger-700' }
+      : item.latestResponseCode === 'UQ'
+        ? { label: 'Under query', tone: 'bg-warn-50 text-warn-700' }
+        : item.latestResponseCode === 'AP'
+          ? { label: 'Accepted', tone: 'bg-ok-50 text-ok-700' }
+          : item.latestResponseCode === 'CA'
+            ? { label: 'Accepted with conditions', tone: 'bg-ok-50 text-ok-700' }
+            : item.latestResponseCode === 'AB'
+              ? { label: 'Acknowledged', tone: 'bg-brand-50 text-brand-600' }
+              : item.latestResponseCode === 'IP'
+                ? { label: 'In process', tone: 'bg-brand-50 text-brand-600' }
+                : { label: 'Not reviewed', tone: 'bg-warn-50 text-warn-700' };
+
+  const posting =
+    item.apPostingStatus === 'POSTED'
+      ? { label: 'Posted', tone: 'bg-ok-50 text-ok-700' }
+      : item.apPostingStatus === 'BLOCKED'
+        ? { label: 'Blocked', tone: 'bg-danger-50 text-danger-700' }
+        : item.apPostingStatus === 'ON_HOLD'
+          ? { label: 'On hold', tone: 'bg-warn-50 text-warn-700' }
+          : { label: 'Not posted', tone: QUIET };
+
+  return { document: posting, fta, buyer: verdict };
+}
+
+/** One of the three states above, as a pill. */
+export function StatePill({ state }: { state: { label: string; tone: string } }) {
+  return state.tone === QUIET ? (
+    <span className="text-xs text-slate-400">{state.label}</span>
+  ) : (
+    <span
+      className={cx(
+        'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap',
+        state.tone,
+      )}
+    >
+      {state.label}
+    </span>
+  );
+}
+
 export function StatusBadge({
   status,
   className,

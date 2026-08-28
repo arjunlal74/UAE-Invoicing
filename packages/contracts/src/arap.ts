@@ -332,6 +332,19 @@ export const DocumentSearchQuery = z.object({
   reasonCode: RejectionReasonCode.optional(),
   /** AP only: 'unmatched' shows bills with no purchase order attached. */
   match: z.enum(['matched', 'unmatched']).optional(),
+  /**
+   * The three verdicts on an inbound bill, filtered apart — the mirror of the
+   * outbound trio (§10, §11).
+   *
+   * On a purchase invoice the three parties are the tax authority who cleared
+   * it, this desk who ruled on it, and our own ledger which has or has not
+   * posted it. `status` answers whichever spoke last, so it cannot be asked
+   * "which cleared bills has nobody reviewed?" — which is the question an AP
+   * manager actually has.
+   */
+  postingState: ApPostingStatus.optional(),
+  ftaState: z.enum(['cleared', 'uncleared']).optional(),
+  verdict: z.enum(['none', 'AB', 'IP', 'UQ', 'CA', 'AP', 'RE']).optional(),
   disputes: z.enum(['open', 'resolved']).optional(),
   supplierId: uuid.optional(),
   customerId: uuid.optional(),

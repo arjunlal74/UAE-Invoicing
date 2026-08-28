@@ -56,6 +56,35 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
       AND ($9::date IS NULL OR issue_date <= $9::date)
       AND ($10::numeric IS NULL OR payable_amount_aed >= $10)
       AND ($11::numeric IS NULL OR payable_amount_aed <= $11)
+
+      -- §10/§11: the three verdicts, asked one at a time. Clearance is read
+      -- from the IRN rather than from the status, because a buyer's reply
+      -- overwrites the status and would otherwise erase the fact that the
+      -- authority ever cleared the document.
+      AND ($12::text IS NULL OR
+           ($12 = 'draft' AND status = 'DRAFT') OR
+           ($12 = 'approval' AND status = 'PENDING_CFO_APPROVAL') OR
+           ($12 = 'ready' AND status = 'VALIDATED') OR
+           ($12 = 'failed' AND status = 'VALIDATION_FAILED') OR
+           ($12 = 'archived' AND status = 'ARCHIVED') OR
+           ($12 = 'filed' AND status NOT IN (
+              'DRAFT', 'PENDING_CFO_APPROVAL', 'VALIDATED', 'VALIDATION_FAILED', 'ARCHIVED')))
+
+      AND ($13::text IS NULL OR
+           ($13 = 'rejected' AND status = 'REJECTED_BY_FTA') OR
+           ($13 = 'cleared' AND status <> 'REJECTED_BY_FTA'
+                              AND (cleared_at IS NOT NULL OR fta_irn IS NOT NULL)) OR
+           ($13 = 'awaiting' AND status = 'SUBMITTED_TO_ASP') OR
+           ($13 = 'unsubmitted' AND status NOT IN ('REJECTED_BY_FTA', 'SUBMITTED_TO_ASP')
+                                 AND cleared_at IS NULL AND fta_irn IS NULL))
+
+      -- 'none' means the document reached a buyer and they have not answered.
+      -- An unfiled invoice is excluded rather than counted as silence: nobody
+      -- has failed to reply to something that was never sent.
+      AND ($14::text IS NULL OR
+           ($14 = 'none' AND latest_response_code IS NULL
+                          AND (cleared_at IS NOT NULL OR fta_irn IS NOT NULL)) OR
+           ($14 <> 'none' AND latest_response_code::text = $14))
     `;
 
     const params = [
@@ -70,6 +99,9 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
       query.dateTo ?? null,
       query.amountMin ?? null,
       query.amountMax ?? null,
+      query.documentState ?? null,
+      query.ftaState ?? null,
+      query.buyerState ?? null,
     ];
 
     const result = await withTenant(ctx.tenantId, async (tx) => {
@@ -78,7 +110,7 @@ export function registerInvoiceRoutes(app: FastifyInstance) {
          FROM invoices
          WHERE ${filters}
          ORDER BY issue_date DESC, created_at DESC
-         LIMIT $12 OFFSET $13`,
+         LIMIT $15 OFFSET $16`,
         [...params, query.pageSize, offset],
       );
 

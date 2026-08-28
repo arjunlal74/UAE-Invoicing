@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { RESPONSE_CODE_LABELS, type DocumentListItem, type InvoiceStatus } from '@uae/contracts';
+import type { DocumentListItem } from '@uae/contracts';
 import { formatAmount } from '@uae/domain';
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -9,11 +9,11 @@ import {
   EmptyState,
   Pagination,
   Spinner,
-  StatusBadge,
+  StatePill,
   formatDate,
   inputClass,
   invoiceTypeLabel,
-  statusLabel,
+  purchaseStates,
 } from '../../components/ui';
 import { api, queryString } from '../../lib/api';
 
@@ -35,15 +35,52 @@ interface PurchaseListResponse {
   pageSize: number;
 }
 
-/** The lifecycle an inbound bill actually travels. */
-const STATUSES: InvoiceStatus[] = [
-  'INGESTED',
-  'ACCEPTED_BY_BUYER',
-  'UNDER_QUERY',
-  'REJECTED_COMMERCIAL',
-  'REJECTED_TECHNICAL',
-  'ARCHIVED',
+/**
+ * Three filters over three questions, matching the three columns.
+ *
+ * A single status list could only ever answer the last of them, which made the
+ * question this desk asks most — "which cleared bills has nobody reviewed?" —
+ * impossible to put to it.
+ */
+const POSTING_STATES: [string, string][] = [
+  ['NOT_POSTED', 'Not posted'],
+  ['POSTED', 'Posted'],
+  ['ON_HOLD', 'On hold'],
+  ['BLOCKED', 'Blocked'],
 ];
+
+const FTA_STATES: [string, string][] = [
+  ['cleared', 'Cleared'],
+  ['uncleared', 'No IRN'],
+];
+
+const VERDICT_STATES: [string, string][] = [
+  ['none', 'Not reviewed'],
+  ['AB', 'Acknowledged'],
+  ['IP', 'In process'],
+  ['UQ', 'Under query'],
+  ['AP', 'Accepted'],
+  ['CA', 'Accepted with conditions'],
+  ['RE', 'Rejected'],
+];
+
+/** The three verdicts, one per column. */
+function StateCells({ document }: { document: DocumentListItem }) {
+  const states = purchaseStates(document);
+  return (
+    <>
+      <td className="px-4 py-2">
+        <StatePill state={states.document} />
+      </td>
+      <td className="px-4 py-2">
+        <StatePill state={states.fta} />
+      </td>
+      <td className="px-4 py-2">
+        <StatePill state={states.buyer} />
+      </td>
+    </>
+  );
+}
 
 export function PurchaseDocumentsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -51,7 +88,9 @@ export function PurchaseDocumentsPage() {
 
   const filters = {
     q: searchParams.get('q') ?? '',
-    status: searchParams.get('status') ?? '',
+    postingState: searchParams.get('postingState') ?? '',
+    ftaState: searchParams.get('ftaState') ?? '',
+    verdict: searchParams.get('verdict') ?? '',
     match: searchParams.get('match') ?? '',
     dateFrom: searchParams.get('dateFrom') ?? '',
     dateTo: searchParams.get('dateTo') ?? '',
@@ -68,7 +107,7 @@ export function PurchaseDocumentsPage() {
   const activeFilters = Object.values(filters).filter(Boolean).length;
   const pageSize = 25;
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['ap-documents', filters, page],
     queryFn: () =>
       api<PurchaseListResponse>(
@@ -80,64 +119,114 @@ export function PurchaseDocumentsPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold text-slate-900">Purchase documents</h1>
-        {activeFilters > 0 && (
-          <Button size="sm" onClick={() => setSearchParams({}, { replace: true })}>
-            Clear {activeFilters} filter{activeFilters === 1 ? '' : 's'}
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            disabled={activeFilters === 0}
+            onClick={() => {
+              setSearchParams({}, { replace: true });
+              setPage(1);
+            }}
+          >
+            {activeFilters > 0
+              ? `Clear ${activeFilters} filter${activeFilters === 1 ? '' : 's'}`
+              : 'Clear filters'}
           </Button>
-        )}
+          {/* A supplier bill can arrive seconds after the page did, so the list
+              needs a way to ask again without losing the filters. */}
+          <Button size="sm" disabled={isFetching} onClick={() => void refetch()}>
+            {isFetching ? 'Refreshing…' : 'Refresh'}
+          </Button>
+        </div>
       </div>
 
-      <Card>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <input
-            className={inputClass}
-            placeholder="Invoice number, supplier, TRN, PO…"
-            defaultValue={filters.q}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') setFilter('q', (e.target as HTMLInputElement).value);
-            }}
-            onBlur={(e) => setFilter('q', e.target.value)}
-          />
+      {/* Pinned under the navigation, as on the sales list: the filters are
+          how you narrow a long list, and scrolling back up to change one was a
+          tax on every second look. */}
+      <div className="sticky top-28 z-30 -mx-4 bg-slate-50 px-4 pb-3 pt-1">
+        <Card>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+            <input
+              className={inputClass}
+              placeholder="Invoice number, supplier, TRN, PO…"
+              defaultValue={filters.q}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') setFilter('q', (e.target as HTMLInputElement).value);
+              }}
+              onBlur={(e) => setFilter('q', e.target.value)}
+            />
 
-          <select
-            className={inputClass}
-            value={filters.status}
-            onChange={(e) => setFilter('status', e.target.value)}
-          >
-            <option value="">All statuses</option>
-            {STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {statusLabel(status)}
-              </option>
-            ))}
-          </select>
+            <select
+              className={inputClass}
+              value={filters.postingState}
+              onChange={(e) => setFilter('postingState', e.target.value)}
+              title="Whether the bill has reached your ledger"
+            >
+              <option value="">Any posting state</option>
+              {POSTING_STATES.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
 
-          <select
-            className={inputClass}
-            value={filters.match}
-            onChange={(e) => setFilter('match', e.target.value)}
-          >
-            <option value="">Matched and unmatched</option>
-            <option value="matched">Has a purchase order</option>
-            <option value="unmatched">No purchase order</option>
-          </select>
+            <select
+              className={inputClass}
+              value={filters.ftaState}
+              onChange={(e) => setFilter('ftaState', e.target.value)}
+              title="Whether the supplier filed it with the Federal Tax Authority"
+            >
+              <option value="">Any FTA state</option>
+              {FTA_STATES.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
 
-          <input
-            className={inputClass}
-            type="date"
-            value={filters.dateFrom}
-            onChange={(e) => setFilter('dateFrom', e.target.value)}
-            title="Issued on or after"
-          />
-          <input
-            className={inputClass}
-            type="date"
-            value={filters.dateTo}
-            onChange={(e) => setFilter('dateTo', e.target.value)}
-            title="Issued on or before"
-          />
-        </div>
-      </Card>
+            <select
+              className={inputClass}
+              value={filters.verdict}
+              onChange={(e) => setFilter('verdict', e.target.value)}
+              title="What this desk ruled"
+            >
+              <option value="">Any verdict</option>
+              {VERDICT_STATES.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+
+            <select
+              className={inputClass}
+              value={filters.match}
+              onChange={(e) => setFilter('match', e.target.value)}
+            >
+              <option value="">Matched and unmatched</option>
+              <option value="matched">Has a purchase order</option>
+              <option value="unmatched">No purchase order</option>
+            </select>
+
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                className={inputClass}
+                type="date"
+                value={filters.dateFrom}
+                onChange={(e) => setFilter('dateFrom', e.target.value)}
+                title="Issued on or after"
+              />
+              <input
+                className={inputClass}
+                type="date"
+                value={filters.dateTo}
+                onChange={(e) => setFilter('dateTo', e.target.value)}
+                title="Issued on or before"
+              />
+            </div>
+          </div>
+        </Card>
+      </div>
 
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         {isLoading ? (
@@ -155,21 +244,34 @@ export function PurchaseDocumentsPage() {
           />
         ) : (
           <>
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
               <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
                 <tr>
-                  <th className="px-4 py-2 font-medium">Document</th>
-                  <th className="px-4 py-2 font-medium">Supplier</th>
                   <th className="px-4 py-2 font-medium">Issued</th>
-                  <th className="px-4 py-2 text-right font-medium">Amount (AED)</th>
-                  <th className="px-4 py-2 font-medium">Status</th>
-                  <th className="px-4 py-2 font-medium">Our verdict</th>
+                  <th className="px-4 py-2 font-medium">Supplier</th>
+                  <th className="px-4 py-2 font-medium">Invoice</th>
+                  <th className="px-4 py-2 font-medium">Supplier TRN</th>
+                  <th className="px-4 py-2 text-right font-medium">Amount</th>
+                  <th className="px-4 py-2 text-right font-medium">AED</th>
                   <th className="px-4 py-2 font-medium">PO</th>
+                  <th className="px-4 py-2 font-medium">Posting</th>
+                  <th className="px-4 py-2 font-medium">FTA</th>
+                  <th className="px-4 py-2 font-medium">Verdict</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {data.items.map((document) => (
                   <tr key={document.id} className="hover:bg-slate-50">
+                    <td className="whitespace-nowrap px-4 py-2 text-slate-600">
+                      {formatDate(document.issueDate)}
+                    </td>
+                    <td className="max-w-xs truncate px-4 py-2 text-slate-700">
+                      {document.counterpartyName}
+                      {document.supplierIsProvisional && (
+                        <span className="ml-1 text-xs text-warn-700">· provisional</span>
+                      )}
+                    </td>
                     <td className="px-4 py-2">
                       <Link
                         to={`/ap/documents/${document.id}`}
@@ -181,34 +283,25 @@ export function PurchaseDocumentsPage() {
                         {invoiceTypeLabel(document.invoiceType)}
                       </div>
                     </td>
-                    <td className="px-4 py-2 text-slate-700">
-                      {document.counterpartyName}
-                      {document.supplierIsProvisional && (
-                        <span className="ml-1 text-xs text-warn-700">· provisional</span>
-                      )}
-                      <div className="font-mono text-xs text-slate-400">
-                        {document.counterpartyTrn ?? '—'}
-                      </div>
+                    <td className="px-4 py-2 font-mono text-xs text-slate-500">
+                      {document.counterpartyTrn ?? '—'}
                     </td>
-                    <td className="px-4 py-2 text-slate-600">{formatDate(document.issueDate)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums text-slate-800">
+                    <td className="px-4 py-2 text-right tabular-nums">
+                      {formatAmount(document.payableAmount)}{' '}
+                      <span className="text-xs text-slate-400">{document.currencyCode}</span>
+                    </td>
+                    <td className="px-4 py-2 text-right tabular-nums text-slate-600">
                       {formatAmount(document.payableAmountAed)}
-                    </td>
-                    <td className="px-4 py-2">
-                      <StatusBadge status={document.status} />
-                    </td>
-                    <td className="px-4 py-2 text-slate-600">
-                      {document.latestResponseCode
-                        ? RESPONSE_CODE_LABELS[document.latestResponseCode]
-                        : 'Not reviewed'}
                     </td>
                     <td className="px-4 py-2 font-mono text-xs text-slate-500">
                       {document.poReference || '—'}
                     </td>
+                    <StateCells document={document} />
                   </tr>
                 ))}
               </tbody>
-            </table>
+              </table>
+            </div>
             <div className="border-t border-slate-200 px-4 py-2">
               <Pagination page={page} pageSize={data.pageSize} total={data.total} onPage={setPage} />
             </div>
