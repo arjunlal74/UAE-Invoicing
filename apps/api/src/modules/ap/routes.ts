@@ -60,43 +60,73 @@ export function registerApRoutes(app: FastifyInstance) {
       const query = DocumentSearchQuery.parse(request.query);
       const offset = (query.page - 1) * query.pageSize;
 
+      // Written once and used by both the page query and its count, so a
+      // filtered list cannot paginate against an unfiltered total.
+      const filters = `
+        tenant_id = $1
+        AND direction = 'INBOUND_PURCHASE_AP'
+        AND ($2::text IS NULL OR status::text = $2)
+        AND ($3::uuid IS NULL OR supplier_id = $3::uuid)
+        AND ($4::text IS NULL OR (
+              $4 = 'matched' AND po_reference IS NOT NULL AND po_reference <> ''
+            ) OR (
+              $4 = 'unmatched' AND (po_reference IS NULL OR po_reference = '')
+            ))
+        AND ($5::text IS NULL OR latest_response_reason_code::text = $5)
+        AND ($6::date IS NULL OR issue_date >= $6::date)
+        AND ($7::date IS NULL OR issue_date <= $7::date)
+        AND ($8::text IS NULL OR
+              invoice_number ILIKE '%' || $8 || '%' OR
+              seller_name ILIKE '%' || $8 || '%' OR
+              seller_trn LIKE $8 || '%' OR
+              coalesce(po_reference, '') ILIKE '%' || $8 || '%')
+        AND ($9::text IS NULL OR latest_response_code::text = $9)
+        -- §12.3 disputes, the inbound mirror of the AR dispute desk: bills this
+        -- tenant has queried or rejected and sent back to the supplier.
+        --
+        -- Resolved is read from the response log rather than from the invoice,
+        -- because accepting a bill clears is_commercial_dispute and nulls
+        -- dispute_opened_at — and sets dispute_resolved on every acceptance,
+        -- including bills nobody ever disputed. The row alone therefore cannot
+        -- tell a settled argument from an uneventful approval. A verdict of
+        -- UQ or RE in the log can.
+        AND ($10::text IS NULL
+             OR ($10 = 'open' AND is_commercial_dispute AND NOT dispute_resolved)
+             OR ($10 = 'resolved' AND dispute_resolved AND EXISTS (
+                   SELECT 1 FROM invoice_responses r
+                   WHERE r.invoice_id = invoices.id
+                     AND r.response_direction = 'OUTBOUND_TO_SUPPLIER'
+                     AND r.response_code IN ('RE', 'UQ'))))
+      `;
+
+      const filterValues = [
+        ctx.tenantId,
+        query.status ?? null,
+        query.supplierId ?? null,
+        query.match ?? null,
+        query.reasonCode ?? null,
+        query.dateFrom ?? null,
+        query.dateTo ?? null,
+        query.q ?? null,
+        query.responseCode ?? null,
+        query.disputes ?? null,
+      ];
+
       const result = await withTenant(ctx.tenantId, async (tx) => {
         const rows = await tx.unsafe<DocumentRow[]>(
           `SELECT ${DOCUMENT_SELECT}
            FROM invoices
-           WHERE tenant_id = $1
-             AND direction = 'INBOUND_PURCHASE_AP'
-             AND ($2::text IS NULL OR status::text = $2)
-             AND ($3::uuid IS NULL OR supplier_id = $3::uuid)
-             AND ($4::text IS NULL OR (
-                   $4 = 'matched' AND po_reference IS NOT NULL AND po_reference <> ''
-                 ) OR (
-                   $4 = 'unmatched' AND (po_reference IS NULL OR po_reference = '')
-                 ))
-             AND ($5::text IS NULL OR latest_response_reason_code::text = $5)
-             AND ($6::date IS NULL OR issue_date >= $6::date)
-             AND ($7::date IS NULL OR issue_date <= $7::date)
-             AND ($8::text IS NULL OR
-                   invoice_number ILIKE '%' || $8 || '%' OR
-                   seller_name ILIKE '%' || $8 || '%' OR
-                   seller_trn LIKE $8 || '%' OR
-                   coalesce(po_reference, '') ILIKE '%' || $8 || '%')
+           WHERE ${filters}
            -- Unreviewed first: the desk exists to clear a queue, and a bill
            -- someone has already ruled on is reference material.
            ORDER BY (latest_response_code IS NULL) DESC, issue_date DESC, created_at DESC
-           LIMIT $9 OFFSET $10`,
-          [
-            ctx.tenantId,
-            query.status ?? null,
-            query.supplierId ?? null,
-            query.match ?? null,
-            query.reasonCode ?? null,
-            query.dateFrom ?? null,
-            query.dateTo ?? null,
-            query.q ?? null,
-            query.pageSize,
-            offset,
-          ],
+           LIMIT $11 OFFSET $12`,
+          [...filterValues, query.pageSize, offset],
+        );
+
+        const matching = await tx.unsafe<{ count: string }[]>(
+          `SELECT count(*)::text AS count FROM invoices WHERE ${filters}`,
+          filterValues,
         );
 
         const summary = await tx<
@@ -118,7 +148,7 @@ export function registerApRoutes(app: FastifyInstance) {
           WHERE tenant_id = ${ctx.tenantId} AND direction = 'INBOUND_PURCHASE_AP'
         `;
 
-        return { rows, summary: summary[0]! };
+        return { rows, summary: summary[0]!, matching: Number(matching[0]!.count) };
       });
 
       return reply.send({
@@ -133,7 +163,9 @@ export function registerApRoutes(app: FastifyInstance) {
           disputed: Number(result.summary.disputed),
           unmatched: Number(result.summary.unmatched),
         },
-        total: Number(result.summary.total),
+        // What the current filter matches, which is what the pager needs. The
+        // inbox-wide figure is `summary.total` above.
+        total: result.matching,
         page: query.page,
         pageSize: query.pageSize,
       });

@@ -10,7 +10,7 @@ import {
 } from '@uae/contracts';
 import { formatAmount } from '@uae/domain';
 import { useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -113,6 +113,66 @@ export function ApInboxPage() {
   const target = invoiceId ? [invoiceId] : selected;
   const canDecide = can(user, 'ap.verify');
 
+  const bannerAlert = banner && (
+    <Alert kind={banner.kind === 'ok' ? 'ok' : 'danger'}>{banner.text}</Alert>
+  );
+
+  const decisionDialog = decision && (
+    <DecisionDialog
+      code={decision}
+      invoiceIds={target}
+      onClose={() => setDecision(null)}
+      onDone={(result) => {
+        setDecision(null);
+        setBanner({
+          kind: result.affected > 0 ? 'ok' : 'danger',
+          text:
+            result.affected > 0
+              ? `${result.affected} invoice${result.affected === 1 ? '' : 's'} updated and the supplier notified.`
+              : (result.reasons[0]?.reason ?? 'Nothing was changed.'),
+        });
+        refresh();
+      }}
+    />
+  );
+
+  // A selected invoice takes the whole page rather than half of it. Ruling on a
+  // bill means reading its line items against a purchase order, and a column
+  // beside the queue was never wide enough for that; the queue is one click
+  // away and nothing is gained by keeping it in view while you read.
+  if (invoiceId) {
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Link to="/ap/inbox" className="text-sm text-brand-600 underline">
+            ← Back to the queue
+          </Link>
+          <Link to={`/ap/documents/${invoiceId}`} className="text-sm text-brand-600 underline">
+            Open as a document
+          </Link>
+        </div>
+
+        {bannerAlert}
+
+        {detailLoading || !detail ? (
+          <Card>
+            <Spinner label="Loading invoice…" />
+          </Card>
+        ) : (
+          <VerificationPane
+            invoice={detail}
+            canDecide={canDecide}
+            canAccept={can(user, 'ap.post')}
+            onDecision={setDecision}
+            onChanged={refresh}
+          />
+        )}
+
+        {decisionDialog}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <PageHeader
@@ -132,7 +192,7 @@ export function ApInboxPage() {
         }
       />
 
-      {banner && <Alert kind={banner.kind === 'ok' ? 'ok' : 'danger'}>{banner.text}</Alert>}
+      {bannerAlert}
 
       {data && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -195,172 +255,128 @@ export function ApInboxPage() {
         </div>
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-[1.1fr,1fr]">
-        {/* --- The queue ---------------------------------------------------- */}
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          {isLoading ? (
-            <div className="p-6">
-              <Spinner label="Loading inbox…" />
-            </div>
-          ) : !data?.items.length ? (
-            <EmptyState
-              title="Nothing in the inbox"
-              description="Supplier invoices appear here as soon as they are delivered through your provider."
-            />
-          ) : (
-            <>
-              {selected.length > 0 && canDecide && (
-                <div className="flex items-center justify-between border-b border-slate-200 bg-brand-50 px-4 py-2 text-sm">
-                  <span className="text-brand-800">
-                    {selected.length} selected
-                  </span>
-                  <div className="flex gap-2">
-                    {can(user, 'ap.post') && (
-                      <Button size="sm" variant="primary" onClick={() => setDecision('AP')}>
-                        Accept
-                      </Button>
-                    )}
-                    <Button size="sm" onClick={() => setDecision('UQ')}>
-                      Query
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        {isLoading ? (
+          <div className="p-6">
+            <Spinner label="Loading inbox…" />
+          </div>
+        ) : !data?.items.length ? (
+          <EmptyState
+            title="Nothing in the inbox"
+            description="Supplier invoices appear here as soon as they are delivered through your provider."
+          />
+        ) : (
+          <>
+            {selected.length > 0 && canDecide && (
+              <div className="flex items-center justify-between border-b border-slate-200 bg-brand-50 px-4 py-2 text-sm">
+                <span className="text-brand-800">
+                  {selected.length} selected
+                </span>
+                <div className="flex gap-2">
+                  {can(user, 'ap.post') && (
+                    <Button size="sm" variant="primary" onClick={() => setDecision('AP')}>
+                      Accept
                     </Button>
-                    <Button size="sm" variant="danger" onClick={() => setDecision('RE')}>
-                      Reject
-                    </Button>
-                  </div>
+                  )}
+                  <Button size="sm" onClick={() => setDecision('UQ')}>
+                    Query
+                  </Button>
+                  <Button size="sm" variant="danger" onClick={() => setDecision('RE')}>
+                    Reject
+                  </Button>
                 </div>
-              )}
+              </div>
+            )}
 
-              <table className="w-full text-sm">
-                <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                  <tr>
-                    {canDecide && <th className="w-8 px-3 py-2" />}
-                    <th className="px-3 py-2 font-medium">Invoice</th>
-                    <th className="px-3 py-2 font-medium">Supplier</th>
-                    <th className="px-3 py-2 text-right font-medium">Total</th>
-                    <th className="px-3 py-2 font-medium">PO</th>
-                    <th className="px-3 py-2 font-medium">Status</th>
+            <table className="w-full text-sm">
+              <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  {canDecide && <th className="w-8 px-3 py-2" />}
+                  <th className="px-3 py-2 font-medium">Invoice</th>
+                  <th className="px-3 py-2 font-medium">Supplier</th>
+                  <th className="px-3 py-2 text-right font-medium">Total</th>
+                  <th className="px-3 py-2 font-medium">PO</th>
+                  <th className="px-3 py-2 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {data.items.map((item) => (
+                  <tr
+                    key={item.id}
+                    onClick={() => navigate(`/ap/inbox/${item.id}`)}
+                    className={cx(
+                      'cursor-pointer hover:bg-slate-50',
+                      item.id === invoiceId && 'bg-brand-50/60',
+                    )}
+                  >
+                    {canDecide && (
+                      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selected.includes(item.id)}
+                          disabled={item.latestResponseCode !== null}
+                          onChange={(e) =>
+                            setSelected((current) =>
+                              e.target.checked
+                                ? [...current, item.id]
+                                : current.filter((id) => id !== item.id),
+                            )
+                          }
+                        />
+                      </td>
+                    )}
+                    <td className="px-3 py-2">
+                      <div className="font-medium text-slate-800">{item.invoiceNumber}</div>
+                      <div className="text-xs text-slate-500">{formatDate(item.issueDate)}</div>
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1.5 text-slate-700">
+                        {item.counterpartyName}
+                        {item.supplierIsProvisional && (
+                          <span
+                            title="Supplier created automatically and not yet vetted"
+                            className="rounded-full bg-warn-100 px-1.5 text-xs text-warn-700"
+                          >
+                            new
+                          </span>
+                        )}
+                      </div>
+                      <div className="font-mono text-xs text-slate-400">
+                        {item.counterpartyTrn ?? '—'}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-800">
+                      {item.currencyCode} {formatAmount(item.payableAmount)}
+                    </td>
+                    <td className="px-3 py-2">
+                      {item.poReference ? (
+                        <span className="font-mono text-xs text-slate-600">
+                          {item.poReference}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-warn-700">⚠ none</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      {item.latestResponseCode ? (
+                        <StatusBadge status={item.status} />
+                      ) : (
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                          Unreviewed
+                        </span>
+                      )}
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {data.items.map((item) => (
-                    <tr
-                      key={item.id}
-                      onClick={() => navigate(`/ap/inbox/${item.id}`)}
-                      className={cx(
-                        'cursor-pointer hover:bg-slate-50',
-                        item.id === invoiceId && 'bg-brand-50/60',
-                      )}
-                    >
-                      {canDecide && (
-                        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={selected.includes(item.id)}
-                            disabled={item.latestResponseCode !== null}
-                            onChange={(e) =>
-                              setSelected((current) =>
-                                e.target.checked
-                                  ? [...current, item.id]
-                                  : current.filter((id) => id !== item.id),
-                              )
-                            }
-                          />
-                        </td>
-                      )}
-                      <td className="px-3 py-2">
-                        <div className="font-medium text-slate-800">{item.invoiceNumber}</div>
-                        <div className="text-xs text-slate-500">{formatDate(item.issueDate)}</div>
-                      </td>
-                      <td className="px-3 py-2">
-                        <div className="flex items-center gap-1.5 text-slate-700">
-                          {item.counterpartyName}
-                          {item.supplierIsProvisional && (
-                            <span
-                              title="Supplier created automatically and not yet vetted"
-                              className="rounded-full bg-warn-100 px-1.5 text-xs text-warn-700"
-                            >
-                              new
-                            </span>
-                          )}
-                        </div>
-                        <div className="font-mono text-xs text-slate-400">
-                          {item.counterpartyTrn ?? '—'}
-                        </div>
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums text-slate-800">
-                        {item.currencyCode} {formatAmount(item.payableAmount)}
-                      </td>
-                      <td className="px-3 py-2">
-                        {item.poReference ? (
-                          <span className="font-mono text-xs text-slate-600">
-                            {item.poReference}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-warn-700">⚠ none</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        {item.latestResponseCode ? (
-                          <StatusBadge status={item.status} />
-                        ) : (
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
-                            Unreviewed
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                ))}
+              </tbody>
+            </table>
 
-              <Pagination page={page} pageSize={pageSize} total={data.total} onPage={setPage} />
-            </>
-          )}
-        </div>
-
-        {/* --- The verification pane --------------------------------------- */}
-        <div>
-          {!invoiceId ? (
-            <Card>
-              <EmptyState
-                title="Select an invoice"
-                description="Choose a supplier invoice from the queue to review its line items and rule on it."
-              />
-            </Card>
-          ) : detailLoading || !detail ? (
-            <Card>
-              <Spinner label="Loading invoice…" />
-            </Card>
-          ) : (
-            <VerificationPane
-              invoice={detail}
-              canDecide={canDecide}
-              canAccept={can(user, 'ap.post')}
-              onDecision={setDecision}
-              onChanged={refresh}
-            />
-          )}
-        </div>
+            <Pagination page={page} pageSize={pageSize} total={data.total} onPage={setPage} />
+          </>
+        )}
       </div>
 
-      {decision && (
-        <DecisionDialog
-          code={decision}
-          invoiceIds={target}
-          onClose={() => setDecision(null)}
-          onDone={(result) => {
-            setDecision(null);
-            setBanner({
-              kind: result.affected > 0 ? 'ok' : 'danger',
-              text:
-                result.affected > 0
-                  ? `${result.affected} invoice${result.affected === 1 ? '' : 's'} updated and the supplier notified.`
-                  : (result.reasons[0]?.reason ?? 'Nothing was changed.'),
-            });
-            refresh();
-          }}
-        />
-      )}
+      {decisionDialog}
 
       {receiving && (
         <ReceiveDialog

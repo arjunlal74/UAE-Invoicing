@@ -317,6 +317,7 @@ export const DocumentListItem = z.object({
   isCommercialDispute: z.boolean(),
   disputeResolved: z.boolean(),
   disputeOpenedAt: z.string().nullable(),
+  disputeResolvedAt: z.string().nullable(),
   correctiveCreditNoteId: uuid.nullable(),
   supplierIsProvisional: z.boolean(),
   createdAt: z.string(),

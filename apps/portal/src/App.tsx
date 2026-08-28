@@ -17,8 +17,11 @@ import { AdminTenantDetailPage } from './pages/admin/AdminTenantDetailPage';
 import { AdminTenantsPage } from './pages/admin/AdminTenantsPage';
 import { AdminTransmissionsPage } from './pages/admin/AdminTransmissionsPage';
 import { PartnerSubTenantsPage } from './pages/partner/PartnerSubTenantsPage';
+import { ApDisputesPage } from './pages/ap/ApDisputesPage';
 import { ApOverviewPage } from './pages/ap/ApOverviewPage';
 import { ApInboxPage } from './pages/ap/InboxPage';
+import { PurchaseDocumentsPage } from './pages/ap/PurchaseDocumentsPage';
+import { PurchaseInvoiceDetailPage } from './pages/ap/PurchaseInvoiceDetailPage';
 import { SuppliersPage } from './pages/ap/SuppliersPage';
 import { CreditNoteBuilderPage } from './pages/ar/CreditNoteBuilderPage';
 import { CustomersPage } from './pages/ar/CustomersPage';
@@ -205,6 +208,30 @@ export function App() {
             element={
               <RequirePermission permission="directory.read">
                 <SuppliersPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/ap/documents"
+            element={
+              <RequirePermission permission="ap.read">
+                <PurchaseDocumentsPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/ap/documents/:invoiceId"
+            element={
+              <RequirePermission permission="ap.read">
+                <PurchaseInvoiceDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/ap/disputes"
+            element={
+              <RequirePermission permission="ap.read">
+                <ApDisputesPage />
               </RequirePermission>
             }
           />

@@ -61,10 +61,14 @@ const MODULES: Module[] = [
     home: '/ap',
     match: (path) => path.startsWith('/ap'),
     needs: 'ap.read',
+    // Same shape as outbound, mirrored: know who is billing you, see what they
+    // sent, rule on it, then chase what you sent back.
     items: [
       { to: '/ap', label: 'Overview', end: true },
-      { to: '/ap/inbox', label: 'Verification desk' },
       { to: '/ap/suppliers', label: 'Suppliers', needs: 'directory.read' },
+      { to: '/ap/documents', label: 'Purchase documents' },
+      { to: '/ap/inbox', label: 'Verification desk' },
+      { to: '/ap/disputes', label: 'Disputes' },
     ],
   },
   {

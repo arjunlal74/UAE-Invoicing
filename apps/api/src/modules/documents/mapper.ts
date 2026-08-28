@@ -144,6 +144,7 @@ export function toDocumentListItem(row: DocumentRow): DocumentListItem {
     isCommercialDispute: row.is_commercial_dispute,
     disputeResolved: row.dispute_resolved,
     disputeOpenedAt: iso(row.dispute_opened_at),
+    disputeResolvedAt: iso(row.dispute_resolved_at),
     correctiveCreditNoteId: row.corrective_credit_note_id,
     supplierIsProvisional: row.supplier_is_provisional === true,
     createdAt: row.created_at.toISOString(),
