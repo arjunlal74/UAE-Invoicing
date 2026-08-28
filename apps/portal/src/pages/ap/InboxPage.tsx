@@ -27,6 +27,7 @@ import {
   inputClass,
 } from '../../components/ui';
 import { PurchaseDocumentBody, ResponseLog } from '../../components/DocumentPanels';
+import { withOrigin } from '../../lib/navigation';
 import { ApiError, api, apiBlob, downloadBlob, queryString } from '../../lib/api';
 import { can, useAuthStore } from '../../stores/auth';
 
@@ -146,7 +147,10 @@ export function ApInboxPage() {
           <Link to="/ap/inbox" className="text-sm text-brand-600 underline">
             ← Back to the queue
           </Link>
-          <Link to={`/ap/documents/${invoiceId}`} className="text-sm text-brand-600 underline">
+          <Link
+            to={withOrigin(`/ap/documents/${invoiceId}`, { pathname: '/ap/inbox', search: '' })}
+            className="text-sm text-brand-600 underline"
+          >
             Open as a document
           </Link>
         </div>

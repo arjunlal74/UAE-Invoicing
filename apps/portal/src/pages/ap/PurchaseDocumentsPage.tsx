@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { DocumentListItem } from '@uae/contracts';
 import { formatAmount } from '@uae/domain';
 import { useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import {
   Button,
   Card,
@@ -16,6 +16,7 @@ import {
   purchaseStates,
 } from '../../components/ui';
 import { api, queryString } from '../../lib/api';
+import { withOrigin } from '../../lib/navigation';
 
 /**
  * Every bill a supplier has sent us (SRS v2.7 §12).
@@ -84,6 +85,7 @@ function StateCells({ document }: { document: DocumentListItem }) {
 
 export function PurchaseDocumentsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const [page, setPage] = useState(1);
 
   const filters = {
@@ -274,7 +276,7 @@ export function PurchaseDocumentsPage() {
                     </td>
                     <td className="px-4 py-2">
                       <Link
-                        to={`/ap/documents/${document.id}`}
+                        to={withOrigin(`/ap/documents/${document.id}`, location)}
                         className="font-medium text-brand-700 hover:underline"
                       >
                         {document.invoiceNumber}

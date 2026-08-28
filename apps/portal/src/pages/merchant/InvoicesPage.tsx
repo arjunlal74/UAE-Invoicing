@@ -2,7 +2,7 @@ import type { InvoiceListItem, InvoiceStatus, PaginatedResult } from '@uae/contr
 import { useQuery } from '@tanstack/react-query';
 import { formatAmount } from '@uae/domain';
 import { useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import {
   Button,
   Card,
@@ -17,6 +17,7 @@ import {
   invoiceTypeLabel,
 } from '../../components/ui';
 import { api, queryString } from '../../lib/api';
+import { withOrigin } from '../../lib/navigation';
 
 /**
  * Three filters over three questions, matching the three columns.
@@ -77,6 +78,7 @@ function StateCells({ invoice }: { invoice: InvoiceListItem }) {
 
 export function InvoicesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const [page, setPage] = useState(1);
 
   // Filters live in the URL so a support conversation can be "open this link"
@@ -269,7 +271,7 @@ export function InvoicesPage() {
                     <td className="max-w-xs truncate px-4 py-2">{invoice.buyerName}</td>
                     <td className="px-4 py-2">
                       <Link
-                        to={`/invoices/${invoice.id}`}
+                        to={withOrigin(`/invoices/${invoice.id}`, location)}
                         className="font-medium text-brand-600 underline"
                       >
                         {invoice.invoiceNumber}

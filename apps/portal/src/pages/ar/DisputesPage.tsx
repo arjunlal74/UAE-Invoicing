@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { REASON_CODE_LABELS, RESPONSE_CODE_LABELS, type RejectionReasonCode } from '@uae/contracts';
 import { formatAmount } from '@uae/domain';
 import { useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -15,6 +15,7 @@ import {
   inputClass,
 } from '../../components/ui';
 import { api, queryString } from '../../lib/api';
+import { withOrigin } from '../../lib/navigation';
 import { can, useAuthStore } from '../../stores/auth';
 
 /**
@@ -68,6 +69,7 @@ export function DisputesPage() {
   const state: DisputeState = requested && STATES.includes(requested) ? requested : 'open';
   const setState = (next: DisputeState) => setSearchParams(next === 'open' ? {} : { state: next });
 
+  const location = useLocation();
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const canCredit = can(user, 'invoice.edit');
@@ -159,7 +161,7 @@ export function DisputesPage() {
                 <tr key={dispute.id}>
                   <td className="px-4 py-2">
                     <Link
-                      to={`/invoices/${dispute.id}`}
+                      to={withOrigin(`/invoices/${dispute.id}`, location)}
                       className="font-medium text-brand-700 hover:underline"
                     >
                       {dispute.invoiceNumber}
@@ -219,7 +221,7 @@ export function DisputesPage() {
                       )
                     ) : dispute.creditNoteId ? (
                       <Link
-                        to={`/invoices/${dispute.creditNoteId}`}
+                        to={withOrigin(`/invoices/${dispute.creditNoteId}`, location)}
                         className="text-sm text-brand-700 hover:underline"
                       >
                         {dispute.creditNoteNumber ?? 'Credit note'}

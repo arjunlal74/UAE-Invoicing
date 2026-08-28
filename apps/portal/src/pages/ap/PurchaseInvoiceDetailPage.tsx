@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import type { InvoiceDetail } from '@uae/contracts';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { PurchaseDocumentBody, ResponseLog } from '../../components/DocumentPanels';
 import { PdfActions } from '../../components/PdfActions';
 import { Button, Spinner, StatusBadge, invoiceTypeLabel } from '../../components/ui';
 import { api, apiBlob, downloadBlob } from '../../lib/api';
+import { originFrom } from '../../lib/navigation';
 import { can, useAuthStore } from '../../stores/auth';
 
 /**
@@ -23,6 +24,10 @@ import { can, useAuthStore } from '../../stores/auth';
 export function PurchaseInvoiceDetailPage() {
   const { invoiceId } = useParams<{ invoiceId: string }>();
   const user = useAuthStore((s) => s.user);
+  const origin = originFrom(useLocation().search, {
+    to: '/ap/documents',
+    label: 'All purchase documents',
+  });
 
   const { data, isLoading } = useQuery({
     queryKey: ['ap-document', invoiceId],
@@ -41,8 +46,8 @@ export function PurchaseInvoiceDetailPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link to="/ap/documents" className="text-sm text-brand-600 underline">
-            ← All purchase documents
+          <Link to={origin.to} className="text-sm text-brand-600 underline">
+            ← {origin.label}
           </Link>
           <h1 className="mt-1 flex items-center gap-3 text-lg font-semibold text-slate-900">
             {data.invoiceNumber}

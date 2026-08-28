@@ -5,7 +5,7 @@ import type {
 } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -16,6 +16,7 @@ import {
   inputClass,
 } from '../../components/ui';
 import { ApiError, api, queryString } from '../../lib/api';
+import { withOrigin } from '../../lib/navigation';
 
 /**
  * The tax approver's queue (SRS v2.1 §5).
@@ -25,6 +26,7 @@ import { ApiError, api, queryString } from '../../lib/api';
  * rejection is recoverable, filing is not.
  */
 export function ApprovalsPage() {
+  const location = useLocation();
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [note, setNote] = useState('');
@@ -148,7 +150,7 @@ export function ApprovalsPage() {
                     </td>
                     <td className="px-4 py-2">
                       <Link
-                        to={`/invoices/${invoice.id}`}
+                        to={withOrigin(`/invoices/${invoice.id}`, location)}
                         className="font-medium text-brand-600 underline"
                       >
                         {invoice.invoiceNumber}

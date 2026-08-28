@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { REASON_CODE_LABELS, type DisputeAnalytics } from '@uae/contracts';
 import { formatAmount } from '@uae/domain';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { PdfActions } from '../../components/PdfActions';
 import {
   Alert,
@@ -13,6 +13,7 @@ import {
   cx,
 } from '../../components/ui';
 import { api } from '../../lib/api';
+import { withOrigin } from '../../lib/navigation';
 
 /**
  * The dispute KPI dashboard (SRS v2.7 §13.1).
@@ -23,6 +24,7 @@ import { api } from '../../lib/api';
  * problem is the industry rather than the billing.
  */
 export function AnalyticsPage() {
+  const location = useLocation();
   const { data, isLoading } = useQuery({
     queryKey: ['dispute-analytics'],
     queryFn: () => api<DisputeAnalytics>('/api/v1/reports/analytics'),
@@ -262,7 +264,7 @@ export function AnalyticsPage() {
                 <tr key={row.invoiceId}>
                   <td className="py-1.5">
                     <Link
-                      to={`/invoices/${row.invoiceId}`}
+                      to={withOrigin(`/invoices/${row.invoiceId}`, location)}
                       className="font-medium text-brand-700 hover:underline"
                     >
                       {row.invoiceNumber}

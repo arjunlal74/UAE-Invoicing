@@ -7,7 +7,7 @@ import {
   type UsageLedgerItem,
 } from '@uae/contracts';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -24,6 +24,7 @@ import {
   inputClass,
 } from '../../components/ui';
 import { api, queryString } from '../../lib/api';
+import { withOrigin } from '../../lib/navigation';
 
 /**
  * Prepaid data bundles and consumption (SRS v2.7 §15).
@@ -34,6 +35,7 @@ import { api, queryString } from '../../lib/api';
  * invoice from us.
  */
 export function UsagePage() {
+  const location = useLocation();
   const [page, setPage] = useState(1);
   const pageSize = 25;
 
@@ -154,7 +156,7 @@ export function UsagePage() {
                     <td className="px-4 py-2">
                       {entry.invoiceId ? (
                         <Link
-                          to={`/invoices/${entry.invoiceId}`}
+                          to={withOrigin(`/invoices/${entry.invoiceId}`, location)}
                           className="text-brand-700 hover:underline"
                         >
                           {entry.invoiceNumber ?? 'Document'}

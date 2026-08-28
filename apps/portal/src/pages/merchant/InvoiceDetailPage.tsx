@@ -2,11 +2,13 @@ import {
   REASON_CODE_LABELS,
   RESPONSE_CODE_LABELS,
   REVERSAL_MODE_LABELS,
+  type ApprovalDecisionResponse,
   type InvoiceDetail,
 } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatAmount } from '@uae/domain';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useState } from 'react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Amount, Detail, DocumentLines, ResponseLog } from '../../components/DocumentPanels';
 import { PdfActions } from '../../components/PdfActions';
 import {
@@ -18,15 +20,21 @@ import {
   cx,
   formatDate,
   formatDateTime,
+  inputClass,
   invoiceTypeLabel,
 } from '../../components/ui';
 import { ApiError, api, apiBlob, downloadBlob } from '../../lib/api';
+import { keepOrigin, originFrom } from '../../lib/navigation';
 import { canEdit, canFile, useAuthStore } from '../../stores/auth';
 
 export function InvoiceDetailPage() {
   const { invoiceId = '' } = useParams();
   const user = useAuthStore((s) => s.user);
   const navigate = useNavigate();
+  // Back to the list this was opened from, not to the list it happens to
+  // belong to: an approver returned to every invoice ever filed has lost their
+  // place in the queue they were working.
+  const origin = originFrom(useLocation().search, { to: '/invoices', label: 'All invoices' });
   const queryClient = useQueryClient();
 
   const { data, isLoading } = useQuery({
@@ -34,6 +42,49 @@ export function InvoiceDetailPage() {
     queryFn: () => api<InvoiceDetail>(`/api/v1/invoices/${invoiceId}`),
     refetchInterval: (query) =>
       query.state.data?.status === 'SUBMITTED_TO_ASP' ? 5_000 : false,
+  });
+
+  // §6.3 — the approver's two verdicts, on the document itself.
+  //
+  // The queue can already do this in bulk, which is right for a run of twenty
+  // identical invoices and wrong for the one that made somebody open it: an
+  // approver who wants to read a document before releasing it had to decide
+  // from a list, or read it here and then go back and find the row again.
+  const [approvalNote, setApprovalNote] = useState('');
+  const [approvalOutcome, setApprovalOutcome] = useState<{
+    kind: 'ok' | 'danger';
+    text: string;
+  } | null>(null);
+
+  const decide = useMutation({
+    mutationFn: (decision: 'approve' | 'reject') =>
+      api<ApprovalDecisionResponse>(`/api/v1/approvals/${decision}`, {
+        method: 'POST',
+        body: { invoiceIds: [invoiceId], note: approvalNote.trim() || undefined },
+      }),
+    onSuccess: (result, decision) => {
+      setApprovalNote('');
+      // A skipped invoice is a 200, not a failure, so the reason the server
+      // gave is what the approver needs to see rather than a tick.
+      setApprovalOutcome(
+        result.affected > 0
+          ? {
+              kind: 'ok',
+              text:
+                decision === 'approve'
+                  ? 'Approved and queued for filing with the FTA.'
+                  : 'Returned to the preparer. Their staged rows are open for correction again.',
+            }
+          : { kind: 'danger', text: result.reasons[0]?.reason ?? 'Nothing was changed.' },
+      );
+      void queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
+      void queryClient.invalidateQueries({ queryKey: ['approvals'] });
+    },
+    onError: (err) =>
+      setApprovalOutcome({
+        kind: 'danger',
+        text: err instanceof ApiError ? err.message : 'That decision could not be recorded.',
+      }),
   });
 
   const retry = useMutation({
@@ -56,8 +107,8 @@ export function InvoiceDetailPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link to="/invoices" className="text-sm text-brand-600 underline">
-            ← All invoices
+          <Link to={origin.to} className="text-sm text-brand-600 underline">
+            ← {origin.label}
           </Link>
           <h1 className="mt-1 flex items-center gap-3 text-lg font-semibold text-slate-900">
             {data.invoiceNumber}
@@ -84,6 +135,56 @@ export function InvoiceDetailPage() {
           )}
         </div>
       </div>
+
+      {approvalOutcome && (
+        <Alert kind={approvalOutcome.kind}>
+          {approvalOutcome.text}{' '}
+          <Link to={origin.to} className="font-medium underline">
+            Back to {origin.label.toLowerCase()}
+          </Link>
+        </Alert>
+      )}
+
+      {/* Only the role that can file sees this, and only while the document is
+          actually waiting. After a verdict the card goes and the status badge
+          above carries the answer. */}
+      {data.status === 'PENDING_CFO_APPROVAL' && canFile(user) && (
+        <Card title="Waiting for your approval">
+          <p className="text-sm text-slate-600">
+            You are the only role that can release this invoice to the FTA. Returning it withdraws
+            it and reopens the preparer's staged rows for correction.
+          </p>
+
+          <textarea
+            className={`${inputClass} mt-3 h-20`}
+            placeholder="Note (required when returning to the preparer)"
+            value={approvalNote}
+            onChange={(event) => setApprovalNote(event.target.value)}
+          />
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button
+              variant="primary"
+              disabled={decide.isPending}
+              onClick={() => decide.mutate('approve')}
+            >
+              {decide.isPending ? 'Working…' : 'Approve and file with the FTA'}
+            </Button>
+            <Button
+              variant="danger"
+              disabled={decide.isPending || approvalNote.trim().length === 0}
+              onClick={() => decide.mutate('reject')}
+              title={
+                approvalNote.trim().length === 0
+                  ? 'Give a reason so the preparer knows what to correct'
+                  : undefined
+              }
+            >
+              Return to preparer
+            </Button>
+          </div>
+        </Card>
+      )}
 
       {retry.error && (
         <Alert kind="danger">
@@ -142,7 +243,7 @@ export function InvoiceDetailPage() {
         <Alert kind="ok" title="Dispute resolved">
           Credit note{' '}
           <Link
-            to={`/invoices/${data.correctiveCreditNoteId}`}
+            to={keepOrigin(`/invoices/${data.correctiveCreditNoteId}`, origin)}
             className="font-medium underline"
           >
             {data.correctiveCreditNoteNumber ?? 'view'}
@@ -157,7 +258,10 @@ export function InvoiceDetailPage() {
           <p>
             This {data.invoiceType === 'CREDIT_NOTE' ? 'credit note' : 'debit note'} adjusts invoice{' '}
             {data.referencedInvoiceId ? (
-              <Link to={`/invoices/${data.referencedInvoiceId}`} className="font-medium underline">
+              <Link
+                to={keepOrigin(`/invoices/${data.referencedInvoiceId}`, origin)}
+                className="font-medium underline"
+              >
                 {data.referencedInvoiceNumber}
               </Link>
             ) : (

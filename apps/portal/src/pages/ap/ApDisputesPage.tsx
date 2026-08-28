@@ -5,7 +5,7 @@ import {
   type DocumentListItem,
 } from '@uae/contracts';
 import { formatAmount } from '@uae/domain';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   EmptyState,
@@ -15,6 +15,7 @@ import {
   formatDate,
 } from '../../components/ui';
 import { api, queryString } from '../../lib/api';
+import { withOrigin } from '../../lib/navigation';
 
 /**
  * The inbound dispute desk (SRS v2.7 §12.3).
@@ -51,6 +52,7 @@ function daysSince(iso: string | null): number | null {
 
 export function ApDisputesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const requested = searchParams.get('state') as DisputeState | null;
   const state: DisputeState = requested && STATES.includes(requested) ? requested : 'open';
   const setState = (next: DisputeState) => setSearchParams(next === 'open' ? {} : { state: next });
@@ -130,7 +132,7 @@ export function ApDisputesPage() {
                   <tr key={dispute.id} className="hover:bg-slate-50">
                     <td className="px-4 py-2">
                       <Link
-                        to={`/ap/documents/${dispute.id}`}
+                        to={withOrigin(`/ap/documents/${dispute.id}`, location)}
                         className="font-medium text-brand-700 hover:underline"
                       >
                         {dispute.invoiceNumber}
