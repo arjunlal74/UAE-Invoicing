@@ -65,7 +65,7 @@ export function parsePeriod(query: unknown): ParsedPeriod {
   return {
     from: isoDay(start),
     to: null,
-    label: span === 12 ? 'Last 12 months' : `Last ${span} months`,
+    label: span === 1 ? 'Last month' : `Last ${span} months`,
   };
 }
 
