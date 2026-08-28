@@ -2,8 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { ModuleDashboardResponse } from '@uae/contracts';
 import { formatAmount } from '@uae/domain';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Card, PageHeader, Spinner, StatTile } from '../../components/ui';
-import { TrendChart } from '../../components/TrendChart';
+import { Alert, PageHeader, Spinner, StatTile } from '../../components/ui';
 import { api, queryString } from '../../lib/api';
 
 /**
@@ -96,18 +95,6 @@ export function ApOverviewPage() {
           value={`AED ${formatAmount(data.amountTotalAed)}`}
         />
       </div>
-
-      <Card title="Received over the last 30 days">
-        <TrendChart
-          series={data.last30Days.map((day) => ({
-            date: day.date,
-            primary: day.created,
-            secondary: day.cleared,
-            tertiary: day.disputed,
-          }))}
-          labels={{ primary: 'Received', secondary: 'Accepted', tertiary: 'Disputed' }}
-        />
-      </Card>
     </div>
   );
 }
