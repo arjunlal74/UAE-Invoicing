@@ -527,9 +527,24 @@ export function registerArBuilderRoutes(app: FastifyInstance) {
           FROM invoices i
           WHERE i.tenant_id = ${ctx.tenantId}
             AND i.direction = 'OUTBOUND_SALES_AR'
-            AND CASE WHEN ${conditions}
-                     THEN i.latest_response_code = 'CA' AND NOT i.condition_met
-                     ELSE i.is_commercial_dispute AND i.dispute_resolved = ${resolved}
+            AND CASE
+                  WHEN ${conditions}
+                    THEN i.latest_response_code = 'CA' AND NOT i.condition_met
+                  WHEN ${resolved}
+                    -- Read from the response log, not from the invoice. A buyer
+                    -- who accepts a disputed invoice closes the dispute AND
+                    -- clears is_commercial_dispute, so filtering on that flag
+                    -- showed only the disputes closed by a credit note and lost
+                    -- every one the buyer settled themselves. Worse, it sets
+                    -- dispute_resolved on acceptances that were never disputed,
+                    -- so the flag alone cannot tell an argument from a routine
+                    -- yes. A UQ or RE in the log can.
+                    THEN i.dispute_resolved AND EXISTS (
+                           SELECT 1 FROM invoice_responses r
+                           WHERE r.invoice_id = i.id
+                             AND r.response_direction = 'INBOUND_FROM_BUYER'
+                             AND r.response_code IN ('RE', 'UQ'))
+                  ELSE i.is_commercial_dispute AND NOT i.dispute_resolved
                 END
           ORDER BY coalesce(i.dispute_opened_at, i.issue_date::timestamptz) NULLS LAST
           LIMIT 500
