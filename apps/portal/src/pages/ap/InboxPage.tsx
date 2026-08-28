@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   REASON_CODE_LABELS,
-  RESPONSE_CODE_LABELS,
   RejectionReasonCode,
   type ApDecisionResponse,
   type DocumentListItem,
@@ -25,9 +24,9 @@ import {
   StatusBadge,
   cx,
   formatDate,
-  formatDateTime,
   inputClass,
 } from '../../components/ui';
+import { PurchaseDocumentBody, ResponseLog } from '../../components/DocumentPanels';
 import { ApiError, api, apiBlob, downloadBlob, queryString } from '../../lib/api';
 import { can, useAuthStore } from '../../stores/auth';
 
@@ -430,50 +429,14 @@ function VerificationPane({
 
   return (
     <div className="space-y-4">
-      <Card
-        title={invoice.invoiceNumber}
-        actions={
-          invoice.ublXmlUri && (
-            <Button size="sm" onClick={downloadXml}>
-              View UBL XML
-            </Button>
-          )
-        }
-      >
-        <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1 text-sm">
-          <dt className="text-slate-500">Supplier</dt>
-          <dd className="text-slate-800">
-            {invoice.supplierName ?? invoice.sellerName}
-            {invoice.supplierIsProvisional && (
-              <span className="ml-2 rounded-full bg-warn-50 px-2 py-0.5 text-xs text-warn-700">
-                unvetted
-              </span>
-            )}
-          </dd>
-          <dt className="text-slate-500">Supplier TRN</dt>
-          <dd className="font-mono text-xs text-slate-800">{invoice.sellerTrn || '—'}</dd>
-          <dt className="text-slate-500">FTA IRN</dt>
-          <dd className="font-mono text-xs text-slate-800">{invoice.ftaIrn ?? 'Not supplied'}</dd>
-          <dt className="text-slate-500">Issued</dt>
-          <dd className="text-slate-800">{formatDate(invoice.issueDate)}</dd>
-          <dt className="text-slate-500">Tax exclusive</dt>
-          <dd className="tabular-nums text-slate-800">
-            {invoice.currencyCode} {formatAmount(invoice.taxExclusiveAmount)}
-          </dd>
-          <dt className="text-slate-500">VAT</dt>
-          <dd className="tabular-nums text-slate-800">
-            {invoice.currencyCode} {formatAmount(invoice.vatTotalAmount)}
-          </dd>
-          <dt className="text-slate-500">Total payable</dt>
-          <dd className="font-semibold tabular-nums text-slate-900">
-            {invoice.currencyCode} {formatAmount(invoice.payableAmount)}
-          </dd>
-          <dt className="text-slate-500">AP posting</dt>
-          <dd>
-            <StatusBadge status={invoice.apPostingStatus} />
-          </dd>
-        </dl>
-      </Card>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold text-slate-900">{invoice.invoiceNumber}</h2>
+        {invoice.ublXmlUri && (
+          <Button size="sm" onClick={downloadXml}>
+            View UBL XML
+          </Button>
+        )}
+      </div>
 
       {warnings.length > 0 && (
         <Alert kind="warn" title="Reception checks">
@@ -485,40 +448,11 @@ function VerificationPane({
         </Alert>
       )}
 
-      <Card title="Line items">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="px-2 py-1.5 font-medium">Description</th>
-                <th className="px-2 py-1.5 text-right font-medium">Qty</th>
-                <th className="px-2 py-1.5 text-right font-medium">Unit</th>
-                <th className="px-2 py-1.5 text-right font-medium">VAT</th>
-                <th className="px-2 py-1.5 text-right font-medium">Total</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {invoice.lines.map((line) => (
-                <tr key={line.id}>
-                  <td className="px-2 py-1.5 text-slate-800">{line.description}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums text-slate-600">
-                    {line.quantity} {line.uom}
-                  </td>
-                  <td className="px-2 py-1.5 text-right tabular-nums text-slate-600">
-                    {formatAmount(line.unitPrice)}
-                  </td>
-                  <td className="px-2 py-1.5 text-right tabular-nums text-slate-600">
-                    {line.vatRate}%
-                  </td>
-                  <td className="px-2 py-1.5 text-right tabular-nums text-slate-800">
-                    {formatAmount(line.lineTotal)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+      {/* The same body the purchase document page renders. The desk used to
+          draw its own eight-field summary and its own five-column line table,
+          so the clerk who ruled on a bill and the auditor who later looked it
+          up were reading what looked like two different records. */}
+      <PurchaseDocumentBody invoice={invoice} />
 
       <Card title="Purchase order verification">
         <div className="grid gap-3 sm:grid-cols-2">
@@ -549,42 +483,7 @@ function VerificationPane({
       </Card>
 
       {/* --- §12.3 the verdict ------------------------------------------- */}
-      {ruled ? (
-        <Card title="Verdict">
-          <div className="space-y-2 text-sm">
-            <p>
-              <StatusBadge status={invoice.status} />{' '}
-              <span className="ml-2 text-slate-600">
-                {invoice.latestResponseCode &&
-                  RESPONSE_CODE_LABELS[invoice.latestResponseCode]}
-                {invoice.latestResponseReasonCode &&
-                  ` · ${invoice.latestResponseReasonCode} — ${REASON_CODE_LABELS[invoice.latestResponseReasonCode]}`}
-              </span>
-            </p>
-            {invoice.latestResponseComment && (
-              <p className="italic text-slate-600">“{invoice.latestResponseComment}”</p>
-            )}
-            <p className="text-xs text-slate-500">
-              Ruled by {invoice.apReviewedByName ?? 'a colleague'} on{' '}
-              {formatDateTime(invoice.apReviewedAt)}.
-            </p>
-
-            {invoice.responses.length > 0 && (
-              <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-xs text-slate-500">
-                {invoice.responses.map((response) => (
-                  <li key={response.id}>
-                    {formatDateTime(response.receivedAt)} · {response.responseCode}
-                    {response.statusReasonCode ? ` (${response.statusReasonCode})` : ''} ·{' '}
-                    {response.transmittedAt
-                      ? 'delivered to supplier'
-                      : (response.transmissionError ?? 'awaiting delivery')}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </Card>
-      ) : (
+      {!ruled &&
         canDecide && (
           <Card title="Action">
             <p className="mb-3 text-sm text-slate-600">
@@ -612,8 +511,9 @@ function VerificationPane({
               </p>
             )}
           </Card>
-        )
-      )}
+        )}
+
+      <ResponseLog responses={invoice.responses} />
     </div>
   );
 }

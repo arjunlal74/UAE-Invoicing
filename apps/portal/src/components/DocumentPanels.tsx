@@ -1,6 +1,11 @@
-import { RESPONSE_CODE_LABELS, type InvoiceDetail } from '@uae/contracts';
+import {
+  AP_POSTING_LABELS,
+  REASON_CODE_LABELS,
+  RESPONSE_CODE_LABELS,
+  type InvoiceDetail,
+} from '@uae/contracts';
 import { formatAmount } from '@uae/domain';
-import { Card, cx, formatDateTime } from './ui';
+import { Alert, Card, StatusBadge, cx, formatDate, formatDateTime, invoiceTypeLabel } from './ui';
 
 /**
  * The parts of a document view that do not care which way it was travelling.
@@ -163,5 +168,152 @@ export function ResponseLog({ responses }: { responses: InvoiceDetail['responses
         </table>
       </div>
     </Card>
+  );
+}
+
+/**
+ * A supplier's bill, presented the one way.
+ *
+ * The verification desk and the purchase document page show the same document
+ * for different reasons — one to rule on it, one to read or print it — and
+ * before this they showed it differently: a cramped two-column list of eight
+ * fields on the desk against a full document view on the page. The clerk who
+ * accepted a bill and the auditor who later looked it up were reading what
+ * appeared to be two different records.
+ *
+ * The verdict banner leads, because on an inbound document our own decision is
+ * the fact that governs everything else: a bill can be perfectly cleared by the
+ * FTA and still be one this desk refuses to pay.
+ */
+export function PurchaseDocumentBody({ invoice }: { invoice: InvoiceDetail }) {
+  const disputed = invoice.isCommercialDispute && !invoice.disputeResolved;
+  const ruledBy = invoice.apReviewedByName ? ` by ${invoice.apReviewedByName}` : '';
+
+  return (
+    <>
+      {disputed && (
+        <Alert
+          kind={invoice.latestResponseCode === 'RE' ? 'danger' : 'warn'}
+          title={`Returned to the supplier${
+            invoice.latestResponseReasonCode
+              ? ` · ${invoice.latestResponseReasonCode} — ${REASON_CODE_LABELS[invoice.latestResponseReasonCode]}`
+              : ''
+          }`}
+        >
+          <p>
+            {invoice.latestResponseCode && RESPONSE_CODE_LABELS[invoice.latestResponseCode]}
+            {ruledBy} on {formatDateTime(invoice.apReviewedAt ?? invoice.disputeOpenedAt)}.
+          </p>
+          {invoice.latestResponseComment && (
+            <p className="mt-1 italic">“{invoice.latestResponseComment}”</p>
+          )}
+          <p className="mt-2 text-xs">
+            The input tax on this bill is not reclaimable until it is settled. What closes it is a
+            corrected invoice or a credit note from the supplier.
+          </p>
+        </Alert>
+      )}
+
+      {invoice.latestResponseCode === 'AP' && (
+        <Alert kind="ok" title="Accepted for payment">
+          Approved{ruledBy} on {formatDateTime(invoice.apReviewedAt)}.
+          {invoice.latestResponseComment && (
+            <span className="mt-1 block italic">“{invoice.latestResponseComment}”</span>
+          )}
+        </Alert>
+      )}
+
+      {!invoice.latestResponseCode && (
+        <Alert kind="info" title="Not yet reviewed">
+          Nobody has ruled on this bill. Input tax on it cannot be claimed until it is accepted.
+        </Alert>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card title="Document" className="lg:col-span-2">
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
+            <Detail label="Type" value={invoiceTypeLabel(invoice.invoiceType)} />
+            <Detail label="Issue date" value={formatDate(invoice.issueDate)} />
+            <Detail label="Currency" value={invoice.currencyCode} />
+            {invoice.currencyCode !== 'AED' && (
+              <Detail label="Rate to AED" value={invoice.exchangeRate} />
+            )}
+            {invoice.peppolUuid && <Detail label="Peppol UUID" value={invoice.peppolUuid} mono />}
+            <Detail label="FTA IRN" value={invoice.ftaIrn ?? 'Not supplied'} mono />
+            <Detail label="PO reference" value={invoice.poReference || '—'} />
+            <Detail label="GRN reference" value={invoice.grnReference || '—'} />
+            <Detail label="Posting" value={AP_POSTING_LABELS[invoice.apPostingStatus]} />
+          </dl>
+
+          <div className="mt-5 grid gap-5 border-t border-slate-100 pt-4 sm:grid-cols-2">
+            <div>
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Supplier
+              </h3>
+              <p className="text-sm font-medium">
+                {invoice.supplierName ?? invoice.sellerName}
+                {invoice.supplierIsProvisional && (
+                  <span className="ml-2 rounded-full bg-warn-50 px-2 py-0.5 text-xs font-normal text-warn-700">
+                    unvetted
+                  </span>
+                )}
+              </p>
+              <p className="font-mono text-xs text-slate-500">{invoice.sellerTrn || 'No TRN'}</p>
+            </div>
+            <div>
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Billed to
+              </h3>
+              <p className="text-sm font-medium">{invoice.buyerName}</p>
+              <p className="font-mono text-xs text-slate-500">{invoice.buyerTrn ?? '—'}</p>
+              {invoice.buyerEmirate && (
+                <p className="text-xs text-slate-500">{invoice.buyerEmirate}</p>
+              )}
+            </div>
+          </div>
+        </Card>
+
+        <Card title="Totals">
+          <dl className="space-y-2 text-sm">
+            <Amount label="Net" value={invoice.lineExtensionAmount} currency={invoice.currencyCode} />
+            <Amount
+              label="Tax exclusive"
+              value={invoice.taxExclusiveAmount}
+              currency={invoice.currencyCode}
+            />
+            {/* The figure this desk is really here for: input tax is only
+                reclaimable on a bill that has been accepted. */}
+            <Amount label="VAT" value={invoice.vatTotalAmount} currency={invoice.currencyCode} />
+            <div className="border-t border-slate-200 pt-2">
+              <Amount
+                label="Payable"
+                value={invoice.payableAmount}
+                currency={invoice.currencyCode}
+                strong
+              />
+            </div>
+            {invoice.currencyCode !== 'AED' && (
+              <Amount label="Payable (AED)" value={invoice.payableAmountAed} currency="AED" />
+            )}
+          </dl>
+
+          <div className="mt-4 border-t border-slate-100 pt-3">
+            <p className="text-xs font-medium text-slate-500">Clearance</p>
+            <StatusBadge status={invoice.status} className="mt-1" />
+          </div>
+
+          {invoice.ublXmlSha256 && (
+            <div className="mt-4 border-t border-slate-100 pt-3">
+              <p className="text-xs font-medium text-slate-500">Archived XML digest</p>
+              <p className="break-all font-mono text-[10px] text-slate-400">
+                {invoice.ublXmlSha256}
+              </p>
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <DocumentLines lines={invoice.lines} />
+    </>
   );
 }
