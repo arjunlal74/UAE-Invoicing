@@ -162,6 +162,8 @@ export function toInvoiceListItem(row: DocumentRow): InvoiceListItem {
     buyerName: row.buyer_name,
     buyerTrn: row.buyer_trn,
     currencyCode: row.currency_code,
+    taxExclusiveAmount: row.tax_exclusive_amount,
+    vatTotalAmount: row.vat_total_amount,
     payableAmount: row.payable_amount,
     payableAmountAed: row.payable_amount_aed,
     status: row.status,

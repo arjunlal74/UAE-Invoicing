@@ -467,6 +467,9 @@ export const InvoiceListItem = z.object({
   buyerName: z.string(),
   buyerTrn: z.string().nullable(),
   currencyCode: z.string(),
+  /** Net of tax, the VAT on it, and the payable in AED — the three an approver totals. */
+  taxExclusiveAmount: z.string(),
+  vatTotalAmount: z.string(),
   payableAmount: z.string(),
   payableAmountAed: z.string(),
   status: InvoiceStatus,
