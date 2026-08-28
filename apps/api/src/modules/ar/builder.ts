@@ -488,7 +488,11 @@ export function registerArBuilderRoutes(app: FastifyInstance) {
           {
             id: string;
             invoice_number: string;
+            issue_date: Date;
             buyer_name: string;
+            currency_code: string;
+            tax_exclusive_amount: string;
+            vat_total_amount: string;
             payable_amount_aed: string;
             fta_irn: string | null;
             latest_response_code: string | null;
@@ -504,7 +508,8 @@ export function registerArBuilderRoutes(app: FastifyInstance) {
             days_open: string;
           }[]
         >`
-          SELECT i.id, i.invoice_number, i.buyer_name, i.payable_amount_aed, i.fta_irn,
+          SELECT i.id, i.invoice_number, i.issue_date, i.buyer_name, i.currency_code,
+                 i.tax_exclusive_amount, i.vat_total_amount, i.payable_amount_aed, i.fta_irn,
                  i.latest_response_code::text AS latest_response_code,
                  i.latest_response_reason_code, i.latest_response_comment,
                  i.dispute_opened_at, i.dispute_resolved_at, i.corrective_credit_note_id,
@@ -555,7 +560,11 @@ export function registerArBuilderRoutes(app: FastifyInstance) {
         items: rows.map((row) => ({
           id: row.id,
           invoiceNumber: row.invoice_number,
+          issueDate: row.issue_date.toISOString().slice(0, 10),
           buyerName: row.buyer_name,
+          currencyCode: row.currency_code,
+          taxExclusiveAmount: row.tax_exclusive_amount,
+          vatTotalAmount: row.vat_total_amount,
           amountAed: row.payable_amount_aed,
           ftaIrn: row.fta_irn,
           responseCode: row.latest_response_code,

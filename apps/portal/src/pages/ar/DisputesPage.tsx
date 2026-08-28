@@ -35,7 +35,11 @@ import { can, useAuthStore } from '../../stores/auth';
 interface DisputeItem {
   id: string;
   invoiceNumber: string;
+  issueDate: string;
   buyerName: string;
+  currencyCode: string;
+  taxExclusiveAmount: string;
+  vatTotalAmount: string;
   amountAed: string;
   ftaIrn: string | null;
   responseCode: string | null;
@@ -142,12 +146,16 @@ export function DisputesPage() {
             }
           />
         ) : (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
+                <th className="px-4 py-2 font-medium">Invoice date</th>
                 <th className="px-4 py-2 font-medium">Invoice</th>
                 <th className="px-4 py-2 font-medium">Buyer</th>
-                <th className="px-4 py-2 text-right font-medium">Amount (AED)</th>
+                <th className="px-4 py-2 text-right font-medium">Amount</th>
+                <th className="px-4 py-2 text-right font-medium">VAT</th>
+                <th className="px-4 py-2 text-right font-medium">Total (AED)</th>
                 <th className="px-4 py-2 font-medium">Status</th>
                 <th className="px-4 py-2 font-medium">Reason</th>
                 <th className="px-4 py-2 font-medium">
@@ -159,6 +167,9 @@ export function DisputesPage() {
             <tbody className="divide-y divide-slate-100">
               {data.items.map((dispute) => (
                 <tr key={dispute.id}>
+                  <td className="whitespace-nowrap px-4 py-2 text-slate-600">
+                    {formatDate(dispute.issueDate)}
+                  </td>
                   <td className="px-4 py-2">
                     <Link
                       to={withOrigin(`/invoices/${dispute.id}`, location)}
@@ -170,8 +181,15 @@ export function DisputesPage() {
                       <div className="font-mono text-xs text-slate-400">{dispute.ftaIrn}</div>
                     )}
                   </td>
-                  <td className="px-4 py-2 text-slate-700">{dispute.buyerName}</td>
+                  <td className="max-w-xs truncate px-4 py-2 text-slate-700">{dispute.buyerName}</td>
                   <td className="px-4 py-2 text-right tabular-nums text-slate-800">
+                    {formatAmount(dispute.taxExclusiveAmount)}{' '}
+                    <span className="text-xs text-slate-400">{dispute.currencyCode}</span>
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums text-slate-600">
+                    {formatAmount(dispute.vatTotalAmount)}
+                  </td>
+                  <td className="px-4 py-2 text-right font-medium tabular-nums text-slate-800">
                     {formatAmount(dispute.amountAed)}
                   </td>
                   <td className="px-4 py-2 text-slate-600">
@@ -244,6 +262,7 @@ export function DisputesPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 
