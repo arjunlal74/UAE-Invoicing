@@ -645,20 +645,25 @@ export function StatTile({
   tone?: 'neutral' | 'ok' | 'warn' | 'danger';
   onClick?: () => void;
 }) {
+  // The tile carries the colour, not just the figure inside it. Tinting only
+  // the number left a wall of white cards that had to be read one at a time to
+  // find the one in trouble, which is the opposite of what a row of tiles is
+  // for. Neutral stays white on purpose: no signal is itself a signal, and
+  // colouring everything would make the coloured ones ordinary.
   const tones = {
-    neutral: 'text-slate-900',
-    ok: 'text-ok-700',
-    warn: 'text-warn-700',
-    danger: 'text-danger-700',
+    neutral: { tile: 'border-slate-200 bg-white', hover: 'hover:border-brand-300 hover:bg-brand-50/40', value: 'text-slate-900' },
+    ok: { tile: 'border-ok-200 bg-ok-50', hover: 'hover:bg-ok-50/70', value: 'text-ok-700' },
+    warn: { tile: 'border-warn-200 bg-warn-50', hover: 'hover:bg-warn-50/70', value: 'text-warn-700' },
+    danger: { tile: 'border-danger-200 bg-danger-50', hover: 'hover:bg-danger-50/70', value: 'text-danger-700' },
   };
 
   const content = (
     <>
       <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
-      <div className={cx('mt-1 text-2xl font-semibold tabular-nums', tones[tone])}>
+      <div className={cx('mt-1 text-2xl font-semibold tabular-nums', tones[tone].value)}>
         {typeof value === 'number' ? value.toLocaleString() : value}
       </div>
-      {hint && <div className="mt-0.5 text-xs text-slate-500">{hint}</div>}
+      {hint && <div className="mt-0.5 text-xs text-slate-600">{hint}</div>}
     </>
   );
 
@@ -666,12 +671,18 @@ export function StatTile({
     return (
       <button
         onClick={onClick}
-        className="rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm transition-colors hover:border-brand-300 hover:bg-brand-50/40"
+        className={cx(
+          'rounded-lg border p-4 text-left shadow-sm transition-colors',
+          tones[tone].tile,
+          tones[tone].hover,
+        )}
       >
         {content}
       </button>
     );
   }
 
-  return <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">{content}</div>;
+  return (
+    <div className={cx('rounded-lg border p-4 shadow-sm', tones[tone].tile)}>{content}</div>
+  );
 }
