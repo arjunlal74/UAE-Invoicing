@@ -40,6 +40,15 @@ export function registerAdminRoutes(app: FastifyInstance) {
           OR (i.status = 'SUBMITTED_TO_ASP' AND i.submitted_at < now() - interval '1 hour')
         )
     `;
+    // Two named columns and two directions, resolved to SQL here. Nothing the
+    // caller sends reaches the ORDER BY; the enum above is what it picks from.
+    const SORT_COLUMNS = {
+      issueDate: 'i.issue_date',
+      lastAttempt: 'coalesce(last_log.created_at, i.created_at)',
+    } as const;
+    const sortColumn = SORT_COLUMNS[query.sort];
+    const sortDirection = query.order === 'asc' ? 'ASC' : 'DESC';
+
     const filterArgs = [
       query.tenantId ?? null,
       query.status ?? null,
@@ -87,7 +96,9 @@ export function registerAdminRoutes(app: FastifyInstance) {
           SELECT count(*) AS attempts FROM transmission_logs l WHERE l.invoice_id = i.id
         ) log_counts ON TRUE
         ${FILTER}
-        ORDER BY coalesce(last_log.created_at, i.created_at) DESC
+        -- The row id breaks ties, so paging cannot show one document twice and
+        -- skip another when a hundred share an issue date.
+        ORDER BY ${sortColumn} ${sortDirection}, i.created_at DESC, i.id
         LIMIT $7 OFFSET $8
         `,
         [...filterArgs, query.pageSize, offset],

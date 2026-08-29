@@ -812,6 +812,13 @@ export const TransmissionMonitorQuery = z.object({
   dateFrom: z.string().optional(),
   dateTo: z.string().optional(),
   onlyProblems: queryBoolean.default(true),
+  /**
+   * Which column the table is read down. Named rather than free text: this ends
+   * up in an ORDER BY, and a column name is not something a caller gets to
+   * choose in its own words.
+   */
+  sort: z.enum(['issueDate', 'lastAttempt']).default('lastAttempt'),
+  order: z.enum(['asc', 'desc']).default('desc'),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(50),
 });

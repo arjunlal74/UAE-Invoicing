@@ -61,6 +61,10 @@ export function AdminTransmissionsPage() {
   const [status, setStatus] = useState(UNFILTERED.status);
   const [direction, setDirection] = useState(UNFILTERED.direction);
   const [period, setPeriod] = useState<PeriodChoice>(UNFILTERED.period);
+  // Most recently attempted first, which is what a support desk wants when it
+  // has not yet been asked a question about dates.
+  const [sort, setSort] = useState<'issueDate' | 'lastAttempt'>('lastAttempt');
+  const [order, setOrder] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
 
   const pageSize = 50;
@@ -72,7 +76,17 @@ export function AdminTransmissionsPage() {
   });
 
   const { data, isLoading } = useQuery({
-    queryKey: ['admin-transmissions', onlyProblems, tenantId, status, direction, dates, page],
+    queryKey: [
+      'admin-transmissions',
+      onlyProblems,
+      tenantId,
+      status,
+      direction,
+      dates,
+      sort,
+      order,
+      page,
+    ],
     queryFn: () =>
       api<PaginatedResult<TransmissionMonitorItem>>(
         `/api/v1/admin/transmissions${queryString({
@@ -82,6 +96,8 @@ export function AdminTransmissionsPage() {
           direction,
           dateFrom: dates.from,
           dateTo: dates.to,
+          sort,
+          order,
           page,
           pageSize,
         })}`,
@@ -93,6 +109,16 @@ export function AdminTransmissionsPage() {
   /** Any filter change invalidates the page number that was read under the old one. */
   const reset = <T,>(set: (value: T) => void) => (value: T) => {
     set(value);
+    setPage(1);
+  };
+
+  /**
+   * Clicking the column already sorted on turns it around; clicking another
+   * takes it over, newest first — nobody opens a date column wanting 2019.
+   */
+  const sortBy = (column: 'issueDate' | 'lastAttempt') => () => {
+    setOrder(sort === column && order === 'desc' ? 'asc' : 'desc');
+    setSort(column);
     setPage(1);
   };
 
@@ -210,12 +236,26 @@ export function AdminTransmissionsPage() {
                   <th className="px-4 py-2 font-medium">Invoice</th>
                   <th className="px-4 py-2 font-medium">Direction</th>
                   <th className="px-4 py-2 font-medium">Account</th>
-                  <th className="px-4 py-2 font-medium">Issued</th>
+                  <th className="px-4 py-2 font-medium">
+                    <SortHeader
+                      label="Issued"
+                      active={sort === 'issueDate'}
+                      order={order}
+                      onClick={sortBy('issueDate')}
+                    />
+                  </th>
                   <th className="px-4 py-2 font-medium">Status</th>
                   <th className="px-4 py-2 font-medium">Provider</th>
                   <th className="px-4 py-2 text-right font-medium">Attempts</th>
                   <th className="px-4 py-2 text-right font-medium">AED</th>
-                  <th className="px-4 py-2 font-medium">Last attempt</th>
+                  <th className="px-4 py-2 font-medium">
+                    <SortHeader
+                      label="Last attempt"
+                      active={sort === 'lastAttempt'}
+                      order={order}
+                      onClick={sortBy('lastAttempt')}
+                    />
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -272,5 +312,40 @@ export function AdminTransmissionsPage() {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * A sortable column heading.
+ *
+ * The arrow is only drawn on the column actually being sorted on: an indicator
+ * beside every heading says nothing about which one is in force.
+ */
+function SortHeader({
+  label,
+  active,
+  order,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  order: 'asc' | 'desc';
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`Sort by ${label.toLowerCase()}`}
+      className={cx(
+        'flex items-center gap-1 uppercase tracking-wide hover:text-slate-900',
+        active && 'text-slate-900',
+      )}
+    >
+      {label}
+      <span aria-hidden className={cx('text-[0.6rem]', !active && 'text-slate-300')}>
+        {active && order === 'asc' ? '▲' : '▼'}
+      </span>
+    </button>
   );
 }
