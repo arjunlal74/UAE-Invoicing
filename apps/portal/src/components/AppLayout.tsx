@@ -110,6 +110,7 @@ const ADMIN_NAV: NavItem[] = [
     // figures for the top of the screen, and a URL per action means one can be
     // linked to and closed with the browser's back button.
     children: [
+      { to: '/admin/inventory', label: 'Overview', end: true },
       { to: '/admin/inventory/buffer', label: 'Minimum buffer' },
       { to: '/admin/inventory/providers', label: 'Providers' },
       { to: '/admin/inventory/buy', label: 'Buy data' },

@@ -34,6 +34,12 @@ export type CreateProviderRequest = z.infer<typeof CreateProviderRequest>;
 /** Everything is editable, including retirement — nothing is ever deleted. */
 export const UpdateProviderRequest = CreateProviderRequest.partial().extend({
   isActive: z.boolean().optional(),
+  /**
+   * Independent of retirement: this one freezes the record's own details. While
+   * it is set the server refuses every other field, so an unlock is the only
+   * edit a locked provider accepts.
+   */
+  isLocked: z.boolean().optional(),
 });
 export type UpdateProviderRequest = z.infer<typeof UpdateProviderRequest>;
 
@@ -47,6 +53,8 @@ export const ProviderSummary = z.object({
   website: z.string().nullable(),
   defaultCostPerUnitAed: z.string().nullable(),
   isActive: z.boolean(),
+  /** Frozen against edits. Says nothing about whether they can be bought from. */
+  isLocked: z.boolean(),
   notes: z.string().nullable(),
   /**
    * What has been bought from them **within the period being reported on**,
@@ -63,6 +71,14 @@ export const ProviderSummary = z.object({
    * only one of them makes a provider safe to retire.
    */
   lifetimeContractCount: z.number(),
+  /**
+   * The most recent contract on file and the rate it was struck at, whenever
+   * they fall — unscoped, like the lifetime count above. A period total says
+   * what a provider has supplied; these say what they last charged, which is
+   * the figure a renewal is argued from.
+   */
+  lastPurchaseDate: z.string().nullable(),
+  lastCostPerUnitAed: z.string().nullable(),
   createdAt: z.string(),
 });
 export type ProviderSummary = z.infer<typeof ProviderSummary>;

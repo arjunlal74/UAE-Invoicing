@@ -34,12 +34,15 @@ interface ProviderRow {
   website: string | null;
   default_cost_per_unit_aed: string | null;
   is_active: boolean;
+  is_locked: boolean;
   notes: string | null;
   created_at: Date;
   contract_count: string;
   total_units: string;
   total_spend: string;
   lifetime_contract_count: string;
+  last_purchase_date: Date | null;
+  last_cost_per_unit_aed: string | null;
 }
 
 function toSummary(row: ProviderRow): ProviderSummary {
@@ -53,11 +56,16 @@ function toSummary(row: ProviderRow): ProviderSummary {
     website: row.website,
     defaultCostPerUnitAed: row.default_cost_per_unit_aed,
     isActive: row.is_active,
+    isLocked: row.is_locked,
     notes: row.notes,
     contractCount: Number(row.contract_count),
     totalUnitsPurchased: Number(row.total_units),
     totalSpendAed: row.total_spend,
     lifetimeContractCount: Number(row.lifetime_contract_count),
+    lastPurchaseDate: row.last_purchase_date
+      ? row.last_purchase_date.toISOString().slice(0, 10)
+      : null,
+    lastCostPerUnitAed: row.last_cost_per_unit_aed,
     createdAt: row.created_at.toISOString(),
   };
 }
@@ -78,7 +86,7 @@ function toSummary(row: ProviderRow): ProviderSummary {
  */
 const PROVIDER_SELECT = `
   v.id, v.name, v.accreditation_reference, v.contact_name, v.contact_email,
-  v.contact_phone, v.website, v.is_active, v.notes, v.created_at,
+  v.contact_phone, v.website, v.is_active, v.is_locked, v.notes, v.created_at,
   v.default_cost_per_unit_aed::text AS default_cost_per_unit_aed,
   (SELECT count(*) FROM asp_bundle_procurements p
     WHERE p.asp_provider_id = v.id
@@ -93,8 +101,42 @@ const PROVIDER_SELECT = `
       AND ($1::date IS NULL OR p.purchase_date >= $1::date)
       AND ($2::date IS NULL OR p.purchase_date <= $2::date))::text AS total_spend,
   (SELECT count(*) FROM asp_bundle_procurements p WHERE p.asp_provider_id = v.id)::text
-    AS lifetime_contract_count
+    AS lifetime_contract_count,
+  -- The last contract and its rate, unscoped for the same reason: what this
+  -- provider last charged is the figure a renewal is argued from, and hiding it
+  -- because it fell outside the window being reported on helps nobody.
+  (SELECT p.purchase_date FROM asp_bundle_procurements p
+    WHERE p.asp_provider_id = v.id
+    ORDER BY p.purchase_date DESC, p.created_at DESC LIMIT 1) AS last_purchase_date,
+  (SELECT p.cost_per_unit_aed::text FROM asp_bundle_procurements p
+    WHERE p.asp_provider_id = v.id
+    ORDER BY p.purchase_date DESC, p.created_at DESC LIMIT 1) AS last_cost_per_unit_aed
 `;
+
+/**
+ * A locked record accepts exactly one change: the unlock itself.
+ *
+ * Enforced on the server rather than by hiding buttons, because the point of
+ * the lock is that confirmed details stop drifting whatever the caller is —
+ * the portal, a script, or someone with a token and curl.
+ */
+export function isUnlockOnly(body: UpdateProviderRequest): boolean {
+  const keys = Object.keys(body);
+  return keys.length === 1 && keys[0] === 'isLocked' && body.isLocked === false;
+}
+
+/**
+ * Which of the four provider verbs a PATCH amounts to. The lock and the
+ * retirement are separate states, so they are separate entries in the trail:
+ * "who froze this record" and "who stopped us buying from them" are different
+ * questions asked months apart.
+ */
+export function providerAuditAction(body: UpdateProviderRequest) {
+  if (body.isLocked === true) return 'PROVIDER_LOCKED' as const;
+  if (body.isLocked === false) return 'PROVIDER_UNLOCKED' as const;
+  if (body.isActive === false) return 'PROVIDER_RETIRED' as const;
+  return 'PROVIDER_UPDATED' as const;
+}
 
 async function loadOne(id: string, period: ParsedPeriod): Promise<ProviderRow> {
   const rows = await withPlatformAccess((tx) =>
@@ -191,6 +233,10 @@ export function registerProviderRoutes(app: FastifyInstance) {
 
       const before = await loadOne(id, parsePeriod({}));
 
+      if (before.is_locked && !isUnlockOnly(body)) {
+        throw badRequest(`"${before.name}" is locked. Unlock it before editing or retiring it.`);
+      }
+
       await withPlatformAccess(async (tx) => {
         if (body.name && body.name.toLowerCase() !== before.name.toLowerCase()) {
           const clash = await tx<{ name: string }[]>`
@@ -233,17 +279,22 @@ export function registerProviderRoutes(app: FastifyInstance) {
             notes                     = ${
               body.notes === undefined ? tx.unsafe('notes') : body.notes
             },
-            is_active                 = coalesce(${body.isActive ?? null}, is_active)
+            is_active                 = coalesce(${body.isActive ?? null}, is_active),
+            is_locked                 = coalesce(${body.isLocked ?? null}, is_locked)
           WHERE id = ${id}
         `;
       });
 
       await audit(actorFromContext(ctx), {
-        action: body.isActive === false ? 'PROVIDER_RETIRED' : 'PROVIDER_UPDATED',
+        action: providerAuditAction(body),
         resourceType: 'ASP_PROVIDER',
         resourceId: id,
         tenantId: null,
-        changes: { name: body.name ?? before.name, isActive: body.isActive },
+        changes: {
+          name: body.name ?? before.name,
+          isActive: body.isActive,
+          isLocked: body.isLocked,
+        },
       });
 
       return reply.send(toSummary(await loadOne(id, parsePeriod({}))));

@@ -10,6 +10,9 @@ import { LoginPage } from './pages/LoginPage';
 import { SecurityPage } from './pages/SecurityPage';
 import { AdminAuditPage } from './pages/admin/AdminAuditPage';
 import { AdminInventoryPage } from './pages/admin/AdminInventoryPage';
+import { AdminProvidersPage } from './pages/admin/AdminProvidersPage';
+import { AdminBuyDataPage } from './pages/admin/AdminBuyDataPage';
+import { AdminSellDataPage } from './pages/admin/AdminSellDataPage';
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
 import { AdminMailPage } from './pages/admin/AdminMailPage';
 import { AdminStaffPage } from './pages/admin/AdminStaffPage';
@@ -308,8 +311,11 @@ export function App() {
           <Route path="/admin/tenants/:tenantId" element={<AdminTenantDetailPage />} />
           <Route path="/admin/transmissions" element={<AdminTransmissionsPage />} />
           <Route path="/admin/inventory" element={<AdminInventoryPage />} />
-          {/* The console's actions are dialogs over the same page, addressed so
-              the ribbon can link to them. */}
+          <Route path="/admin/inventory/providers" element={<AdminProvidersPage />} />
+          <Route path="/admin/inventory/buy" element={<AdminBuyDataPage />} />
+          <Route path="/admin/inventory/sell" element={<AdminSellDataPage />} />
+          {/* The buffer is one field. It stays a dialog over the console it
+              governs, addressed so the ribbon can link to it. */}
           <Route path="/admin/inventory/:action" element={<AdminInventoryPage />} />
           <Route path="/admin/audit" element={<AdminAuditPage />} />
           <Route path="/admin/staff" element={<AdminStaffPage />} />

@@ -76,7 +76,9 @@ export type AuditAction =
   | 'INVENTORY_BUFFER_SET'
   | 'PROVIDER_CREATED'
   | 'PROVIDER_UPDATED'
-  | 'PROVIDER_RETIRED';
+  | 'PROVIDER_RETIRED'
+  | 'PROVIDER_LOCKED'
+  | 'PROVIDER_UNLOCKED';
 
 export interface AuditEntry {
   action: AuditAction;
