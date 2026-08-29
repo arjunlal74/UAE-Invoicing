@@ -1,262 +1,200 @@
-import type { ProviderSummary } from '@uae/contracts';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { PaginatedResult, ProcurementSummary, ProviderSummary } from '@uae/contracts';
+import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import {
-  Alert,
+  ALL_TIME,
+  PeriodPicker,
+  periodDates,
+  periodReady,
+  type PeriodChoice,
+} from '../../components/PeriodPicker';
+import {
   Button,
   Card,
-  Field,
+  EmptyState,
   PageHeader,
+  Pagination,
   Spinner,
-  inputClass,
+  cx,
+  formatDate,
+  inputBase,
 } from '../../components/ui';
-import { ApiError, api } from '../../lib/api';
+import { api, queryString } from '../../lib/api';
 
 /**
- * Buying units from a provider — §15.1, on its own screen.
+ * What the platform has bought — §15.1.
  *
- * Units and total cost are what the provider's invoice actually says, so those
- * are the inputs and the per-unit rate is derived beside them. Typing into the
- * rate works too and back-fills the total — some contracts are quoted that way
- * round — but the total is what the server stores as authoritative, because
- * multiplying a four-decimal rate back out loses fils on odd unit counts.
+ * The console shows the most recent contracts as context for its balances;
+ * this is the book itself, narrowed by provider and by when the contract was
+ * signed. Registering a new one is a separate screen rather than a dialog over
+ * this list, because it is a form with money in it.
  */
 export function AdminBuyDataPage() {
-  const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [providerId, setProviderId] = useState('');
+  const [period, setPeriod] = useState<PeriodChoice>(ALL_TIME);
+  const [page, setPage] = useState(1);
 
-  // Only the active list: a retired provider is one this platform no longer
-  // buys from, which is precisely what this form does.
+  const dates = periodDates(period);
+  const pageSize = 50;
+
+  // Retired providers included: a contract signed years ago belongs to whoever
+  // signed it, and filtering this list by them must stay possible.
+  const { data: providers } = useQuery({
+    queryKey: ['asp-providers', 'picker'],
+    queryFn: () =>
+      api<{ items: ProviderSummary[] }>('/api/v1/admin/providers?includeInactive=true'),
+  });
+
   const { data, isLoading } = useQuery({
-    queryKey: ['asp-providers', 'active'],
-    queryFn: () => api<{ items: ProviderSummary[] }>('/api/v1/admin/providers'),
-  });
-  const providers = data?.items ?? [];
-
-  const [form, setForm] = useState({
-    aspProviderId: '',
-    contractReference: '',
-    totalUnits: '',
-    totalCostAed: '',
-    costPerUnitAed: '',
-    expiryDate: '',
-    notes: '',
-  });
-
-  const units = Number(form.totalUnits) || 0;
-  const total = Number(form.totalCostAed) || 0;
-  const perUnit = Number(form.costPerUnitAed) || 0;
-
-  /** Whichever of the money pair was not typed is recomputed from the other. */
-  const setUnits = (value: string) => {
-    const next = Number(value) || 0;
-    setForm((f) => ({
-      ...f,
-      totalUnits: value,
-      costPerUnitAed:
-        next > 0 && Number(f.totalCostAed) > 0
-          ? (Number(f.totalCostAed) / next).toFixed(4)
-          : f.costPerUnitAed,
-    }));
-  };
-
-  const setTotal = (value: string) => {
-    const next = Number(value) || 0;
-    setForm((f) => ({
-      ...f,
-      totalCostAed: value,
-      costPerUnitAed:
-        next > 0 && Number(f.totalUnits) > 0 ? (next / Number(f.totalUnits)).toFixed(4) : '',
-    }));
-  };
-
-  const setPerUnit = (value: string) => {
-    const next = Number(value) || 0;
-    setForm((f) => ({
-      ...f,
-      costPerUnitAed: value,
-      totalCostAed:
-        next > 0 && Number(f.totalUnits) > 0 ? (next * Number(f.totalUnits)).toFixed(2) : '',
-    }));
-  };
-
-  const chooseProvider = (id: string) => {
-    const provider = providers.find((p) => p.id === id);
-    const rate = provider?.defaultCostPerUnitAed;
-    setForm((f) => ({
-      ...f,
-      aspProviderId: id,
-      // Only pre-fill an untouched rate. Never overwrite a figure the operator
-      // has already read off the contract in front of them.
-      ...(rate && !f.costPerUnitAed
-        ? {
-            costPerUnitAed: rate,
-            totalCostAed:
-              Number(f.totalUnits) > 0 ? (Number(rate) * Number(f.totalUnits)).toFixed(2) : '',
-          }
-        : {}),
-    }));
-  };
-
-  const create = useMutation({
-    mutationFn: () =>
-      api('/api/v1/admin/procurements', {
-        method: 'POST',
-        body: {
-          aspProviderId: form.aspProviderId,
-          contractReference: form.contractReference.trim(),
-          totalUnits: units,
-          totalCostAed: total,
-          expiryDate: form.expiryDate || null,
-          notes: form.notes.trim() || null,
-        },
-      }),
-    // Back to the console, where the new contract is now one of the rows and
-    // the stock figure has moved.
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin-inventory'] });
-      queryClient.invalidateQueries({ queryKey: ['asp-providers'] });
-      navigate('/admin/inventory');
-    },
+    queryKey: ['admin-procurements', providerId, dates, page],
+    queryFn: () =>
+      api<PaginatedResult<ProcurementSummary>>(
+        `/api/v1/admin/procurements${queryString({
+          aspProviderId: providerId,
+          from: dates.from,
+          to: dates.to,
+          page,
+          pageSize,
+        })}`,
+      ),
+    enabled: periodReady(period),
   });
 
-  if (isLoading) return <Spinner label="Loading providers…" />;
+  const reset = <T,>(set: (value: T) => void) => (value: T) => {
+    set(value);
+    setPage(1);
+  };
+
+  const units = (data?.items ?? []).reduce((sum, row) => sum + row.totalUnits, 0);
+  const spend = (data?.items ?? []).reduce((sum, row) => sum + Number(row.totalCostAed), 0);
 
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Buy data units"
-        description="Register what a provider invoiced. The contract is the platform's evidence of where its capacity came from, so it is recorded before the units can be sold on."
+        title="Data purchases"
+        description="Every contract the platform has bought capacity on, and what it paid."
+        actions={
+          <Button variant="primary" onClick={() => navigate('/admin/inventory/buy/new')}>
+            New purchase
+          </Button>
+        }
       />
 
-      {providers.length === 0 && (
-        <Alert kind="info" title="No accredited provider on file">
-          A purchase is registered against a provider, so add the one you buy from under{' '}
-          <Link className="underline" to="/admin/inventory/providers">
-            Providers
-          </Link>{' '}
-          before registering a contract.
-        </Alert>
-      )}
-
       <Card>
-        <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Provider" hint="From the accredited provider list.">
-              <select
-                className={inputClass}
-                value={form.aspProviderId}
-                onChange={(e) => chooseProvider(e.target.value)}
-              >
-                <option value="">Select a provider…</option>
-                {providers.map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Contract reference" hint="The provider's own number. Registered once.">
-              <input
-                className={inputClass}
-                value={form.contractReference}
-                onChange={(e) => setForm({ ...form, contractReference: e.target.value })}
-                placeholder="e.g. ASP-2026-00412"
-              />
-            </Field>
-            <Field label="Units purchased">
-              <input
-                className={inputClass}
-                inputMode="numeric"
-                value={form.totalUnits}
-                onChange={(e) => setUnits(e.target.value)}
-                placeholder="1000000"
-              />
-            </Field>
-            <Field
-              label="Cost per unit (AED)"
-              hint="Type either this or the total — the other is filled in."
-            >
-              <input
-                className={inputClass}
-                inputMode="decimal"
-                value={form.costPerUnitAed}
-                onChange={(e) => setPerUnit(e.target.value)}
-                placeholder="0.0850"
-              />
-            </Field>
-            <Field
-              label="Total cost (AED)"
-              hint="What the provider invoiced. This is what is stored."
-            >
-              <input
-                className={inputClass}
-                inputMode="decimal"
-                value={form.totalCostAed}
-                onChange={(e) => setTotal(e.target.value)}
-                placeholder="85000.00"
-              />
-            </Field>
-            <Field label="Expiry" hint="Leave blank if the units do not lapse.">
-              <input
-                className={inputClass}
-                type="date"
-                value={form.expiryDate}
-                onChange={(e) => setForm({ ...form, expiryDate: e.target.value })}
-              />
-            </Field>
-          </div>
+        <div className="flex flex-nowrap items-center gap-3 overflow-x-auto pb-1">
+          <select
+            className={cx(inputBase, 'w-64 shrink-0')}
+            value={providerId}
+            onChange={(e) => reset(setProviderId)(e.target.value)}
+          >
+            <option value="">All providers</option>
+            {(providers?.items ?? []).map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name}
+                {provider.isActive ? '' : ' (retired)'}
+              </option>
+            ))}
+          </select>
 
-          {units > 0 && total > 0 && (
-            <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-700">
-              <strong className="tabular-nums">{units.toLocaleString()}</strong> units for{' '}
-              <strong className="tabular-nums">
-                AED {total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-              </strong>{' '}
-              — <span className="tabular-nums">{(total / units).toFixed(4)}</span> per unit.
-              {perUnit > 0 && Math.abs(perUnit - total / units) > 0.00005 && (
-                <span className="ml-1 font-medium text-warn-700">
-                  That rate does not divide the total exactly, so {(total / units).toFixed(4)} is
-                  what will be stored.
-                </span>
-              )}
-            </div>
-          )}
-
-          <Field label="Notes">
-            <input
-              className={inputClass}
-              value={form.notes}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-            />
-          </Field>
+          <PeriodPicker
+            label="Purchased in"
+            value={period}
+            onChange={reset<PeriodChoice>(setPeriod)}
+          />
         </div>
       </Card>
 
-      {create.error && (
-        <Alert kind="danger">
-          {create.error instanceof ApiError
-            ? create.error.message
-            : 'That purchase could not be registered.'}
-        </Alert>
-      )}
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        {isLoading ? (
+          <div className="p-8">
+            <Spinner label="Loading purchases…" />
+          </div>
+        ) : !data || data.items.length === 0 ? (
+          <EmptyState
+            title="No purchases"
+            description="Nothing was bought under these filters. The platform cannot sell units it has not bought."
+          />
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
+                  <tr>
+                    <th className="px-4 py-2 font-medium">Purchased</th>
+                    <th className="px-4 py-2 font-medium">Contract</th>
+                    <th className="px-4 py-2 font-medium">Provider</th>
+                    <th className="px-4 py-2 text-right font-medium">Units</th>
+                    <th className="px-4 py-2 text-right font-medium">Rate (AED)</th>
+                    <th className="px-4 py-2 text-right font-medium">Cost (AED)</th>
+                    <th className="px-4 py-2 text-right font-medium">Sold on</th>
+                    <th className="px-4 py-2 text-right font-medium">Unsold</th>
+                    <th className="px-4 py-2 font-medium">Expires</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {data.items.map((row) => (
+                    <tr key={row.id} className="hover:bg-slate-50">
+                      <td className="whitespace-nowrap px-4 py-2 text-xs text-slate-500">
+                        {formatDate(row.purchaseDate)}
+                      </td>
+                      <td className="px-4 py-2 font-mono text-xs text-slate-700">
+                        {row.contractReference}
+                      </td>
+                      <td className="px-4 py-2 text-slate-800">{row.aspProviderName}</td>
+                      <td className="px-4 py-2 text-right tabular-nums text-slate-800">
+                        {row.totalUnits.toLocaleString()}
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums text-slate-600">
+                        {Number(row.costPerUnitAed).toFixed(4)}
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums text-slate-700">
+                        {Number(row.totalCostAed).toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                        })}
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums text-slate-500">
+                        {row.allocatedUnits.toLocaleString()}
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums text-slate-700">
+                        {row.remainingUnits.toLocaleString()}
+                      </td>
+                      <td className="px-4 py-2 text-xs text-slate-500">
+                        {row.expiryDate ? formatDate(row.expiryDate) : 'no expiry'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                {/* This page's rows, not the whole book: a total under a
+                    paginated table that counted rows you cannot see would be a
+                    number with no column behind it. */}
+                <tfoot className="border-t-2 border-slate-300">
+                  <tr>
+                    <td className="px-4 py-2 text-xs font-medium uppercase text-slate-500" colSpan={3}>
+                      This page
+                    </td>
+                    <td className="px-4 py-2 text-right font-medium tabular-nums text-slate-900">
+                      {units.toLocaleString()}
+                    </td>
+                    <td />
+                    <td className="px-4 py-2 text-right font-medium tabular-nums text-slate-900">
+                      {spend.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </td>
+                    <td colSpan={3} />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
 
-      <div className="flex justify-end gap-2">
-        <Button onClick={() => navigate('/admin/inventory')}>Cancel</Button>
-        <Button
-          variant="primary"
-          disabled={
-            !form.aspProviderId ||
-            !form.contractReference.trim() ||
-            units < 1 ||
-            total <= 0 ||
-            create.isPending
-          }
-          onClick={() => create.mutate()}
-        >
-          {create.isPending ? 'Registering…' : 'Register purchase'}
-        </Button>
+            <Pagination
+              page={data.page}
+              pageSize={data.pageSize}
+              total={data.total}
+              onPage={setPage}
+            />
+          </>
+        )}
       </div>
     </div>
   );

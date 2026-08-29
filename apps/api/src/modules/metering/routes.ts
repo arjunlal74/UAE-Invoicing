@@ -209,22 +209,59 @@ export function registerMeteringRoutes(app: FastifyInstance) {
   );
 
   // --- Every bundle on the platform ----------------------------------------
+  //
+  // Narrowed by buyer and by when the bundle was issued, and optionally to the
+  // host's own sales — a partner's slice is carved from a pool the host already
+  // sold, so a list of "what we sold" that included both would count the same
+  // units twice.
   app.get('/api/v1/admin/bundles', { preHandler: requirePlatform() }, async (request, reply) => {
-    const { tenantId } = request.query as { tenantId?: string };
+    const q = request.query as {
+      tenantId?: string;
+      from?: string;
+      to?: string;
+      hostSalesOnly?: string;
+      page?: string;
+      pageSize?: string;
+    };
+    const page = Math.max(1, Number(q.page) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(q.pageSize) || 50));
 
-    const rows = await withPlatformAccess((tx) =>
-      tx.unsafe<BundleRow[]>(
+    const FILTER = `
+      WHERE ($1::uuid IS NULL OR b.tenant_id = $1::uuid)
+        AND ($2::date IS NULL OR b.valid_from >= $2::date)
+        AND ($3::date IS NULL OR b.valid_from <= $3::date)
+        AND ($4::boolean = FALSE OR b.parent_bundle_id IS NULL)
+    `;
+    const args = [
+      q.tenantId || null,
+      q.from || null,
+      q.to || null,
+      q.hostSalesOnly === 'true',
+    ];
+
+    const result = await withPlatformAccess(async (tx) => {
+      const rows = await tx.unsafe<BundleRow[]>(
         `SELECT ${BUNDLE_WITH_ALLOCATION}, t.legal_name_en AS tenant_name
          FROM data_bundles b
          JOIN tenants t ON t.id = b.tenant_id
-         WHERE ($1::uuid IS NULL OR b.tenant_id = $1::uuid)
-         ORDER BY b.created_at DESC
-         LIMIT 500`,
-        [tenantId ?? null],
-      ),
-    );
+         ${FILTER}
+         ORDER BY b.valid_from DESC, b.created_at DESC
+         LIMIT $5 OFFSET $6`,
+        [...args, pageSize, (page - 1) * pageSize],
+      );
+      const counted = await tx.unsafe<{ count: string }[]>(
+        `SELECT count(*)::text AS count FROM data_bundles b ${FILTER}`,
+        args,
+      );
+      return { rows, total: Number(counted[0]!.count) };
+    });
 
-    return reply.send({ items: rows.map(toBundleSummary) });
+    return reply.send({
+      items: result.rows.map(toBundleSummary),
+      total: result.total,
+      page,
+      pageSize,
+    });
   });
 
   // --- Suspend or reactivate a bundle --------------------------------------

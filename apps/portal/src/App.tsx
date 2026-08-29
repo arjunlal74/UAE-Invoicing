@@ -13,6 +13,8 @@ import { AdminInventoryPage } from './pages/admin/AdminInventoryPage';
 import { AdminProvidersPage } from './pages/admin/AdminProvidersPage';
 import { AdminBuyDataPage } from './pages/admin/AdminBuyDataPage';
 import { AdminSellDataPage } from './pages/admin/AdminSellDataPage';
+import { AdminBuyDataFormPage } from './pages/admin/AdminBuyDataFormPage';
+import { AdminSellDataFormPage } from './pages/admin/AdminSellDataFormPage';
 import { AdminInventoryReportPage } from './pages/admin/AdminInventoryReportPage';
 import { AdminCompanyPage } from './pages/admin/AdminCompanyPage';
 import { PartnerInventoryPage } from './pages/partner/PartnerInventoryPage';
@@ -333,8 +335,13 @@ export function App() {
             path="/admin/inventory/report/:tenantId"
             element={<AdminInventoryReportPage />}
           />
+          {/* The list, and the form it launches. Registering a purchase or a
+              sale is a screen of its own rather than a dialog over the list:
+              both are forms with money in them. */}
           <Route path="/admin/inventory/buy" element={<AdminBuyDataPage />} />
+          <Route path="/admin/inventory/buy/new" element={<AdminBuyDataFormPage />} />
           <Route path="/admin/inventory/sell" element={<AdminSellDataPage />} />
+          <Route path="/admin/inventory/sell/new" element={<AdminSellDataFormPage />} />
           {/* The buffer is one field. It stays a dialog over the console it
               governs, addressed so the ribbon can link to it. */}
           <Route path="/admin/inventory/:action" element={<AdminInventoryPage />} />

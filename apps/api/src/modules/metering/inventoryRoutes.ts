@@ -75,6 +75,57 @@ const PROCUREMENT_SELECT = `
 `;
 
 export function registerInventoryRoutes(app: FastifyInstance) {
+  // --- §15.1 the purchases, as their own page ------------------------------
+  //
+  // The console carries the most recent contracts as context. This is the list
+  // proper: every contract, narrowed by provider and by when it was bought,
+  // paginated because a platform buying monthly outgrows one screen in a year.
+  app.get(
+    '/api/v1/admin/procurements',
+    { preHandler: requirePlatform() },
+    async (request, reply) => {
+      const q = request.query as {
+        aspProviderId?: string;
+        from?: string;
+        to?: string;
+        page?: string;
+        pageSize?: string;
+      };
+      const page = Math.max(1, Number(q.page) || 1);
+      const pageSize = Math.min(200, Math.max(1, Number(q.pageSize) || 50));
+
+      const FILTER = `
+        WHERE ($1::uuid IS NULL OR p.asp_provider_id = $1::uuid)
+          AND ($2::date IS NULL OR p.purchase_date >= $2::date)
+          AND ($3::date IS NULL OR p.purchase_date <= $3::date)
+      `;
+      const args = [q.aspProviderId || null, q.from || null, q.to || null];
+
+      const result = await withPlatformAccess(async (tx) => {
+        const rows = await tx.unsafe<ProcurementRow[]>(
+          `SELECT ${PROCUREMENT_SELECT}
+           FROM asp_bundle_procurements p
+           ${FILTER}
+           ORDER BY p.purchase_date DESC, p.created_at DESC
+           LIMIT $4 OFFSET $5`,
+          [...args, pageSize, (page - 1) * pageSize],
+        );
+        const counted = await tx.unsafe<{ count: string }[]>(
+          `SELECT count(*)::text AS count FROM asp_bundle_procurements p ${FILTER}`,
+          args,
+        );
+        return { rows, total: Number(counted[0]!.count) };
+      });
+
+      return reply.send({
+        items: result.rows.map(toProcurementSummary),
+        total: result.total,
+        page,
+        pageSize,
+      });
+    },
+  );
+
   // --- §15.1 register a wholesale purchase ---------------------------------
   app.post(
     '/api/v1/admin/procurements',
