@@ -30,6 +30,18 @@ export const trn = z
 
 export const emirate = z.enum(EMIRATES);
 
+/**
+ * A boolean that arrived as a query string.
+ *
+ * Not `z.coerce.boolean()`: coercion is `Boolean(value)`, and `Boolean('false')`
+ * is true — so `?flag=false` silently means the opposite of what it says, and a
+ * filter that cannot be switched off looks like a filter that does not work.
+ */
+export const queryBoolean = z.preprocess(
+  (value) => (typeof value === 'string' ? value === 'true' || value === '1' : value),
+  z.boolean(),
+);
+
 // --- Auth -------------------------------------------------------------------
 
 export const LoginRequest = z.object({
@@ -791,9 +803,15 @@ export type AdminDashboardResponse = z.infer<typeof AdminDashboardResponse>;
 // --- Admin monitoring -------------------------------------------------------
 
 export const TransmissionMonitorQuery = z.object({
+  /** One account's traffic. The monitor is read one caller's question at a time. */
   tenantId: uuid.optional(),
   status: z.string().optional(),
-  onlyProblems: z.coerce.boolean().default(true),
+  /** Both directions are monitored; this narrows to one of them. */
+  direction: InvoiceDirection.optional(),
+  /** The transaction period: the documents' own issue dates, not attempt times. */
+  dateFrom: z.string().optional(),
+  dateTo: z.string().optional(),
+  onlyProblems: queryBoolean.default(true),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(50),
 });
@@ -801,6 +819,8 @@ export const TransmissionMonitorQuery = z.object({
 export const TransmissionMonitorItem = z.object({
   invoiceId: uuid,
   invoiceNumber: z.string(),
+  direction: InvoiceDirection,
+  issueDate: z.string(),
   tenantId: uuid,
   tenantName: z.string(),
   status: InvoiceStatus,

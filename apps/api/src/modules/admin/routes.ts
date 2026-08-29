@@ -17,11 +17,45 @@ export function registerAdminRoutes(app: FastifyInstance) {
     const query = TransmissionMonitorQuery.parse(request.query);
     const offset = (query.page - 1) * query.pageSize;
 
+    // One filter, written once and used by both the page and its count. Two
+    // copies of this drifted apart would show a page of rows under a total
+    // that disagrees with it.
+    const FILTER = `
+      WHERE ($1::uuid IS NULL OR i.tenant_id = $1::uuid)
+        AND ($2::text IS NULL OR i.status::text = $2)
+        AND ($3::text IS NULL OR i.direction::text = $3)
+        AND ($4::date IS NULL OR i.issue_date >= $4::date)
+        AND ($5::date IS NULL OR i.issue_date <= $5::date)
+        AND (
+          $6::boolean = FALSE
+          -- Every refusal, whoever issued it: the tax authority, the network
+          -- that could not carry the document, the buyer who disputed it, and
+          -- our own checks. A merchant chasing "why has this not gone through"
+          -- does not know which of those happened, which is the point of the
+          -- one switch.
+          OR i.status IN (
+            'REJECTED_BY_FTA', 'REJECTED_TECHNICAL', 'REJECTED_COMMERCIAL', 'VALIDATION_FAILED'
+          )
+          -- Handed over but silent for an hour: the case that needs a human.
+          OR (i.status = 'SUBMITTED_TO_ASP' AND i.submitted_at < now() - interval '1 hour')
+        )
+    `;
+    const filterArgs = [
+      query.tenantId ?? null,
+      query.status ?? null,
+      query.direction ?? null,
+      query.dateFrom ?? null,
+      query.dateTo ?? null,
+      query.onlyProblems,
+    ];
+
     const result = await withPlatformAccess(async (tx) => {
-      const rows = await tx<
+      const rows = await tx.unsafe<
         {
           invoice_id: string;
           invoice_number: string;
+          direction: string;
+          issue_date: Date;
           tenant_id: string;
           tenant_name: string;
           status: string;
@@ -31,9 +65,11 @@ export function registerAdminRoutes(app: FastifyInstance) {
           last_error: string | null;
           payable_amount_aed: string;
         }[]
-      >`
+      >(
+        `
         SELECT
-          i.id AS invoice_id, i.invoice_number, i.tenant_id,
+          i.id AS invoice_id, i.invoice_number, i.direction::text AS direction,
+          i.issue_date, i.tenant_id,
           t.legal_name_en AS tenant_name, i.status::text AS status,
           i.payable_amount_aed,
           last_log.asp_provider, last_log.created_at AS last_attempt_at,
@@ -50,28 +86,17 @@ export function registerAdminRoutes(app: FastifyInstance) {
         LEFT JOIN LATERAL (
           SELECT count(*) AS attempts FROM transmission_logs l WHERE l.invoice_id = i.id
         ) log_counts ON TRUE
-        WHERE (${query.tenantId ?? null}::uuid IS NULL OR i.tenant_id = ${query.tenantId ?? null}::uuid)
-          AND (${query.status ?? null}::text IS NULL OR i.status::text = ${query.status ?? null})
-          AND (
-            ${query.onlyProblems} = FALSE
-            OR i.status IN ('REJECTED_BY_FTA', 'VALIDATION_FAILED')
-            -- Handed over but silent for an hour: the case that needs a human.
-            OR (i.status = 'SUBMITTED_TO_ASP' AND i.submitted_at < now() - interval '1 hour')
-          )
+        ${FILTER}
         ORDER BY coalesce(last_log.created_at, i.created_at) DESC
-        LIMIT ${query.pageSize} OFFSET ${offset}
-      `;
+        LIMIT $7 OFFSET $8
+        `,
+        [...filterArgs, query.pageSize, offset],
+      );
 
-      const counted = await tx<{ count: string }[]>`
-        SELECT count(*)::text AS count FROM invoices i
-        WHERE (${query.tenantId ?? null}::uuid IS NULL OR i.tenant_id = ${query.tenantId ?? null}::uuid)
-          AND (${query.status ?? null}::text IS NULL OR i.status::text = ${query.status ?? null})
-          AND (
-            ${query.onlyProblems} = FALSE
-            OR i.status IN ('REJECTED_BY_FTA', 'VALIDATION_FAILED')
-            OR (i.status = 'SUBMITTED_TO_ASP' AND i.submitted_at < now() - interval '1 hour')
-          )
-      `;
+      const counted = await tx.unsafe<{ count: string }[]>(
+        `SELECT count(*)::text AS count FROM invoices i ${FILTER}`,
+        filterArgs,
+      );
 
       return { rows, total: Number(counted[0]!.count) };
     });
@@ -80,6 +105,8 @@ export function registerAdminRoutes(app: FastifyInstance) {
       items: result.rows.map((r) => ({
         invoiceId: r.invoice_id,
         invoiceNumber: r.invoice_number,
+        direction: r.direction,
+        issueDate: r.issue_date.toISOString().slice(0, 10),
         tenantId: r.tenant_id,
         tenantName: r.tenant_name,
         status: r.status,

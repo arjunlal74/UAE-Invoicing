@@ -10,7 +10,7 @@ import {
   ReversalMode,
 } from './enums.js';
 import { ReportingPeriod } from './inventory.js';
-import { StagedInvoiceDto, StagedLineDto, emirate, trn, uuid } from './schemas.js';
+import { StagedInvoiceDto, StagedLineDto, emirate, queryBoolean, trn, uuid } from './schemas.js';
 
 /**
  * Contracts for the two v2.7 modules.
@@ -130,7 +130,7 @@ export type SupplierSummary = z.infer<typeof SupplierSummary>;
 
 export const DirectorySearchQuery = z.object({
   q: z.string().trim().max(200).optional(),
-  includeInactive: z.coerce.boolean().default(false),
+  includeInactive: queryBoolean.default(false),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(50),
 });
