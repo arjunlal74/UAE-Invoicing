@@ -16,6 +16,7 @@ import { AdminSellDataPage } from './pages/admin/AdminSellDataPage';
 import { AdminInventoryReportPage } from './pages/admin/AdminInventoryReportPage';
 import { AdminCompanyPage } from './pages/admin/AdminCompanyPage';
 import { PartnerInventoryPage } from './pages/partner/PartnerInventoryPage';
+import { InventoryStatementPage } from './pages/settings/InventoryStatementPage';
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
 import { AdminMailPage } from './pages/admin/AdminMailPage';
 import { AdminStaffPage } from './pages/admin/AdminStaffPage';
@@ -264,6 +265,14 @@ export function App() {
             element={
               <RequirePermission permission="billing.read">
                 <UsagePage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/settings/inventory"
+            element={
+              <RequirePermission permission="billing.read">
+                <InventoryStatementPage />
               </RequirePermission>
             }
           />

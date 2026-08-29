@@ -194,46 +194,51 @@ export const ReportingPeriod = z.object({
 export type ReportingPeriod = z.infer<typeof ReportingPeriod>;
 
 // ---------------------------------------------------------------------------
-// The data inventory report: units in, units out, over a window
+// The data inventory statement
 // ---------------------------------------------------------------------------
 
 /**
- * One movement, either direction. Deliberately generic: the platform buying
- * from a provider and a channel partner carving a slice for a sub-tenant are
- * the same event seen from two levels of the same chain, and one shape lets one
- * report and one page serve both.
+ * One movement of units, with the balance it leaves behind.
+ *
+ * The same four figures at every tier, because it is the same unit changing
+ * hands down a chain. Only the words over the two middle columns change with
+ * the holder — Buy/Sell for the platform, Buy/Allocated for a channel partner,
+ * Buy/Consumed for a direct tenant, Allocated/Consumed for a managed
+ * sub-tenant — which is a labelling question, so the wording lives in the view
+ * and the numbers stay one shape.
  */
-export const InventoryLedgerRow = z.object({
+export const InventoryStatementRow = z.object({
   date: z.string(),
+  /** The contract, bundle or document that moved the units. */
   reference: z.string(),
-  counterparty: z.string(),
-  /** Whatever identifies the other side a second time: an accreditation
-   *  reference, the tier of the buyer, the contract a slice came out of. */
-  counterpartyDetail: z.string().nullable(),
-  units: z.number(),
-  /** Only the host's own purchases carry money; nothing records what a partner
-   *  charged a sub-tenant, and a zero there would state a fact nobody entered. */
-  costPerUnitAed: z.string().nullable(),
-  totalCostAed: z.string().nullable(),
+  /** Who it moved to or from, or which document took it. */
+  description: z.string(),
+  openingUnits: z.number(),
+  inUnits: z.number(),
+  outUnits: z.number(),
+  balanceUnits: z.number(),
 });
-export type InventoryLedgerRow = z.infer<typeof InventoryLedgerRow>;
+export type InventoryStatementRow = z.infer<typeof InventoryStatementRow>;
 
-export const InventoryReport = z.object({
-  scope: z.enum(['PLATFORM', 'PARTNER']),
-  /** Whose shelf this is. */
+export const InventoryStatement = z.object({
+  holderKind: z.enum(['PLATFORM', 'CHANNEL_PARTNER', 'ENTERPRISE_TENANT', 'MANAGED_SUB_TENANT']),
+  /** Printed at the head of the statement: whose inventory this is. */
   holderName: z.string(),
   period: ReportingPeriod,
-  /** Every movement before the window, netted. Computed, never carried. */
+  /** Everything before the window, netted. Computed, never carried. */
   openingUnits: z.number(),
-  purchasedUnits: z.number(),
-  purchasedCostAed: z.string().nullable(),
-  soldUnits: z.number(),
-  /** opening + purchased − sold. What the window leaves on the shelf. */
+  totalInUnits: z.number(),
+  totalOutUnits: z.number(),
   closingUnits: z.number(),
-  purchases: z.array(InventoryLedgerRow),
-  sales: z.array(InventoryLedgerRow),
+  /**
+   * Movements folded into the opening balance because the window held more than
+   * one statement can show. The balances stay true; the earliest lines are not
+   * printed.
+   */
+  omittedRows: z.number(),
+  rows: z.array(InventoryStatementRow),
 });
-export type InventoryReport = z.infer<typeof InventoryReport>;
+export type InventoryStatement = z.infer<typeof InventoryStatement>;
 
 export const InventoryConsole = z.object({
   host: HostInventorySummary,

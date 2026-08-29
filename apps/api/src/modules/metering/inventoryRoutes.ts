@@ -13,7 +13,7 @@ import { requireContext, requirePermission, requirePlatform } from '../../http/c
 import { badRequest, notFound } from '../../lib/errors.js';
 import { loadHostInventory } from './inventory.js';
 import { parsePeriod } from './period.js';
-import { loadPartnerReport, loadPlatformReport } from './report.js';
+import { loadPlatformStatement, loadTenantStatement } from './report.js';
 
 /**
  * The wholesale half of the bundle lifecycle — SRS v2.8 §15.
@@ -169,17 +169,17 @@ export function registerInventoryRoutes(app: FastifyInstance) {
     },
   );
 
-  // --- The stock ledger, for the platform or for one of its partners -------
+  // --- The inventory statement ---------------------------------------------
   //
   // Two routes rather than a scope parameter, because "the platform's own
-  // movements" and "one partner's movements" are different authorisations
+  // movements" and "one account's movements" are different authorisations
   // wearing the same shape, and a mistyped id should 404 rather than silently
   // widen to everything.
   app.get(
     '/api/v1/admin/inventory/report',
     { preHandler: requirePlatform() },
     async (request, reply) => {
-      return reply.send(await loadPlatformReport(parsePeriod(request.query)));
+      return reply.send(await loadPlatformStatement(parsePeriod(request.query)));
     },
   );
 
@@ -188,7 +188,19 @@ export function registerInventoryRoutes(app: FastifyInstance) {
     { preHandler: requirePlatform() },
     async (request, reply) => {
       const { tenantId } = request.params as { tenantId: string };
-      return reply.send(await loadPartnerReport(tenantId, parsePeriod(request.query)));
+      return reply.send(await loadTenantStatement(tenantId, parsePeriod(request.query)));
+    },
+  );
+
+  // The account's own statement. Its own tenant and no other — the id is the
+  // caller's context, never a parameter.
+  app.get(
+    '/api/v1/billing/inventory/report',
+    { preHandler: requirePermission('billing.read') },
+    async (request, reply) => {
+      const ctx = requireContext(request);
+      if (!ctx.tenantId) throw notFound('Tenant');
+      return reply.send(await loadTenantStatement(ctx.tenantId, parsePeriod(request.query)));
     },
   );
 

@@ -391,10 +391,21 @@ export function Field({
   );
 }
 
-export const inputClass =
-  'w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm ' +
+/**
+ * Field chrome without a width, for a control sized by the row it sits in.
+ *
+ * Adding `w-auto` beside `inputClass` does not work and looks like it should:
+ * both widths land in the class list, neither is more specific, and which one
+ * wins is decided by the order Tailwind emits them rather than by the order
+ * they are written. A filter row full of full-width selects is what that looks
+ * like from the outside.
+ */
+export const inputBase =
+  'rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm ' +
   'focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 ' +
   'disabled:bg-slate-50 disabled:text-slate-500';
+
+export const inputClass = `w-full ${inputBase}`;
 
 export function Alert({
   kind = 'info',

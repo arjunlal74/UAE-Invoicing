@@ -1,51 +1,64 @@
-import type { InventoryReport, PaginatedResult, TenantSummary } from '@uae/contracts';
+import { TENANT_TYPE_LABELS } from '@uae/contracts';
+import type { InventoryStatement, PaginatedResult, TenantSummary, TenantType } from '@uae/contracts';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { InventoryReportView } from '../../components/InventoryReportView';
+import {
+  DEFAULT_PERIOD,
+  InventoryReportView,
+  periodQuery,
+  periodReady,
+  type PeriodChoice,
+} from '../../components/InventoryReportView';
 import { Alert, PageHeader, Spinner, cx, inputClass } from '../../components/ui';
 import { api } from '../../lib/api';
 
 /**
- * The data inventory report, host side.
+ * The data inventory statement, host side.
  *
- * The same page reads the platform's own ledger and any one channel partner's,
- * because a partner is the platform one level down: it buys the bundles the
- * host sells and sells slices to its own sub-tenants. Which is on screen is a
- * route — `/admin/inventory/report` for the platform, `/report/:tenantId` for a
- * partner — so a partner's report can be linked to and sent to them.
+ * The same page reads the platform's own movements and any one account's,
+ * because every tier of the hierarchy keeps the same statement: the platform
+ * buys and sells, a partner buys and allocates, a tenant buys or is allocated
+ * and then consumes. Which is on screen is a route — `/admin/inventory/report`
+ * for the platform, `/report/:tenantId` for an account — so any of them can be
+ * linked to and sent to the account it describes.
  */
+
+/** The order accounts are grouped in, following the hierarchy down. */
+const TIERS: TenantType[] = ['CHANNEL_PARTNER', 'ENTERPRISE_TENANT', 'MANAGED_SUB_TENANT', 'HOST'];
+
 export function AdminInventoryReportPage() {
   const { tenantId } = useParams<{ tenantId?: string }>();
   const navigate = useNavigate();
-  const [period, setPeriod] = useState('12');
+  const [period, setPeriod] = useState<PeriodChoice>(DEFAULT_PERIOD);
 
-  const { data: partners } = useQuery({
-    queryKey: ['admin-channel-partners'],
-    queryFn: () =>
-      api<PaginatedResult<TenantSummary>>(
-        '/api/v1/admin/tenants?tenantType=CHANNEL_PARTNER&pageSize=200',
-      ),
+  const { data: tenants } = useQuery({
+    queryKey: ['admin-tenants-for-report'],
+    queryFn: () => api<PaginatedResult<TenantSummary>>('/api/v1/admin/tenants?pageSize=500'),
   });
 
+  const query = periodQuery(period);
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ['admin-inventory-report', tenantId ?? 'platform', period],
+    queryKey: ['admin-inventory-report', tenantId ?? 'platform', query],
     queryFn: () =>
-      api<InventoryReport>(
+      api<InventoryStatement>(
         tenantId
-          ? `/api/v1/admin/inventory/report/${tenantId}?period=${period}`
-          : `/api/v1/admin/inventory/report?period=${period}`,
+          ? `/api/v1/admin/inventory/report/${tenantId}?${query}`
+          : `/api/v1/admin/inventory/report?${query}`,
       ),
-    // The window changes far more often than the scope, and blanking the whole
-    // report to re-render the same tables reads as a fault rather than a load.
+    enabled: periodReady(period),
+    // The window changes far more often than the account, and blanking a
+    // statement to redraw the same one reads as a fault rather than a load.
     placeholderData: (previous) => previous,
   });
+
+  const accounts = tenants?.items ?? [];
 
   const scopePicker = (
     <label className="flex items-center gap-2 text-sm text-slate-600">
       Inventory of
       <select
-        className={cx(inputClass, 'w-auto')}
+        className={cx(inputClass, 'w-auto max-w-xs')}
         value={tenantId ?? ''}
         onChange={(event) =>
           navigate(
@@ -56,11 +69,19 @@ export function AdminInventoryReportPage() {
         }
       >
         <option value="">This platform</option>
-        {(partners?.items ?? []).map((partner) => (
-          <option key={partner.id} value={partner.id}>
-            {partner.legalNameEn}
-          </option>
-        ))}
+        {TIERS.map((tier) => {
+          const inTier = accounts.filter((account) => account.tenantType === tier);
+          if (inTier.length === 0) return null;
+          return (
+            <optgroup key={tier} label={TENANT_TYPE_LABELS[tier]}>
+              {inTier.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.legalNameEn}
+                </option>
+              ))}
+            </optgroup>
+          );
+        })}
       </select>
     </label>
   );
@@ -69,31 +90,23 @@ export function AdminInventoryReportPage() {
     <div className="space-y-4">
       <PageHeader
         title="Data inventory report"
-        description="Units in and units out over a window: what was bought, what was sold on, and what the movement leaves on the shelf."
+        description="Every movement of units over a window, with the balance each one leaves behind — for this platform or for any account on it."
       />
 
       {error ? (
-        <Alert kind="danger" title="That report could not be read">
-          The account may not be a channel partner, or may no longer exist.
+        <Alert kind="danger" title="That statement could not be read">
+          The account may no longer exist.
         </Alert>
       ) : isLoading || !data ? (
-        <Spinner label="Loading report…" />
+        <Spinner label="Loading statement…" />
       ) : (
-        <>
-          {data.scope === 'PARTNER' && (
-            <Alert kind="info">
-              <strong>{data.holderName}</strong> — bundles this partner bought from the platform,
-              and the slices it sold on to its own sub-tenants.
-            </Alert>
-          )}
-          <InventoryReportView
-            report={data}
-            period={period}
-            onPeriod={setPeriod}
-            scopePicker={scopePicker}
-            isFetching={isFetching}
-          />
-        </>
+        <InventoryReportView
+          statement={data}
+          period={period}
+          onPeriod={setPeriod}
+          scopePicker={scopePicker}
+          isFetching={isFetching}
+        />
       )}
     </div>
   );

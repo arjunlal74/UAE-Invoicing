@@ -15,7 +15,7 @@ import { config } from '../../config.js';
 import { jsonb, withPlatformAccess } from '../../db/client.js';
 import { requireContext, requirePartner } from '../../http/context.js';
 import { parsePeriod } from '../metering/period.js';
-import { loadPartnerReport } from '../metering/report.js';
+import { loadTenantStatement } from '../metering/report.js';
 import { badRequest, forbidden, notFound } from '../../lib/errors.js';
 import { logger } from '../../logger.js';
 
@@ -117,18 +117,34 @@ export function registerPartnerRoutes(app: FastifyInstance) {
     return reply.send(overview);
   });
 
-  // --- The partner's own stock ledger --------------------------------------
+  // --- Inventory statements, the partner's own and its clients' ------------
   //
-  // The same report the host reads about this partner, served to the partner
-  // itself: what it bought from the platform and what it sold on. Anchored on
-  // the caller's own tenant, so a partner cannot read another's book by asking
-  // for it — there is nothing to ask with.
+  // The same statement the host reads about this partner, served to the partner
+  // itself: bundles bought from the platform and slices allocated out. It may
+  // also read one of its own sub-tenants' — that is its book of clients — but
+  // the parent check below is what makes "its own" mean anything, so a guessed
+  // id reads as not found rather than as somebody else's business.
   app.get(
     '/api/v1/partner/inventory/report',
     { preHandler: requirePartner() },
     async (request, reply) => {
       const ctx = requireContext(request);
-      return reply.send(await loadPartnerReport(partnerTenantId(ctx), parsePeriod(request.query)));
+      const partnerId = partnerTenantId(ctx);
+      const { tenantId } = request.query as { tenantId?: string };
+
+      if (tenantId && tenantId !== partnerId) {
+        const owned = await withPlatformAccess(
+          (tx) => tx<{ id: string }[]>`
+            SELECT id FROM tenants
+            WHERE id = ${tenantId} AND parent_tenant_id = ${partnerId}
+          `,
+        );
+        if (!owned[0]) throw notFound('Sub-tenant');
+      }
+
+      return reply.send(
+        await loadTenantStatement(tenantId ?? partnerId, parsePeriod(request.query)),
+      );
     },
   );
 
