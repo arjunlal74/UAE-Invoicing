@@ -40,6 +40,63 @@ const PERIODS = [
 
 const LOCKED_HINT = 'Locked. Unlock this provider before editing or retiring it.';
 
+/**
+ * How long before an accreditation lapses it starts reading as a warning.
+ *
+ * Two months, because renewing one is paperwork with a lead time and the point
+ * of the warning is to be early enough to act on. A contract signed with a
+ * provider whose accreditation has run out buys units that may not be filable.
+ */
+const EXPIRY_WARNING_DAYS = 60;
+
+type AccreditationState = 'none' | 'valid' | 'expiring' | 'expired';
+
+function accreditationState(validUntil: string | null): AccreditationState {
+  if (!validUntil) return 'none';
+  const days = Math.ceil(
+    (new Date(`${validUntil}T00:00:00`).getTime() - Date.now()) / 86_400_000,
+  );
+  if (days < 0) return 'expired';
+  return days <= EXPIRY_WARNING_DAYS ? 'expiring' : 'valid';
+}
+
+function daysUntil(validUntil: string): number {
+  return Math.ceil((new Date(`${validUntil}T00:00:00`).getTime() - Date.now()) / 86_400_000);
+}
+
+/** The date as the table and the detail sheet both draw it. */
+function Accreditation({ validUntil }: { validUntil: string | null }) {
+  const state = accreditationState(validUntil);
+  if (!validUntil || state === 'none') return <span className="text-slate-400">not recorded</span>;
+
+  const days = daysUntil(validUntil);
+  return (
+    <span
+      className={cx(
+        'inline-flex items-center gap-1.5 whitespace-nowrap',
+        state === 'expired' && 'font-medium text-danger-700',
+        state === 'expiring' && 'font-medium text-warn-700',
+        state === 'valid' && 'text-slate-700',
+      )}
+      title={
+        state === 'expired'
+          ? `Accreditation lapsed ${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} ago`
+          : `Accreditation valid for another ${days} day${days === 1 ? '' : 's'}`
+      }
+    >
+      {formatDate(validUntil)}
+      {state === 'expired' && (
+        <span className="rounded-full bg-danger-50 px-2 py-0.5 text-xs">expired</span>
+      )}
+      {state === 'expiring' && (
+        <span className="rounded-full bg-warn-50 px-2 py-0.5 text-xs">
+          {days === 0 ? 'today' : `${days}d`}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function AdminProvidersPage() {
   const queryClient = useQueryClient();
 
@@ -175,6 +232,7 @@ export function AdminProvidersPage() {
                 <tr>
                   <th className="px-4 py-2 font-medium">Provider</th>
                   <th className="px-4 py-2 font-medium">Accreditation</th>
+                  <th className="px-4 py-2 font-medium">Valid until</th>
                   <th className="px-4 py-2 text-right font-medium">Contracts</th>
                   <th className="px-4 py-2 text-right font-medium">Units</th>
                   <th className="px-4 py-2 font-medium">Last purchase</th>
@@ -198,6 +256,9 @@ export function AdminProvidersPage() {
                     </td>
                     <td className="px-4 py-2 font-mono text-xs text-slate-500">
                       {provider.accreditationReference ?? '—'}
+                    </td>
+                    <td className="px-4 py-2 text-xs">
+                      <Accreditation validUntil={provider.accreditationValidUntil} />
                     </td>
                     <td className="px-4 py-2 text-right tabular-nums text-slate-700">
                       {provider.contractCount}
@@ -378,6 +439,12 @@ function ViewProviderModal({
           <Detail label="Accreditation reference" mono>
             {provider.accreditationReference}
           </Detail>
+          <div>
+            <dt className="text-xs font-medium text-slate-700">Accreditation valid until</dt>
+            <dd className="mt-0.5 text-sm">
+              <Accreditation validUntil={provider.accreditationValidUntil} />
+            </dd>
+          </div>
           <Detail label="Usual rate (AED/unit)">
             {provider.defaultCostPerUnitAed
               ? Number(provider.defaultCostPerUnitAed).toFixed(4)
@@ -475,6 +542,7 @@ function ProviderFormModal({
   const [form, setForm] = useState({
     name: provider?.name ?? '',
     accreditationReference: provider?.accreditationReference ?? '',
+    accreditationValidUntil: provider?.accreditationValidUntil ?? '',
     contactName: provider?.contactName ?? '',
     contactEmail: provider?.contactEmail ?? '',
     contactPhone: provider?.contactPhone ?? '',
@@ -490,6 +558,7 @@ function ProviderFormModal({
       const body = {
         name: form.name.trim(),
         accreditationReference: form.accreditationReference.trim() || null,
+        accreditationValidUntil: form.accreditationValidUntil || null,
         contactName: form.contactName.trim() || null,
         contactEmail: form.contactEmail.trim() || null,
         contactPhone: form.contactPhone.trim() || null,
@@ -545,6 +614,17 @@ function ProviderFormModal({
               className={inputClass}
               value={form.accreditationReference}
               onChange={(e) => setForm({ ...form, accreditationReference: e.target.value })}
+            />
+          </Field>
+          <Field
+            label="Accreditation valid until"
+            hint="The day their entry lapses. Flagged in the list two months ahead."
+          >
+            <input
+              className={inputClass}
+              type="date"
+              value={form.accreditationValidUntil}
+              onChange={(e) => setForm({ ...form, accreditationValidUntil: e.target.value })}
             />
           </Field>
           <Field label="Billing contact">

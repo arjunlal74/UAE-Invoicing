@@ -28,6 +28,7 @@ interface ProviderRow {
   id: string;
   name: string;
   accreditation_reference: string | null;
+  accreditation_valid_until: Date | null;
   contact_name: string | null;
   contact_email: string | null;
   contact_phone: string | null;
@@ -50,6 +51,9 @@ function toSummary(row: ProviderRow): ProviderSummary {
     id: row.id,
     name: row.name,
     accreditationReference: row.accreditation_reference,
+    accreditationValidUntil: row.accreditation_valid_until
+      ? row.accreditation_valid_until.toISOString().slice(0, 10)
+      : null,
     contactName: row.contact_name,
     contactEmail: row.contact_email,
     contactPhone: row.contact_phone,
@@ -85,7 +89,8 @@ function toSummary(row: ProviderRow): ProviderSummary {
  * `$1`/`$2` are the period bounds; a null bound means open-ended on that side.
  */
 const PROVIDER_SELECT = `
-  v.id, v.name, v.accreditation_reference, v.contact_name, v.contact_email,
+  v.id, v.name, v.accreditation_reference, v.accreditation_valid_until,
+  v.contact_name, v.contact_email,
   v.contact_phone, v.website, v.is_active, v.is_locked, v.notes, v.created_at,
   v.default_cost_per_unit_aed::text AS default_cost_per_unit_aed,
   (SELECT count(*) FROM asp_bundle_procurements p
@@ -195,11 +200,13 @@ export function registerProviderRoutes(app: FastifyInstance) {
 
         const rows = await tx<{ id: string }[]>`
           INSERT INTO asp_providers (
-            name, accreditation_reference, contact_name, contact_email,
+            name, accreditation_reference, accreditation_valid_until,
+            contact_name, contact_email,
             contact_phone, website, default_cost_per_unit_aed, notes,
             created_by_user_id
           ) VALUES (
             ${body.name}, ${body.accreditationReference ?? null},
+            ${body.accreditationValidUntil ?? null},
             ${body.contactName ?? null}, ${body.contactEmail ?? null},
             ${body.contactPhone ?? null}, ${body.website ?? null},
             ${body.defaultCostPerUnitAed ?? null}, ${body.notes ?? null},
@@ -258,6 +265,11 @@ export function registerProviderRoutes(app: FastifyInstance) {
               body.accreditationReference === undefined
                 ? tx.unsafe('accreditation_reference')
                 : body.accreditationReference
+            },
+            accreditation_valid_until = ${
+              body.accreditationValidUntil === undefined
+                ? tx.unsafe('accreditation_valid_until')
+                : body.accreditationValidUntil
             },
             contact_name              = ${
               body.contactName === undefined ? tx.unsafe('contact_name') : body.contactName

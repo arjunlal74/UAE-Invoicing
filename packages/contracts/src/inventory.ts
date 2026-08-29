@@ -21,6 +21,12 @@ export const CreateProviderRequest = z.object({
   name: z.string().trim().min(2).max(120),
   /** The provider's entry on the MoF's published accreditation list. */
   accreditationReference: z.string().trim().max(100).nullable().optional(),
+  /** The day that entry lapses. Null when it has not been recorded. */
+  accreditationValidUntil: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .nullable()
+    .optional(),
   contactName: z.string().trim().max(150).nullable().optional(),
   contactEmail: z.string().trim().email().max(255).nullable().optional(),
   contactPhone: z.string().trim().max(50).nullable().optional(),
@@ -47,6 +53,12 @@ export const ProviderSummary = z.object({
   id: uuid,
   name: z.string(),
   accreditationReference: z.string().nullable(),
+  /**
+   * When the accreditation lapses. A provider past this date is still on file
+   * and still has contracts — what changes is that signing another one with
+   * them is a decision somebody should be making deliberately.
+   */
+  accreditationValidUntil: z.string().nullable(),
   contactName: z.string().nullable(),
   contactEmail: z.string().nullable(),
   contactPhone: z.string().nullable(),
