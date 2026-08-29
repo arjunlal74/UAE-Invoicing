@@ -186,6 +186,48 @@ export const UpdateTenantRequest = z.object({
   registeredAddress: AddressSchema.optional(),
 });
 
+// ---------------------------------------------------------------------------
+// The platform owner's own company
+// ---------------------------------------------------------------------------
+
+/**
+ * Who is running this platform. A tenant's identity is required before it can
+ * file; the host's is required before it can invoice anyone or put its name on
+ * the correspondence the system sends — but it is filled in after the software
+ * is installed, so every field here is optional and the record starts empty.
+ */
+export const UpdatePlatformCompanyRequest = z.object({
+  legalNameEn: z.string().trim().max(255).optional(),
+  legalNameAr: z.string().trim().max(255).optional(),
+  tradingName: z.string().trim().max(255).nullable().optional(),
+  trn: trn.nullable().optional(),
+  registeredAddress: AddressSchema.optional(),
+  contactEmail: z.string().trim().toLowerCase().email().max(255).nullable().optional(),
+  contactPhone: z.string().trim().max(50).nullable().optional(),
+  website: z.string().trim().max(255).nullable().optional(),
+});
+export type UpdatePlatformCompanyRequest = z.infer<typeof UpdatePlatformCompanyRequest>;
+
+export const PlatformCompany = z.object({
+  legalNameEn: z.string(),
+  legalNameAr: z.string(),
+  tradingName: z.string().nullable(),
+  trn: z.string().nullable(),
+  /** Null until someone fills it in: an emirate has no empty value to stand for
+   *  "not yet answered", and defaulting one would state an address nobody gave. */
+  registeredAddress: AddressSchema.nullable(),
+  contactEmail: z.string().nullable(),
+  contactPhone: z.string().nullable(),
+  website: z.string().nullable(),
+  /** The bytes are never sent with the record; they are served by their own URL. */
+  hasLogo: z.boolean(),
+  logoFileName: z.string().nullable(),
+  /** Changes whenever the logo does, so a cached image can be busted by it. */
+  logoUpdatedAt: z.string().nullable(),
+  updatedAt: z.string(),
+});
+export type PlatformCompany = z.infer<typeof PlatformCompany>;
+
 export const UpdateTenantStatusRequest = z.object({
   status: TenantStatus,
   /** Recorded on the audit trail — suspensions must be explicable later. */

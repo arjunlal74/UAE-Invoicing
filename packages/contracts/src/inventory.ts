@@ -193,6 +193,48 @@ export const ReportingPeriod = z.object({
 });
 export type ReportingPeriod = z.infer<typeof ReportingPeriod>;
 
+// ---------------------------------------------------------------------------
+// The data inventory report: units in, units out, over a window
+// ---------------------------------------------------------------------------
+
+/**
+ * One movement, either direction. Deliberately generic: the platform buying
+ * from a provider and a channel partner carving a slice for a sub-tenant are
+ * the same event seen from two levels of the same chain, and one shape lets one
+ * report and one page serve both.
+ */
+export const InventoryLedgerRow = z.object({
+  date: z.string(),
+  reference: z.string(),
+  counterparty: z.string(),
+  /** Whatever identifies the other side a second time: an accreditation
+   *  reference, the tier of the buyer, the contract a slice came out of. */
+  counterpartyDetail: z.string().nullable(),
+  units: z.number(),
+  /** Only the host's own purchases carry money; nothing records what a partner
+   *  charged a sub-tenant, and a zero there would state a fact nobody entered. */
+  costPerUnitAed: z.string().nullable(),
+  totalCostAed: z.string().nullable(),
+});
+export type InventoryLedgerRow = z.infer<typeof InventoryLedgerRow>;
+
+export const InventoryReport = z.object({
+  scope: z.enum(['PLATFORM', 'PARTNER']),
+  /** Whose shelf this is. */
+  holderName: z.string(),
+  period: ReportingPeriod,
+  /** Every movement before the window, netted. Computed, never carried. */
+  openingUnits: z.number(),
+  purchasedUnits: z.number(),
+  purchasedCostAed: z.string().nullable(),
+  soldUnits: z.number(),
+  /** opening + purchased − sold. What the window leaves on the shelf. */
+  closingUnits: z.number(),
+  purchases: z.array(InventoryLedgerRow),
+  sales: z.array(InventoryLedgerRow),
+});
+export type InventoryReport = z.infer<typeof InventoryReport>;
+
 export const InventoryConsole = z.object({
   host: HostInventorySummary,
   procurements: z.array(ProcurementSummary),

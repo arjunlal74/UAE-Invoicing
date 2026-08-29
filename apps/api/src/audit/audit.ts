@@ -78,7 +78,11 @@ export type AuditAction =
   | 'PROVIDER_UPDATED'
   | 'PROVIDER_RETIRED'
   | 'PROVIDER_LOCKED'
-  | 'PROVIDER_UNLOCKED';
+  | 'PROVIDER_UNLOCKED'
+  // --- The platform owner's own record ---------------------------------------
+  | 'PLATFORM_COMPANY_UPDATED'
+  | 'PLATFORM_LOGO_SET'
+  | 'PLATFORM_LOGO_CLEARED';
 
 export interface AuditEntry {
   action: AuditAction;

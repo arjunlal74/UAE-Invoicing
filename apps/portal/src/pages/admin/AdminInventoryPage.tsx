@@ -1,7 +1,7 @@
 import { TENANT_TYPE_LABELS, type InventoryConsole, type ProviderSummary } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -159,7 +159,20 @@ export function AdminInventoryPage() {
               <tbody className="divide-y divide-slate-100">
                 {data.tiers.map((tier) => (
                   <tr key={tier.bundleId} className={cx(tier.belowBuffer && 'bg-danger-50')}>
-                    <td className="py-2 text-slate-800">{tier.tenantName}</td>
+                    <td className="py-2 text-slate-800">
+                      {/* A partner is the only tier with a ledger of its own to
+                          read: it buys from this platform and sells on. */}
+                      {tier.tier === 'CHANNEL_PARTNER' && tier.tenantId ? (
+                        <Link
+                          to={`/admin/inventory/report/${tier.tenantId}`}
+                          className="font-medium text-brand-600 underline"
+                        >
+                          {tier.tenantName}
+                        </Link>
+                      ) : (
+                        tier.tenantName
+                      )}
+                    </td>
                     <td className="py-2 text-xs text-slate-500">
                       {TENANT_TYPE_LABELS[tier.tier]}
                     </td>

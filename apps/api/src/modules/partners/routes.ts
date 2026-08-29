@@ -14,6 +14,8 @@ import { queueActivation } from '../../mail/outbox.js';
 import { config } from '../../config.js';
 import { jsonb, withPlatformAccess } from '../../db/client.js';
 import { requireContext, requirePartner } from '../../http/context.js';
+import { parsePeriod } from '../metering/period.js';
+import { loadPartnerReport } from '../metering/report.js';
 import { badRequest, forbidden, notFound } from '../../lib/errors.js';
 import { logger } from '../../logger.js';
 
@@ -114,6 +116,21 @@ export function registerPartnerRoutes(app: FastifyInstance) {
     };
     return reply.send(overview);
   });
+
+  // --- The partner's own stock ledger --------------------------------------
+  //
+  // The same report the host reads about this partner, served to the partner
+  // itself: what it bought from the platform and what it sold on. Anchored on
+  // the caller's own tenant, so a partner cannot read another's book by asking
+  // for it — there is nothing to ask with.
+  app.get(
+    '/api/v1/partner/inventory/report',
+    { preHandler: requirePartner() },
+    async (request, reply) => {
+      const ctx = requireContext(request);
+      return reply.send(await loadPartnerReport(partnerTenantId(ctx), parsePeriod(request.query)));
+    },
+  );
 
   // --- The partner's sub-tenants -------------------------------------------
   app.get(

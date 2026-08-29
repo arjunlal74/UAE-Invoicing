@@ -13,6 +13,9 @@ import { AdminInventoryPage } from './pages/admin/AdminInventoryPage';
 import { AdminProvidersPage } from './pages/admin/AdminProvidersPage';
 import { AdminBuyDataPage } from './pages/admin/AdminBuyDataPage';
 import { AdminSellDataPage } from './pages/admin/AdminSellDataPage';
+import { AdminInventoryReportPage } from './pages/admin/AdminInventoryReportPage';
+import { AdminCompanyPage } from './pages/admin/AdminCompanyPage';
+import { PartnerInventoryPage } from './pages/partner/PartnerInventoryPage';
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
 import { AdminMailPage } from './pages/admin/AdminMailPage';
 import { AdminStaffPage } from './pages/admin/AdminStaffPage';
@@ -296,6 +299,7 @@ export function App() {
           }
         >
           <Route path="/partner/sub-tenants" element={<PartnerSubTenantsPage />} />
+          <Route path="/partner/inventory" element={<PartnerInventoryPage />} />
         </Route>
 
         {/* Platform admin */}
@@ -307,11 +311,19 @@ export function App() {
           }
         >
           <Route path="/admin" element={<AdminDashboardPage />} />
+          <Route path="/admin/company" element={<AdminCompanyPage />} />
           <Route path="/admin/tenants" element={<AdminTenantsPage />} />
           <Route path="/admin/tenants/:tenantId" element={<AdminTenantDetailPage />} />
           <Route path="/admin/transmissions" element={<AdminTransmissionsPage />} />
           <Route path="/admin/inventory" element={<AdminInventoryPage />} />
           <Route path="/admin/inventory/providers" element={<AdminProvidersPage />} />
+          <Route path="/admin/inventory/report" element={<AdminInventoryReportPage />} />
+          {/* A partner's ledger, host side. Addressed, so it can be linked to
+              from the tier table and sent to the partner it describes. */}
+          <Route
+            path="/admin/inventory/report/:tenantId"
+            element={<AdminInventoryReportPage />}
+          />
           <Route path="/admin/inventory/buy" element={<AdminBuyDataPage />} />
           <Route path="/admin/inventory/sell" element={<AdminSellDataPage />} />
           {/* The buffer is one field. It stays a dialog over the console it

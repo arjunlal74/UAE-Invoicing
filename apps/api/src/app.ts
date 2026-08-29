@@ -8,6 +8,7 @@ import { registerErrorHandler } from './lib/errors.js';
 import { logger } from './logger.js';
 import { registerAdminDashboardRoutes } from './modules/admin/dashboard.js';
 import { registerAdminRoutes } from './modules/admin/routes.js';
+import { registerPlatformCompanyRoutes } from './modules/admin/company.js';
 import { registerApiKeyRoutes } from './modules/apikeys/routes.js';
 import { registerApRoutes } from './modules/ap/routes.js';
 import { registerArBuilderRoutes } from './modules/ar/builder.js';
@@ -120,6 +121,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   registerMailRoutes(app);
   registerAdminRoutes(app);
+  registerPlatformCompanyRoutes(app);
   registerAdminDashboardRoutes(app);
   registerWebhookRoutes(app);
 

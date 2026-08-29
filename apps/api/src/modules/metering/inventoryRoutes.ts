@@ -12,6 +12,8 @@ import { withPlatformAccess, withTenant } from '../../db/client.js';
 import { requireContext, requirePermission, requirePlatform } from '../../http/context.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { loadHostInventory } from './inventory.js';
+import { parsePeriod } from './period.js';
+import { loadPartnerReport, loadPlatformReport } from './report.js';
 
 /**
  * The wholesale half of the bundle lifecycle — SRS v2.8 §15.
@@ -164,6 +166,29 @@ export function registerInventoryRoutes(app: FastifyInstance) {
       });
 
       return reply.status(201).send(toProcurementSummary(row));
+    },
+  );
+
+  // --- The stock ledger, for the platform or for one of its partners -------
+  //
+  // Two routes rather than a scope parameter, because "the platform's own
+  // movements" and "one partner's movements" are different authorisations
+  // wearing the same shape, and a mistyped id should 404 rather than silently
+  // widen to everything.
+  app.get(
+    '/api/v1/admin/inventory/report',
+    { preHandler: requirePlatform() },
+    async (request, reply) => {
+      return reply.send(await loadPlatformReport(parsePeriod(request.query)));
+    },
+  );
+
+  app.get(
+    '/api/v1/admin/inventory/report/:tenantId',
+    { preHandler: requirePlatform() },
+    async (request, reply) => {
+      const { tenantId } = request.params as { tenantId: string };
+      return reply.send(await loadPartnerReport(tenantId, parsePeriod(request.query)));
     },
   );
 

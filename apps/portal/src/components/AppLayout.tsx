@@ -100,6 +100,8 @@ const MODULES: Module[] = [
 const ADMIN_NAV: NavItem[] = [
   // Exact matching, or every /admin/* route would light this up as well.
   { to: '/admin', label: 'Dashboard', end: true },
+  // The platform's own identity, ahead of everyone else's.
+  { to: '/admin/company', label: 'Company' },
   { to: '/admin/tenants', label: 'Tenants' },
   { to: '/admin/transmissions', label: 'Transmissions' },
   {
@@ -111,6 +113,7 @@ const ADMIN_NAV: NavItem[] = [
     // linked to and closed with the browser's back button.
     children: [
       { to: '/admin/inventory', label: 'Overview', end: true },
+      { to: '/admin/inventory/report', label: 'Report' },
       { to: '/admin/inventory/buffer', label: 'Minimum buffer' },
       { to: '/admin/inventory/providers', label: 'Providers' },
       { to: '/admin/inventory/buy', label: 'Buy data' },
@@ -122,7 +125,10 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/mail', label: 'Mail' },
 ];
 
-const PARTNER_NAV: NavItem[] = [{ to: '/partner/sub-tenants', label: 'Sub-tenants' }];
+const PARTNER_NAV: NavItem[] = [
+  { to: '/partner/sub-tenants', label: 'Sub-tenants' },
+  { to: '/partner/inventory', label: 'Data inventory' },
+];
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   cx(
