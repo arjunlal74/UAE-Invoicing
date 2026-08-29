@@ -21,6 +21,12 @@ export const CreateProviderRequest = z.object({
   name: z.string().trim().min(2).max(120),
   /** The provider's entry on the MoF's published accreditation list. */
   accreditationReference: z.string().trim().max(100).nullable().optional(),
+  /** The day that entry took effect. Null when it has not been recorded. */
+  accreditationFrom: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .nullable()
+    .optional(),
   /** The day that entry lapses. Null when it has not been recorded. */
   accreditationValidUntil: z
     .string()
@@ -53,6 +59,12 @@ export const ProviderSummary = z.object({
   id: uuid,
   name: z.string(),
   accreditationReference: z.string().nullable(),
+  /**
+   * When the accreditation took effect. Kept beside its expiry because the pair
+   * answers a question the expiry alone cannot: whether this provider was
+   * accredited on the day a given contract was signed.
+   */
+  accreditationFrom: z.string().nullable(),
   /**
    * When the accreditation lapses. A provider past this date is still on file
    * and still has contracts — what changes is that signing another one with

@@ -232,6 +232,7 @@ export function AdminProvidersPage() {
                 <tr>
                   <th className="px-4 py-2 font-medium">Provider</th>
                   <th className="px-4 py-2 font-medium">Accreditation</th>
+                  <th className="px-4 py-2 font-medium">Accredited from</th>
                   <th className="px-4 py-2 font-medium">Valid until</th>
                   <th className="px-4 py-2 text-right font-medium">Contracts</th>
                   <th className="px-4 py-2 text-right font-medium">Units</th>
@@ -256,6 +257,13 @@ export function AdminProvidersPage() {
                     </td>
                     <td className="px-4 py-2 font-mono text-xs text-slate-500">
                       {provider.accreditationReference ?? '—'}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2 text-xs text-slate-600">
+                      {provider.accreditationFrom ? (
+                        formatDate(provider.accreditationFrom)
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-2 text-xs">
                       <Accreditation validUntil={provider.accreditationValidUntil} />
@@ -439,6 +447,9 @@ function ViewProviderModal({
           <Detail label="Accreditation reference" mono>
             {provider.accreditationReference}
           </Detail>
+          <Detail label="Accredited from">
+            {provider.accreditationFrom ? formatDate(provider.accreditationFrom) : null}
+          </Detail>
           <div>
             <dt className="text-xs font-medium text-slate-700">Accreditation valid until</dt>
             <dd className="mt-0.5 text-sm">
@@ -542,6 +553,7 @@ function ProviderFormModal({
   const [form, setForm] = useState({
     name: provider?.name ?? '',
     accreditationReference: provider?.accreditationReference ?? '',
+    accreditationFrom: provider?.accreditationFrom ?? '',
     accreditationValidUntil: provider?.accreditationValidUntil ?? '',
     contactName: provider?.contactName ?? '',
     contactEmail: provider?.contactEmail ?? '',
@@ -558,6 +570,7 @@ function ProviderFormModal({
       const body = {
         name: form.name.trim(),
         accreditationReference: form.accreditationReference.trim() || null,
+        accreditationFrom: form.accreditationFrom || null,
         accreditationValidUntil: form.accreditationValidUntil || null,
         contactName: form.contactName.trim() || null,
         contactEmail: form.contactEmail.trim() || null,
@@ -616,6 +629,15 @@ function ProviderFormModal({
               onChange={(e) => setForm({ ...form, accreditationReference: e.target.value })}
             />
           </Field>
+          <Field label="Accredited from" hint="The day their entry took effect.">
+            <input
+              className={inputClass}
+              type="date"
+              value={form.accreditationFrom}
+              max={form.accreditationValidUntil || undefined}
+              onChange={(e) => setForm({ ...form, accreditationFrom: e.target.value })}
+            />
+          </Field>
           <Field
             label="Accreditation valid until"
             hint="The day their entry lapses. Flagged in the list two months ahead."
@@ -624,6 +646,7 @@ function ProviderFormModal({
               className={inputClass}
               type="date"
               value={form.accreditationValidUntil}
+              min={form.accreditationFrom || undefined}
               onChange={(e) => setForm({ ...form, accreditationValidUntil: e.target.value })}
             />
           </Field>

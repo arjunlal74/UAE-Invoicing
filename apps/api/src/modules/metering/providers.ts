@@ -28,6 +28,7 @@ interface ProviderRow {
   id: string;
   name: string;
   accreditation_reference: string | null;
+  accreditation_from: Date | null;
   accreditation_valid_until: Date | null;
   contact_name: string | null;
   contact_email: string | null;
@@ -51,6 +52,9 @@ function toSummary(row: ProviderRow): ProviderSummary {
     id: row.id,
     name: row.name,
     accreditationReference: row.accreditation_reference,
+    accreditationFrom: row.accreditation_from
+      ? row.accreditation_from.toISOString().slice(0, 10)
+      : null,
     accreditationValidUntil: row.accreditation_valid_until
       ? row.accreditation_valid_until.toISOString().slice(0, 10)
       : null,
@@ -89,7 +93,8 @@ function toSummary(row: ProviderRow): ProviderSummary {
  * `$1`/`$2` are the period bounds; a null bound means open-ended on that side.
  */
 const PROVIDER_SELECT = `
-  v.id, v.name, v.accreditation_reference, v.accreditation_valid_until,
+  v.id, v.name, v.accreditation_reference,
+  v.accreditation_from, v.accreditation_valid_until,
   v.contact_name, v.contact_email,
   v.contact_phone, v.website, v.is_active, v.is_locked, v.notes, v.created_at,
   v.default_cost_per_unit_aed::text AS default_cost_per_unit_aed,
@@ -125,6 +130,23 @@ const PROVIDER_SELECT = `
  * the lock is that confirmed details stop drifting whatever the caller is —
  * the portal, a script, or someone with a token and curl.
  */
+function isoDay(date: Date | null): string | null {
+  return date ? date.toISOString().slice(0, 10) : null;
+}
+
+/**
+ * An accreditation cannot lapse before it starts.
+ *
+ * The table carries the same rule as a CHECK; this is here so the answer is a
+ * sentence rather than a constraint name, which is what the operator who typed
+ * the dates the wrong way round needs to read.
+ */
+function assertAccreditationOrdered(from?: string | null, until?: string | null): void {
+  if (from && until && until < from) {
+    throw badRequest('An accreditation cannot expire before it starts.');
+  }
+}
+
 export function isUnlockOnly(body: UpdateProviderRequest): boolean {
   const keys = Object.keys(body);
   return keys.length === 1 && keys[0] === 'isLocked' && body.isLocked === false;
@@ -185,6 +207,7 @@ export function registerProviderRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const ctx = requireContext(request);
       const body = CreateProviderRequest.parse(request.body);
+      assertAccreditationOrdered(body.accreditationFrom, body.accreditationValidUntil);
 
       const id = await withPlatformAccess(async (tx) => {
         // Checked case-insensitively, because the whole point of the master is
@@ -200,13 +223,14 @@ export function registerProviderRoutes(app: FastifyInstance) {
 
         const rows = await tx<{ id: string }[]>`
           INSERT INTO asp_providers (
-            name, accreditation_reference, accreditation_valid_until,
+            name, accreditation_reference,
+            accreditation_from, accreditation_valid_until,
             contact_name, contact_email,
             contact_phone, website, default_cost_per_unit_aed, notes,
             created_by_user_id
           ) VALUES (
             ${body.name}, ${body.accreditationReference ?? null},
-            ${body.accreditationValidUntil ?? null},
+            ${body.accreditationFrom ?? null}, ${body.accreditationValidUntil ?? null},
             ${body.contactName ?? null}, ${body.contactEmail ?? null},
             ${body.contactPhone ?? null}, ${body.website ?? null},
             ${body.defaultCostPerUnitAed ?? null}, ${body.notes ?? null},
@@ -240,6 +264,17 @@ export function registerProviderRoutes(app: FastifyInstance) {
 
       const before = await loadOne(id, parsePeriod({}));
 
+      // Checked against the merged record, not the patch: sending only a new
+      // start date must still be judged against the expiry already on file.
+      assertAccreditationOrdered(
+        body.accreditationFrom === undefined
+          ? isoDay(before.accreditation_from)
+          : body.accreditationFrom,
+        body.accreditationValidUntil === undefined
+          ? isoDay(before.accreditation_valid_until)
+          : body.accreditationValidUntil,
+      );
+
       if (before.is_locked && !isUnlockOnly(body)) {
         throw badRequest(`"${before.name}" is locked. Unlock it before editing or retiring it.`);
       }
@@ -265,6 +300,11 @@ export function registerProviderRoutes(app: FastifyInstance) {
               body.accreditationReference === undefined
                 ? tx.unsafe('accreditation_reference')
                 : body.accreditationReference
+            },
+            accreditation_from        = ${
+              body.accreditationFrom === undefined
+                ? tx.unsafe('accreditation_from')
+                : body.accreditationFrom
             },
             accreditation_valid_until = ${
               body.accreditationValidUntil === undefined
