@@ -9,6 +9,7 @@ import {
 } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -40,10 +41,16 @@ import { ApiError, api } from '../../lib/api';
  */
 export function AdminInventoryPage() {
   const queryClient = useQueryClient();
-  const [registering, setRegistering] = useState(false);
-  const [editingBuffer, setEditingBuffer] = useState(false);
-  const [managingProviders, setManagingProviders] = useState(false);
-  const [selling, setSelling] = useState(false);
+
+  // Which dialog is open is a route, not state: the ribbon above the page owns
+  // these actions now, and a NavLink can only point at a URL.
+  const { action } = useParams<{ action?: string }>();
+  const navigate = useNavigate();
+  const close = () => navigate('/admin/inventory');
+  const done = () => {
+    close();
+    queryClient.invalidateQueries({ queryKey: ['admin-inventory'] });
+  };
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-inventory'],
@@ -64,7 +71,7 @@ export function AdminInventoryPage() {
   const { data: tenants } = useQuery({
     queryKey: ['admin-tenants-for-sale'],
     queryFn: () => api<PaginatedResult<TenantSummary>>('/api/v1/admin/tenants?pageSize=200'),
-    enabled: selling,
+    enabled: action === 'sell',
   });
 
   const activeProviders = (providers?.items ?? []).filter((p) => p.isActive);
@@ -79,35 +86,6 @@ export function AdminInventoryPage() {
       <PageHeader
         title="Data bundle inventory"
         description="Wholesale procurement, platform stock and every account's remaining balance."
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={() => setManagingProviders(true)}>Providers</Button>
-            <Button onClick={() => setEditingBuffer(true)}>Minimum buffer</Button>
-            <Button
-              disabled={host.currentStockUnits <= 0}
-              title={
-                host.currentStockUnits <= 0
-                  ? 'Register a provider purchase before selling units'
-                  : undefined
-              }
-              onClick={() => setSelling(true)}
-            >
-              Sell bundle
-            </Button>
-            <Button
-              variant="primary"
-              disabled={activeProviders.length === 0}
-              title={
-                activeProviders.length === 0
-                  ? 'Add an accredited provider before registering a purchase'
-                  : undefined
-              }
-              onClick={() => setRegistering(true)}
-            >
-              Register purchase
-            </Button>
-          </div>
-        }
       />
 
       {host.belowBuffer && (
@@ -176,7 +154,7 @@ export function AdminInventoryPage() {
         {data.tiers.length === 0 ? (
           <EmptyState
             title="No bundles issued"
-            description="Register a provider purchase, then sell bundles to tenants and partners with the button above."
+            description="Register a provider purchase from Buy data above, then sell bundles to tenants and partners."
           />
         ) : (
           <div className="overflow-x-auto">
@@ -286,34 +264,24 @@ export function AdminInventoryPage() {
         )}
       </Card>
 
-      {registering && (
-        <RegisterPurchaseModal
-          providers={activeProviders}
-          onClose={() => setRegistering(false)}
-          onDone={() => {
-            setRegistering(false);
-            queryClient.invalidateQueries({ queryKey: ['admin-inventory'] });
-          }}
-        />
+      {action === 'buy' && (
+        <RegisterPurchaseModal providers={activeProviders} onClose={close} onDone={done} />
       )}
 
-      {selling && (
+      {action === 'sell' && (
         <SellBundleModal
           tenants={tenants?.items ?? []}
           procurements={data.procurements}
           stockUnits={host.currentStockUnits}
-          onClose={() => setSelling(false)}
-          onDone={() => {
-            setSelling(false);
-            queryClient.invalidateQueries({ queryKey: ['admin-inventory'] });
-          }}
+          onClose={close}
+          onDone={done}
         />
       )}
 
-      {managingProviders && (
+      {action === 'providers' && (
         <ProvidersModal
           fallback={providers?.items ?? []}
-          onClose={() => setManagingProviders(false)}
+          onClose={close}
           onChanged={() => {
             queryClient.invalidateQueries({ queryKey: ['asp-providers'] });
             queryClient.invalidateQueries({ queryKey: ['admin-inventory'] });
@@ -321,15 +289,8 @@ export function AdminInventoryPage() {
         />
       )}
 
-      {editingBuffer && (
-        <BufferModal
-          current={host.minimumBufferUnits}
-          onClose={() => setEditingBuffer(false)}
-          onDone={() => {
-            setEditingBuffer(false);
-            queryClient.invalidateQueries({ queryKey: ['admin-inventory'] });
-          }}
-        />
+      {action === 'buffer' && (
+        <BufferModal current={host.minimumBufferUnits} onClose={close} onDone={done} />
       )}
     </div>
   );
@@ -436,8 +397,39 @@ function RegisterPurchaseModal({
   });
 
   return (
-    <Modal title="Register a provider purchase" onClose={onClose}>
+    <Modal
+      title="Register a provider purchase"
+      onClose={onClose}
+      width="lg"
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            variant="primary"
+            disabled={
+              !form.aspProviderId ||
+              !form.contractReference.trim() ||
+              units < 1 ||
+              total <= 0 ||
+              create.isPending
+            }
+            onClick={() => create.mutate()}
+          >
+            {create.isPending ? 'Registering…' : 'Register purchase'}
+          </Button>
+        </>
+      }
+    >
       <div className="space-y-4">
+        {/* The page says the same thing, but this dialog is now reachable
+            straight from the ribbon and covers it. */}
+        {providers.length === 0 && (
+          <Alert kind="info" title="No accredited provider on file">
+            A purchase is registered against a provider, so add one from <strong>Providers</strong>{' '}
+            in the menu above before registering a contract.
+          </Alert>
+        )}
+
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Provider" hint="From the accredited provider list.">
             <select
@@ -471,20 +463,8 @@ function RegisterPurchaseModal({
             />
           </Field>
           <Field
-            label="Total cost (AED)"
-            hint="What the provider invoiced. This is the figure that is stored."
-          >
-            <input
-              className={inputClass}
-              inputMode="decimal"
-              value={form.totalCostAed}
-              onChange={(e) => setTotal(e.target.value)}
-              placeholder="85000.00"
-            />
-          </Field>
-          <Field
             label="Cost per unit (AED)"
-            hint="Derived from the total. Type here instead and the total is filled in."
+            hint="Type either this or the total — the other is filled in."
           >
             <input
               className={inputClass}
@@ -492,6 +472,18 @@ function RegisterPurchaseModal({
               value={form.costPerUnitAed}
               onChange={(e) => setPerUnit(e.target.value)}
               placeholder="0.0850"
+            />
+          </Field>
+          <Field
+            label="Total cost (AED)"
+            hint="What the provider invoiced. This is what is stored."
+          >
+            <input
+              className={inputClass}
+              inputMode="decimal"
+              value={form.totalCostAed}
+              onChange={(e) => setTotal(e.target.value)}
+              placeholder="85000.00"
             />
           </Field>
           <Field label="Expiry" hint="Leave blank if the units do not lapse.">
@@ -535,23 +527,6 @@ function RegisterPurchaseModal({
               : 'That purchase could not be registered.'}
           </Alert>
         )}
-
-        <div className="flex justify-end gap-2">
-          <Button onClick={onClose}>Cancel</Button>
-          <Button
-            variant="primary"
-            disabled={
-              !form.aspProviderId ||
-              !form.contractReference.trim() ||
-              units < 1 ||
-              total <= 0 ||
-              create.isPending
-            }
-            onClick={() => create.mutate()}
-          >
-            {create.isPending ? 'Registering…' : 'Register purchase'}
-          </Button>
-        </div>
       </div>
     </Modal>
   );

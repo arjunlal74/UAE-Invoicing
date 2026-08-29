@@ -595,7 +595,10 @@ export function Modal({
             ×
           </button>
         </header>
-        <div className="max-h-[70vh] overflow-y-auto p-4">{children}</div>
+        {/* Take the whole viewport bar the backdrop padding and this panel's
+            own header and footer, so a form scrolls internally only once it
+            genuinely cannot fit on the screen. */}
+        <div className="max-h-[calc(100vh-11rem)] overflow-y-auto p-4">{children}</div>
         {footer && (
           <footer className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
             {footer}

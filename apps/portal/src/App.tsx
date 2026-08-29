@@ -308,6 +308,9 @@ export function App() {
           <Route path="/admin/tenants/:tenantId" element={<AdminTenantDetailPage />} />
           <Route path="/admin/transmissions" element={<AdminTransmissionsPage />} />
           <Route path="/admin/inventory" element={<AdminInventoryPage />} />
+          {/* The console's actions are dialogs over the same page, addressed so
+              the ribbon can link to them. */}
+          <Route path="/admin/inventory/:action" element={<AdminInventoryPage />} />
           <Route path="/admin/audit" element={<AdminAuditPage />} />
           <Route path="/admin/staff" element={<AdminStaffPage />} />
           <Route path="/admin/mail" element={<AdminMailPage />} />

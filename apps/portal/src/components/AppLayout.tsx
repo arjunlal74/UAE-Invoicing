@@ -10,6 +10,8 @@ interface NavItem {
   /** Only a section's own landing page needs exact matching. */
   end?: boolean;
   needs?: Parameters<typeof can>[1];
+  /** A second ribbon shown while this section is open. */
+  children?: NavItem[];
 }
 
 /**
@@ -100,7 +102,20 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin', label: 'Dashboard', end: true },
   { to: '/admin/tenants', label: 'Tenants' },
   { to: '/admin/transmissions', label: 'Transmissions' },
-  { to: '/admin/inventory', label: 'Data inventory' },
+  {
+    to: '/admin/inventory',
+    label: 'Data inventory',
+    // Each of these opens a dialog rather than a page, but they are routed all
+    // the same: a row of buttons on the page competed with the console's own
+    // figures for the top of the screen, and a URL per action means one can be
+    // linked to and closed with the browser's back button.
+    children: [
+      { to: '/admin/inventory/buffer', label: 'Minimum buffer' },
+      { to: '/admin/inventory/providers', label: 'Providers' },
+      { to: '/admin/inventory/buy', label: 'Buy data' },
+      { to: '/admin/inventory/sell', label: 'Sell data' },
+    ],
+  },
   { to: '/admin/audit', label: 'Audit log' },
   { to: '/admin/staff', label: 'Staff' },
   { to: '/admin/mail', label: 'Mail' },
@@ -133,6 +148,17 @@ export function AppLayout() {
   // Fall back to the first module the user can see rather than to a fixed one:
   // an auditor has no AR overview to land on.
   const activeModule = modules.find((m) => m.match(pathname)) ?? modules[0];
+
+  // The admin console is single-purpose apart from the inventory section, which
+  // carries its own actions; a merchant's second row is their active module's.
+  const adminSection = platform
+    ? ADMIN_NAV.find((item) => item.children && pathname.startsWith(item.to))
+    : undefined;
+
+  const subNav =
+    merchant && activeModule && activeModule.items.length > 1
+      ? activeModule.items
+      : adminSection?.children;
 
   const signOut = async () => {
     // Best effort: the server-side revoke matters, but a network failure must
@@ -224,12 +250,11 @@ export function AppLayout() {
           </div>
         </div>
 
-        {/* The active module's own menu. Only merchants have one — the admin and
-            partner consoles are single-purpose. */}
-        {merchant && activeModule && activeModule.items.length > 1 && (
+        {/* The open section's own menu, under the row that got you here. */}
+        {subNav && (
           <div className="border-t border-white/10 bg-brand-800/40">
             <div className="mx-auto flex max-w-[1600px] items-center gap-1 px-4 py-1.5">
-              {activeModule.items.map((item) => (
+              {subNav.map((item) => (
                 <NavLink key={item.to} to={item.to} end={item.end} className={linkClass}>
                   {item.label}
                 </NavLink>
