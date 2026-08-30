@@ -40,27 +40,30 @@ export function AdminTenantsPage() {
   const [statusFilter, setStatusFilter] = useState(params.get('status') ?? '');
   const [typeFilter, setTypeFilter] = useState('');
   const [aspFilter, setAspFilter] = useState(params.get('aspStatus') ?? '');
+  // A–Z by default: newest-first was the arrival order, which stops meaning
+  // anything once the list is longer than a screen.
+  const [order, setOrder] = useState<'asc' | 'desc'>('asc');
+  const ascending = order === 'asc';
   const [creating, setCreating] = useState(false);
   const [viewing, setViewing] = useState<TenantSummary | null>(null);
   const navigate = useNavigate();
 
+  // The files come out in the order the screen is in — a printed directory
+  // that sorted differently from the list it was printed from would be read
+  // as a different list.
   const exportQuery = queryString({
     q: search,
     status: statusFilter,
     tenantType: typeFilter,
     aspStatus: aspFilter,
+    order,
   });
 
   const { data, isLoading } = useQuery({
-    queryKey: ['admin-tenants', search, statusFilter, typeFilter, aspFilter],
+    queryKey: ['admin-tenants', search, statusFilter, typeFilter, aspFilter, order],
     queryFn: () =>
       api<PaginatedResult<TenantSummary>>(
-        `/api/v1/admin/tenants${queryString({
-          q: search,
-          status: statusFilter,
-          tenantType: typeFilter,
-          aspStatus: aspFilter,
-        })}`,
+        `/api/v1/admin/tenants${exportQuery}`,
       ),
   });
 
@@ -136,7 +139,22 @@ export function AdminTenantsPage() {
           <table className="w-full text-sm">
             <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
               <tr>
-                <th className="px-4 py-2 font-medium">Company</th>
+                {/* The one column worth sorting: it is what the list is
+                    searched by and read by. A whole sortable grid would be
+                    more machinery than four visible columns of status need. */}
+                <th className="px-4 py-2 font-medium" aria-sort={ascending ? 'ascending' : 'descending'}>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 font-medium uppercase tracking-wide hover:text-slate-900"
+                    onClick={() => setOrder(ascending ? 'desc' : 'asc')}
+                    title={ascending ? 'Sorted A–Z. Click for Z–A.' : 'Sorted Z–A. Click for A–Z.'}
+                  >
+                    Company
+                    <span aria-hidden="true" className="text-slate-400">
+                      {ascending ? '▲' : '▼'}
+                    </span>
+                  </button>
+                </th>
                 <th className="px-4 py-2 font-medium">Tier</th>
                 <th className="px-4 py-2 font-medium">TRN</th>
                 <th className="px-4 py-2 font-medium">Account</th>

@@ -87,6 +87,8 @@ interface TenantListFilters {
    * supposed to have done.
    */
   aspStatus?: string;
+  /** Company name, A–Z by default. Anything else is ignored rather than trusted. */
+  order?: string;
 }
 
 /**
@@ -123,7 +125,14 @@ async function listTenants(query: TenantListFilters) {
                OR (${query.aspStatus ?? null} = 'NOT_LIVE'
                    AND c.status IS NOT NULL AND c.status::text <> 'ACTIVE')
                OR c.status::text = ${query.aspStatus ?? null})
-        ORDER BY t.created_at DESC
+        -- By name, because that is how the list is searched and read. Newest
+        -- first was the arrival order, which tells a reader nothing once there
+        -- are more tenants than fit on a screen.
+        --
+        -- The direction is the one thing the caller chooses, and it is compared
+        -- rather than interpolated: nothing the caller sends reaches the SQL.
+        ORDER BY t.legal_name_en ${query.order === 'desc' ? tx.unsafe('DESC') : tx.unsafe('ASC')},
+                 t.created_at DESC
       `,
   );
 }
@@ -135,6 +144,7 @@ function filterLabel(query: TenantListFilters): string {
   if (query.status) parts.push(`status ${query.status.toLowerCase()}`);
   if (query.tenantType) parts.push(TENANT_TYPE_LABELS[query.tenantType as TenantType] ?? query.tenantType);
   if (query.aspStatus === 'NOT_LIVE') parts.push('provider connection not live');
+  if (query.order === 'desc') parts.push('Z–A by company');
   else if (query.aspStatus) parts.push(`provider ${query.aspStatus.toLowerCase()}`);
 
   return parts.length === 0 ? 'Every tenant' : `Filtered: ${parts.join(', ')}`;
