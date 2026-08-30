@@ -28,7 +28,12 @@ async function seed() {
   await runMigrations();
 
   const passwordHash = await hashPassword(DEV_PASSWORD);
-  const webhookSecret = randomBytes(24).toString('hex');
+  // One per tenant. The mock provider signs each callback with the receiving
+  // tenant's own secret, so a shared one would hide a signature bug that only
+  // shows up against a real provider, where they genuinely differ.
+  const albaharWebhookSecret = randomBytes(24).toString('hex');
+  const gulftechWebhookSecret = randomBytes(24).toString('hex');
+  const desertlogWebhookSecret = randomBytes(24).toString('hex');
 
   await withPlatformAccess(async (tx) => {
     const existing = await tx<{ count: string }[]>`
@@ -76,8 +81,8 @@ async function seed() {
         credentials_cipher, webhook_secret_hash, provider_account_id, status, notes
       ) VALUES (
         ${activeId}, 'MOCK', 'Simulated Accredited Provider', '',
-        ${encryptSecret(JSON.stringify({ apiKey: 'mock-api-key', webhookSecret }))},
-        ${sha256Hex(webhookSecret)},
+        ${encryptSecret(JSON.stringify({ apiKey: 'mock-api-key', webhookSecret: albaharWebhookSecret }))},
+        ${sha256Hex(albaharWebhookSecret)},
         'MOCK-ACCT-0001', 'ACTIVE',
         'Simulated provider. Replace with a real ASP once one is selected.'
       )
@@ -95,7 +100,11 @@ async function seed() {
       `;
     }
 
-    // --- Direct enterprise tenant, still waiting on registration -----------
+    // --- A second live enterprise tenant, so the two can trade -------------
+    // It used to be the can't-submit fixture. It is live now because the two
+    // enterprise tenants bill each other, and the receiving half of that only
+    // works if the buyer can file too — a counterparty that can accept an
+    // invoice but never issue one exercises half a trading relationship.
     const pending = await tx<{ id: string }[]>`
       INSERT INTO tenants (
         tenant_type, company_code, legal_name_en, legal_name_ar, trn, is_vat_group,
@@ -111,19 +120,26 @@ async function seed() {
           postalCode: '00000',
           countryCode: 'AE',
         })},
-        'PENDING'
+        'ACTIVE'
       )
       RETURNING id
     `;
     const pendingId = pending[0]!.id;
 
+    // Its own webhook secret rather than a copy of Al-Bahar's. The mock
+    // provider signs each callback with the receiving tenant's secret, so two
+    // tenants sharing one would hide a signature bug that only appears when a
+    // real provider is connected and the secrets genuinely differ.
     await tx`
       INSERT INTO tenant_asp_configs (
-        tenant_id, provider_type, display_name, api_endpoint, status, notes
+        tenant_id, provider_type, display_name, api_endpoint,
+        credentials_cipher, webhook_secret_hash, provider_account_id, status, notes
       ) VALUES (
-        ${pendingId}, 'GENERIC_REST', 'Awaiting provider selection', '',
-        'PENDING_REGISTRATION',
-        'Registration with the accredited provider has not completed. This tenant can upload and correct invoices but cannot submit.'
+        ${pendingId}, 'MOCK', 'Simulated Accredited Provider', '',
+        ${encryptSecret(JSON.stringify({ apiKey: 'mock-api-key', webhookSecret: gulftechWebhookSecret }))},
+        ${sha256Hex(gulftechWebhookSecret)},
+        'MOCK-ACCT-0002', 'ACTIVE',
+        'Simulated provider. Replace with a real ASP once one is selected.'
       )
     `;
 
@@ -196,10 +212,10 @@ async function seed() {
         credentials_cipher, webhook_secret_hash, provider_account_id, status, notes
       ) VALUES (
         ${subTenantId}, 'MOCK', 'Simulated Accredited Provider', '',
-        ${encryptSecret(JSON.stringify({ apiKey: 'mock-api-key', webhookSecret }))},
-        ${sha256Hex(webhookSecret)},
-        'MOCK-ACCT-0002', 'ACTIVE',
-        'Simulated provider, shared settings with the partner book.'
+        ${encryptSecret(JSON.stringify({ apiKey: 'mock-api-key', webhookSecret: desertlogWebhookSecret }))},
+        ${sha256Hex(desertlogWebhookSecret)},
+        'MOCK-ACCT-0003', 'ACTIVE',
+        'Simulated provider. Its own credentials, like every other tenant.'
       )
     `;
 
@@ -354,6 +370,19 @@ async function seed() {
       )
     `;
 
+    // Metering is a separate gate from registration: without capacity this
+    // tenant would be live, connected, and still refused at submission.
+    await tx`
+      INSERT INTO data_bundles (
+        tenant_id, reference, purchased_units, consumed_units, notes,
+        asp_procurement_id, minimum_buffer_units
+      ) VALUES (
+        ${pendingId}, 'BNDL-GULFTECH-2026', 5000, 0,
+        'Annual prepaid capacity sold directly by the host.',
+        ${procurementId}, 1000
+      )
+    `;
+
     const masterBundle = await tx<{ id: string }[]>`
       INSERT INTO data_bundles (
         tenant_id, reference, purchased_units, consumed_units, notes,
@@ -395,9 +424,9 @@ async function seed() {
     ACCOUNTANT         clerk@albahar.local       (prepares, cannot file)
     AUDITOR            auditor@albahar.local
 
-  Gulf Tech Solutions — enterprise tenant, PENDING (upload only)
+  Gulf Tech Solutions — enterprise tenant, ACTIVE
     COMPANY ADMIN      admin@gulftech.local
-    TAX APPROVER/CFO   finance@gulftech.local    (blocked: tenant not registered)
+    TAX APPROVER/CFO   finance@gulftech.local    (the only one who can file)
     ACCOUNTANT         clerk@gulftech.local      (prepares, cannot file)
     AUDITOR            auditor@gulftech.local
 
@@ -408,11 +437,19 @@ async function seed() {
     COMPANY ADMIN      admin@desertlog.local
     TAX APPROVER/CFO   cfo@desertlog.local
 
-  Al-Bahar also has 3 customers (AR), 1 supplier (AP) and a 10,000-document
-  bundle. Gulf Advisory holds a 100,000 master pool with a 5,000 slice carved
-  out for Desert Logistics, so sub-tenant filings deduct from both.
+  Al-Bahar has 4 customers (AR), 1 supplier (AP) and a 10,000-document bundle;
+  Gulf Tech has 5,000. Gulf Advisory holds a 100,000 master pool with a 5,000
+  slice carved out for Desert Logistics, so sub-tenant filings deduct from both.
 
-  Mock provider webhook secret: ${webhookSecret}
+  Al-Bahar and Gulf Tech are in each other's customer directories, so an
+  invoice filed by one is delivered to the other's verification desk and the
+  buyer's accept or reject travels back — the whole §11/§12.3 loop, without
+  pasting XML by hand.
+
+  Mock provider webhook secrets:
+    Al-Bahar          ${albaharWebhookSecret}
+    Gulf Tech         ${gulftechWebhookSecret}
+    Desert Logistics  ${desertlogWebhookSecret}
 ────────────────────────────────────────────────────────────────────
 `;
   process.stdout.write(banner);
