@@ -237,6 +237,10 @@ async function seed() {
     // that lets any of it be filed.
 
     // --- §6 Customer Master Directory (AR) --------------------------------
+    // Held on to: the seeded invoices below are billed to this one, and an
+    // invoice with no customer link cannot be opened in the builder.
+    let gulftechCustomerId: string | null = null;
+
     for (const customer of [
       {
         code: 'CUST-001',
@@ -284,7 +288,7 @@ async function seed() {
         email: null,
       },
     ] as const) {
-      await tx`
+      const inserted = await tx<{ id: string }[]>`
         INSERT INTO customers (
           tenant_id, customer_code, customer_name_en, customer_name_ar, customer_type,
           trn, emirate, street_address, contact_email, default_payment_means
@@ -293,7 +297,9 @@ async function seed() {
           ${customer.type}::party_type, ${customer.trn}, ${customer.emirate},
           ${customer.street}, ${customer.email}, '30'
         )
+        RETURNING id
       `;
+      if (customer.code === 'CUST-004') gulftechCustomerId = inserted[0]!.id;
     }
 
     // The mirror of CUST-004: Gulf Tech bills Al-Bahar back. Gulf Tech is
@@ -321,6 +327,22 @@ async function seed() {
         '100492817400003', 'Abu Dhabi', 'Corniche Road',
         'First Abu Dhabi Bank', 'AE070331234567890123456', 30, 'billing@gulftech.ae'
       )
+    `;
+
+    // The other side of SUP-001: Gulf Tech buys from Al-Bahar too, and the
+    // purchase invoices below are its bills. The reception path creates a
+    // supplier from the document when one arrives over the network; seeding
+    // the rows directly means seeding this as well, or the AP desk would show
+    // a bill from a company its own directory has never heard of.
+    const albaharSupplier = await tx<{ id: string }[]>`
+      INSERT INTO suppliers (
+        tenant_id, supplier_code, supplier_name_en, supplier_name_ar, trn, emirate,
+        street_address, payment_terms_days, contact_email
+      ) VALUES (
+        ${pendingId}, 'SUP-001', 'Al-Bahar Enterprises LLC', 'شركة البحار للمقاولات ذ.م.م',
+        '100293847500003', 'Dubai', 'Sheikh Zayed Road', 30, 'ar@albahar.ae'
+      )
+      RETURNING id
     `;
 
     // --- §15 the data bundle supply chain -----------------------------------
@@ -422,6 +444,96 @@ async function seed() {
       )
     `;
 
+
+    // --- Three filed invoices, awaiting the buyer -------------------------
+    //
+    // Al-Bahar has billed Gulf Tech and the FTA has cleared all three. The
+    // buyer has not answered any of them: no response code, no dispute. That
+    // is the state the §11 response tiles and the AP verification desk are
+    // both written for, and an empty database shows neither.
+    //
+    // Cleared rather than merely validated, because a document the buyer could
+    // act on is one the authority has already passed - anything earlier is
+    // still ours to correct, and the buyer has never seen it.
+    for (const [offset, number, quantity, unitPrice] of [
+      [21, 'INV-2026-00001', 10, '450.00'],
+      [14, 'INV-2026-00002', 4, '1250.00'],
+      [7, 'INV-2026-00003', 25, '96.00'],
+    ] as const) {
+      const net = (quantity * Number(unitPrice)).toFixed(2);
+      const vat = (Number(net) * 0.05).toFixed(2);
+      const gross = (Number(net) + Number(vat)).toFixed(2);
+
+      const invoice = await tx<{ id: string }[]>`
+        INSERT INTO invoices (
+          tenant_id, customer_id, source_channel, invoice_number, invoice_type,
+          issue_date, issue_time, currency_code, exchange_rate,
+          seller_trn, seller_name, buyer_trn, buyer_name,
+          line_extension_amount, tax_exclusive_amount, vat_total_amount,
+          tax_inclusive_amount, payable_amount, payable_amount_aed,
+          status, direction, fta_irn, submitted_at, cleared_at
+        ) VALUES (
+          ${activeId}, ${gulftechCustomerId}, 'MANUAL_IN_APP_ENTRY', ${number}, 'TAX_INVOICE',
+          (CURRENT_DATE - ${offset}::integer), '10:00:00', 'AED', 1.000000,
+          '100293847500003', 'Al-Bahar Enterprises LLC',
+          '100492817400003', 'Gulf Tech Solutions FZE',
+          ${net}, ${net}, ${vat}, ${gross}, ${gross}, ${gross},
+          'ACCEPTED_BY_FTA', 'OUTBOUND_SALES_AR',
+          ${'irn_uae_' + String(offset).padStart(14, '0')},
+          (CURRENT_DATE - ${offset}::integer), (CURRENT_DATE - ${offset}::integer)
+        )
+        RETURNING id
+      `;
+
+      await tx`
+        INSERT INTO invoice_line_items (
+          tenant_id, invoice_id, line_number, item_name, quantity, unit_of_measure,
+          unit_price, discount_amount, vat_category, vat_rate, vat_amount,
+          net_amount, total_amount
+        ) VALUES (
+          ${activeId}, ${invoice[0]!.id}, 1, 'Integration services', ${quantity}, 'PCE',
+          ${unitPrice}, 0, 'STANDARD', 5.00, ${vat}, ${net}, ${gross}
+        )
+      `;
+
+      // The buyer's copy. One document, two rows: a sale on the seller's books
+      // and a purchase on the buyer's, each owned by the tenant that holds it
+      // and each carrying its own posting state. Filing one does not create the
+      // other in production either — the network delivers it, and this is that
+      // delivery already done.
+      const purchase = await tx<{ id: string }[]>`
+        INSERT INTO invoices (
+          tenant_id, supplier_id, source_channel, invoice_number, invoice_type,
+          issue_date, issue_time, currency_code, exchange_rate,
+          seller_trn, seller_name, buyer_trn, buyer_name,
+          line_extension_amount, tax_exclusive_amount, vat_total_amount,
+          tax_inclusive_amount, payable_amount, payable_amount_aed,
+          status, direction, fta_irn, ap_posting_status
+        ) VALUES (
+          ${pendingId}, ${albaharSupplier[0]!.id}, 'INBOUND_PEPPOL_AS4', ${number}, 'TAX_INVOICE',
+          (CURRENT_DATE - ${offset}::integer), '10:00:00', 'AED', 1.000000,
+          '100293847500003', 'Al-Bahar Enterprises LLC',
+          '100492817400003', 'Gulf Tech Solutions FZE',
+          ${net}, ${net}, ${vat}, ${gross}, ${gross}, ${gross},
+          'ACCEPTED_BY_FTA', 'INBOUND_PURCHASE_AP',
+          ${'irn_uae_' + String(offset).padStart(14, '0')},
+          'NOT_POSTED'
+        )
+        RETURNING id
+      `;
+
+      await tx`
+        INSERT INTO invoice_line_items (
+          tenant_id, invoice_id, line_number, item_name, quantity, unit_of_measure,
+          unit_price, discount_amount, vat_category, vat_rate, vat_amount,
+          net_amount, total_amount
+        ) VALUES (
+          ${pendingId}, ${purchase[0]!.id}, 1, 'Integration services', ${quantity}, 'PCE',
+          ${unitPrice}, 0, 'STANDARD', 5.00, ${vat}, ${net}, ${gross}
+        )
+      `;
+    }
+
     logger.info({ activeId, pendingId, partnerId, subTenantId }, 'seed data created');
   });
 
@@ -453,6 +565,11 @@ async function seed() {
   Al-Bahar has 4 customers (AR), 1 supplier (AP) and a 10,000-document bundle;
   Gulf Tech has 5,000. Gulf Advisory holds a 100,000 master pool with a 5,000
   slice carved out for Desert Logistics, so sub-tenant filings deduct from both.
+
+  Al-Bahar has filed 3 invoices to Gulf Tech, cleared by the FTA and not yet
+  answered by the buyer. They are on Al-Bahar's sales list and on Gulf Tech's
+  verification desk, so the accept/query/reject path can be walked from a
+  fresh database.
 
   Al-Bahar and Gulf Tech are in each other's customer directories, so an
   invoice filed by one is delivered to the other's verification desk and the
