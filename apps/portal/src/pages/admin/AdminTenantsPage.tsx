@@ -3,7 +3,7 @@ import { TENANT_TYPE_LABELS } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { EMIRATES } from '@uae/domain';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -24,19 +24,24 @@ import { ApiError, api, queryString } from '../../lib/api';
  * exists here.
  */
 export function AdminTenantsPage() {
+  // Seeded from the URL so a dashboard tile lands on the rows it counted
+  // rather than on every tenant with the question discarded.
+  const [params] = useSearchParams();
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState(params.get('status') ?? '');
   const [typeFilter, setTypeFilter] = useState('');
+  const [aspFilter, setAspFilter] = useState(params.get('aspStatus') ?? '');
   const [creating, setCreating] = useState(false);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['admin-tenants', search, statusFilter, typeFilter],
+    queryKey: ['admin-tenants', search, statusFilter, typeFilter, aspFilter],
     queryFn: () =>
       api<PaginatedResult<TenantSummary>>(
         `/api/v1/admin/tenants${queryString({
           q: search,
           status: statusFilter,
           tenantType: typeFilter,
+          aspStatus: aspFilter,
         })}`,
       ),
   });

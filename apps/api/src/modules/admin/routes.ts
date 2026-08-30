@@ -26,6 +26,12 @@ export function registerAdminRoutes(app: FastifyInstance) {
         AND ($3::text IS NULL OR i.direction::text = $3)
         AND ($4::date IS NULL OR i.issue_date >= $4::date)
         AND ($5::date IS NULL OR i.issue_date <= $5::date)
+        -- The dashboard's "awaiting a verdict" tile, exactly: a status match
+        -- alone would hand the operator every healthy in-flight document too.
+        AND (
+          $7::boolean = FALSE
+          OR (i.status = 'SUBMITTED_TO_ASP' AND i.submitted_at < now() - interval '1 hour')
+        )
         AND (
           $6::boolean = FALSE
           -- Every refusal, whoever issued it: the tax authority, the network
@@ -56,6 +62,7 @@ export function registerAdminRoutes(app: FastifyInstance) {
       query.dateFrom ?? null,
       query.dateTo ?? null,
       query.onlyProblems,
+      query.stuck,
     ];
 
     const result = await withPlatformAccess(async (tx) => {
@@ -99,7 +106,9 @@ export function registerAdminRoutes(app: FastifyInstance) {
         -- The row id breaks ties, so paging cannot show one document twice and
         -- skip another when a hundred share an issue date.
         ORDER BY ${sortColumn} ${sortDirection}, i.created_at DESC, i.id
-        LIMIT $7 OFFSET $8
+        -- $8/$9: the filter list above owns $1-$7, and these two follow it.
+        -- Adding a filter without moving these hands LIMIT a boolean.
+        LIMIT $8 OFFSET $9
         `,
         [...filterArgs, query.pageSize, offset],
       );

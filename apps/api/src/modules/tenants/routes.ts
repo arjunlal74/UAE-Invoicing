@@ -69,7 +69,18 @@ function toSummary(row: TenantRow): TenantSummary {
 export function registerTenantRoutes(app: FastifyInstance) {
   // --- Platform: list ------------------------------------------------------
   app.get('/api/v1/admin/tenants', { preHandler: requirePlatform() }, async (request, reply) => {
-    const query = request.query as { q?: string; status?: string; tenantType?: string };
+    const query = request.query as {
+      q?: string;
+      status?: string;
+      tenantType?: string;
+      /**
+       * The dashboard counts tenants whose provider connection is not live and
+       * links here. Without a filter the operator lands on every tenant and has
+       * to find the ones the tile was counting, which is the work the tile was
+       * supposed to have done.
+       */
+      aspStatus?: string;
+    };
 
     const rows = await withPlatformAccess(
       (tx) => tx<TenantRow[]>`
@@ -87,6 +98,16 @@ export function registerTenantRoutes(app: FastifyInstance) {
           AND (${query.status ?? null}::text IS NULL OR t.status::text = ${query.status ?? null})
           AND (${query.tenantType ?? null}::text IS NULL
                OR t.tenant_type::text = ${query.tenantType ?? null})
+          -- 'NOT_LIVE' is a connection that exists and is not live, which is
+          -- what the dashboard tile linking here counts. Deliberately not
+          -- "has no configuration": a channel partner resells capacity and
+          -- never files, so having no provider connection is correct for it
+          -- rather than a fault, and sweeping it in would send the operator
+          -- to fix something that is not broken.
+          AND (${query.aspStatus ?? null}::text IS NULL
+               OR (${query.aspStatus ?? null} = 'NOT_LIVE'
+                   AND c.status IS NOT NULL AND c.status::text <> 'ACTIVE')
+               OR c.status::text = ${query.aspStatus ?? null})
         ORDER BY t.created_at DESC
       `,
     );

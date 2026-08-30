@@ -8,6 +8,7 @@ import type {
 import { useQuery } from '@tanstack/react-query';
 import { formatAmount } from '@uae/domain';
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   ALL_TIME,
   PeriodPicker,
@@ -53,12 +54,19 @@ const DEFAULTS = {
 const UNFILTERED = { tenantId: '', direction: '', status: '', period: ALL_TIME };
 
 export function AdminTransmissionsPage() {
-  // Problems first, and while that switch is on the filters are held open and
-  // disabled: the point of it is "show me everything that went wrong", and a
-  // filter left over from a previous question would quietly hide some of it.
-  const [onlyProblems, setOnlyProblems] = useState(true);
+  // A caller arriving from a dashboard tile has already asked their question,
+  // and the answer must be the rows that tile counted rather than the whole
+  // monitor with the question thrown away. So the URL seeds the filters, and
+  // "problems only" is switched off when it does — an explicit status is a
+  // narrower question than the switch, and leaving it on would fight it.
+  const [params] = useSearchParams();
+  const initialStatus = params.get('status') ?? UNFILTERED.status;
+  const initialStuck = params.get('stuck') === 'true';
+
+  const [onlyProblems, setOnlyProblems] = useState(!initialStatus && !initialStuck);
   const [tenantId, setTenantId] = useState(UNFILTERED.tenantId);
-  const [status, setStatus] = useState(UNFILTERED.status);
+  const [stuck, setStuck] = useState(initialStuck);
+  const [status, setStatus] = useState(initialStatus);
   const [direction, setDirection] = useState(UNFILTERED.direction);
   const [period, setPeriod] = useState<PeriodChoice>(UNFILTERED.period);
   // Most recently attempted first, which is what a support desk wants when it
@@ -79,6 +87,7 @@ export function AdminTransmissionsPage() {
     queryKey: [
       'admin-transmissions',
       onlyProblems,
+      stuck,
       tenantId,
       status,
       direction,
@@ -91,6 +100,7 @@ export function AdminTransmissionsPage() {
       api<PaginatedResult<TransmissionMonitorItem>>(
         `/api/v1/admin/transmissions${queryString({
           onlyProblems,
+          stuck,
           tenantId,
           status,
           direction,

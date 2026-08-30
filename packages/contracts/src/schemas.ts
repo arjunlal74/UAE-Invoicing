@@ -809,6 +809,12 @@ export type AdminDashboardResponse = z.infer<typeof AdminDashboardResponse>;
 // --- Admin monitoring -------------------------------------------------------
 
 export const TransmissionMonitorQuery = z.object({
+  /**
+   * Handed to a provider and silent for over an hour — the definition the
+   * dashboard tile counts. Narrower than `status=SUBMITTED_TO_ASP`, which also
+   * returns everything sent in the last minute and perfectly healthy.
+   */
+  stuck: queryBoolean.default(false),
   /** One account's traffic. The monitor is read one caller's question at a time. */
   tenantId: uuid.optional(),
   status: z.string().optional(),

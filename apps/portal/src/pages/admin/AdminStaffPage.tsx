@@ -2,6 +2,7 @@ import { ROLE_LABELS } from '@uae/contracts';
 import type { PaginatedResult, Role, UserSummary } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -22,6 +23,13 @@ export function AdminStaffPage() {
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
 
+  // Arrived from the dashboard's "invitations not accepted" tile. In this mode
+  // the list widens past platform staff to every unaccepted invitation on the
+  // platform, because that is the population the tile counts — a tenant's
+  // accountant who never signed in is stuck in exactly the same way.
+  const [params] = useSearchParams();
+  const pendingOnly = params.get('pending') === 'true';
+
   const [form, setForm] = useState({
     email: '',
     fullName: '',
@@ -32,8 +40,11 @@ export function AdminStaffPage() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['admin-staff'],
-    queryFn: () => api<PaginatedResult<UserSummary>>('/api/v1/admin/staff'),
+    queryKey: ['admin-staff', pendingOnly],
+    queryFn: () =>
+      api<PaginatedResult<UserSummary>>(
+        `/api/v1/admin/staff${pendingOnly ? '?pending=true' : ''}`,
+      ),
   });
 
   const invite = useMutation({

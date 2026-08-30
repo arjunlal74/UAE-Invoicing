@@ -5,6 +5,7 @@ import {
 } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ApiError, api } from '../../lib/api';
 import {
   Alert,
@@ -37,9 +38,18 @@ export function AdminMailPage() {
     queryFn: () => api<{ items: MailAccountSummary[] }>('/api/v1/admin/mail/accounts'),
   });
 
+  // Arrived from the dashboard's failed-mail tile: show the failures, not
+  // fifty messages of which three are the ones being asked about.
+  const [params] = useSearchParams();
+  const failedOnly = params.get('status') === 'FAILED';
+
   const deliveries = useQuery({
-    queryKey: ['mail-deliveries'],
+    queryKey: ['mail-deliveries', failedOnly],
     queryFn: () => api<{ items: MailDeliveryItem[] }>('/api/v1/admin/mail/deliveries'),
+    select: (result) =>
+      failedOnly
+        ? { items: result.items.filter((item) => item.status === 'FAILED') }
+        : result,
   });
 
   const refresh = () => {
@@ -183,7 +193,7 @@ export function AdminMailPage() {
         )}
       </Card>
 
-      <Card title="Recent messages">
+      <Card title={failedOnly ? 'Failed messages' : 'Recent messages'}>
         {deliveries.isLoading ? (
           <Spinner />
         ) : (deliveries.data?.items.length ?? 0) === 0 ? (

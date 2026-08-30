@@ -203,10 +203,24 @@ export function registerUserRoutes(app: FastifyInstance) {
   );
 
   // --- Platform: staff accounts -------------------------------------------
-  app.get('/api/v1/admin/staff', { preHandler: requirePlatform() }, async (_request, reply) => {
-    const rows = await sql().unsafe<UserRow[]>(
-      `SELECT ${USER_SELECT} FROM users u WHERE u.tenant_id IS NULL ORDER BY u.created_at`,
-    );
+  app.get('/api/v1/admin/staff', { preHandler: requirePlatform() }, async (request, reply) => {
+    const { pending } = request.query as { pending?: string };
+
+    // Normally this is the platform's own staff list. Asked for pending
+    // invitations it widens to every tenant, because that is the population
+    // the dashboard counts: an invitation that was never accepted is stuck
+    // whoever it belongs to, and a list that silently omitted the tenant ones
+    // would show nothing while the tile beside it read seven.
+    const rows = pending
+      ? await sql().unsafe<UserRow[]>(
+          `SELECT ${USER_SELECT} FROM users u
+           WHERE u.password_hash IS NULL ORDER BY u.created_at`,
+        )
+      : await sql().unsafe<UserRow[]>(
+          `SELECT ${USER_SELECT} FROM users u
+           WHERE u.tenant_id IS NULL ORDER BY u.created_at`,
+        );
+
     return reply.send({ items: rows.map(toSummary), total: rows.length, page: 1, pageSize: rows.length });
   });
 
