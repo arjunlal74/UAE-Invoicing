@@ -10,8 +10,8 @@ import type {
   UserSummary,
 } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -29,10 +29,22 @@ import { ApiError, api } from '../../lib/api';
  * lifecycle. Onboarding is two-staged here because the provider registration in
  * the middle is an external process with a lead time.
  */
+const EDIT_FIRST = 'Press Edit to change this tenant.';
+
 export function AdminTenantDetailPage() {
   const { tenantId = '' } = useParams();
+  const [params] = useSearchParams();
   const queryClient = useQueryClient();
   const [message, setMessage] = useState<{ kind: 'ok' | 'danger'; text: string } | null>(null);
+  // Read or write is settled before the page loads, by which button was
+  // pressed in the list. Carrying it in the URL rather than in state means the
+  // link can be sent to someone, and a refresh does not silently unlock a
+  // record that was opened to be read.
+  const editable = params.get('edit') === '1';
+
+  // Seeded from the record once it arrives, so the fields are not empty on
+  // the first paint and a half-typed name is not lost to a background refetch.
+  const [names, setNames] = useState({ legalNameEn: '', legalNameAr: '' });
 
   const { data: tenant, isLoading } = useQuery({
     queryKey: ['admin-tenant', tenantId],
@@ -42,6 +54,39 @@ export function AdminTenantDetailPage() {
   const { data: users } = useQuery({
     queryKey: ['admin-tenant-users', tenantId],
     queryFn: () => api<PaginatedResult<UserSummary>>(`/api/v1/admin/tenants/${tenantId}/users`),
+  });
+
+  // The record arrives after the first render, so the fields are seeded when
+  // it does — and only then, or every refetch would overwrite what is being
+  // typed.
+  useEffect(() => {
+    if (tenant) setNames({ legalNameEn: tenant.legalNameEn, legalNameAr: tenant.legalNameAr ?? '' });
+  }, [tenant?.id, tenant?.updatedAt]);
+
+  const renamed =
+    !!tenant &&
+    (names.legalNameEn !== tenant.legalNameEn ||
+      names.legalNameAr !== (tenant.legalNameAr ?? ''));
+
+  const renameTenant = useMutation({
+    mutationFn: () =>
+      api(`/api/v1/admin/tenants/${tenantId}`, {
+        method: 'PATCH',
+        body: {
+          legalNameEn: names.legalNameEn.trim(),
+          legalNameAr: names.legalNameAr.trim() || undefined,
+        },
+      }),
+    onSuccess: () => {
+      setMessage({ kind: 'ok', text: 'Legal names saved.' });
+      void queryClient.invalidateQueries({ queryKey: ['admin-tenant', tenantId] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-tenants'] });
+    },
+    onError: (cause) =>
+      setMessage({
+        kind: 'danger',
+        text: cause instanceof ApiError ? cause.message : 'Those names could not be saved.',
+      }),
   });
 
   const setStatus = useMutation({
@@ -76,6 +121,8 @@ export function AdminTenantDetailPage() {
         <div className="mt-1 flex flex-wrap items-center gap-3">
           <h1 className="text-lg font-semibold text-slate-900">{tenant.legalNameEn}</h1>
           <StatusBadge status={tenant.status} />
+
+
         </div>
         <p className="arabic text-sm text-slate-500" lang="ar">
           {tenant.legalNameAr}
@@ -86,6 +133,42 @@ export function AdminTenantDetailPage() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Card title="Identity" className="lg:col-span-2">
+          {/* The two names are the only identity a platform operator may
+              correct. The rest identify this tenant to the tax authority and
+              on every document already filed under it, so they are shown and
+              not offered — the endpoint refuses them too. */}
+          {editable && (
+            <div className="mb-4 grid gap-3 border-b border-slate-100 pb-4 sm:grid-cols-2">
+              <Field label="Legal name (English)" required>
+                <input
+                  className={inputClass}
+                  value={names.legalNameEn}
+                  onChange={(event) => setNames({ ...names, legalNameEn: event.target.value })}
+                />
+              </Field>
+
+              <Field label="Legal name (Arabic)">
+                <input
+                  className={`${inputClass} arabic`}
+                  lang="ar"
+                  dir="rtl"
+                  value={names.legalNameAr}
+                  onChange={(event) => setNames({ ...names, legalNameAr: event.target.value })}
+                />
+              </Field>
+
+              <div className="sm:col-span-2 flex justify-end">
+                <Button
+                  variant="primary"
+                  disabled={!names.legalNameEn.trim() || renameTenant.isPending || !renamed}
+                  onClick={() => renameTenant.mutate()}
+                >
+                  {renameTenant.isPending ? 'Saving…' : 'Save names'}
+                </Button>
+              </div>
+            </div>
+          )}
+
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
             <Detail label="Company code" value={tenant.companyCode} />
             <Detail label="TRN" value={tenant.trn ?? '—'} mono />
@@ -109,7 +192,8 @@ export function AdminTenantDetailPage() {
               <Button
                 variant="primary"
                 onClick={() => setStatus.mutate('ACTIVE')}
-                disabled={setStatus.isPending}
+                disabled={!editable || setStatus.isPending}
+                title={editable ? undefined : EDIT_FIRST}
               >
                 Activate
               </Button>
@@ -118,13 +202,18 @@ export function AdminTenantDetailPage() {
               <Button
                 variant="danger"
                 onClick={() => setStatus.mutate('SUSPENDED')}
-                disabled={setStatus.isPending}
+                disabled={!editable || setStatus.isPending}
+                title={editable ? undefined : EDIT_FIRST}
               >
                 Suspend
               </Button>
             )}
             {tenant.status === 'SUSPENDED' && (
-              <Button onClick={() => setStatus.mutate('PENDING')} disabled={setStatus.isPending}>
+              <Button
+                onClick={() => setStatus.mutate('PENDING')}
+                disabled={!editable || setStatus.isPending}
+                title={editable ? undefined : EDIT_FIRST}
+              >
                 Return to pending
               </Button>
             )}
@@ -132,7 +221,7 @@ export function AdminTenantDetailPage() {
         </Card>
       </div>
 
-      <AspConfigSection tenantId={tenantId} />
+      <AspConfigSection tenantId={tenantId} readOnly={!editable} />
 
       <Card title={`Users (${users?.items.length ?? 0})`}>
         {!users || users.items.length === 0 ? (
@@ -176,7 +265,7 @@ export function AdminTenantDetailPage() {
   );
 }
 
-function AspConfigSection({ tenantId }: { tenantId: string }) {
+function AspConfigSection({ tenantId, readOnly }: { tenantId: string; readOnly: boolean }) {
   const queryClient = useQueryClient();
   const [message, setMessage] = useState<{ kind: 'ok' | 'danger'; text: string } | null>(null);
 
@@ -299,6 +388,7 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
         <Field label="Provider type">
           <select
             className={inputClass}
+            disabled={readOnly}
             value={providerType}
             onChange={(event) => {
               const next = event.target.value as AspProviderType;
@@ -333,7 +423,7 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
         >
           <select
             className={inputClass}
-            disabled={matching.length === 0}
+            disabled={readOnly || matching.length === 0}
             value={linkedId ?? ''}
             onChange={(event) => {
               const chosen = matching.find((provider) => provider.id === event.target.value);
@@ -363,6 +453,7 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
         <Field label="Display name" hint="Shown to the merchant.">
           <input
             className={inputClass}
+            disabled={readOnly}
             value={value('displayName', config.displayName)}
             onChange={(e) => setForm({ ...form, displayName: e.target.value })}
           />
@@ -371,6 +462,7 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
         <Field label="Connection status">
           <select
             className={inputClass}
+            disabled={readOnly}
             value={value('status', config.status)}
             onChange={(e) =>
               setForm({ ...form, status: e.target.value as AspConnectionStatus })
@@ -386,6 +478,7 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
         <Field label="API endpoint" hint="Base URL of the provider's API.">
           <input
             className={inputClass}
+            disabled={readOnly}
             placeholder="https://api.provider.ae"
             value={value('apiEndpoint', config.apiEndpoint)}
             onChange={(e) => setForm({ ...form, apiEndpoint: e.target.value })}
@@ -395,6 +488,7 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
         <Field label="Provider account id" hint="The merchant's identifier at the provider.">
           <input
             className={inputClass}
+            disabled={readOnly}
             value={value('providerAccountId', config.providerAccountId ?? '')}
             onChange={(e) => setForm({ ...form, providerAccountId: e.target.value })}
           />
@@ -417,6 +511,7 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
           <Field label="Client ID">
             <input
               className={inputClass}
+            disabled={readOnly}
               autoComplete="off"
               value={form.clientId ?? ''}
               onChange={(e) => setForm({ ...form, clientId: e.target.value })}
@@ -425,6 +520,7 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
           <Field label="Client secret">
             <input
               className={inputClass}
+            disabled={readOnly}
               type="password"
               autoComplete="new-password"
               value={form.clientSecret ?? ''}
@@ -434,6 +530,7 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
           <Field label="API key">
             <input
               className={inputClass}
+            disabled={readOnly}
               type="password"
               autoComplete="new-password"
               value={form.apiKey ?? ''}
@@ -443,6 +540,7 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
           <Field label="Webhook signing secret">
             <input
               className={inputClass}
+            disabled={readOnly}
               type="password"
               autoComplete="new-password"
               value={form.webhookSecret ?? ''}
@@ -459,13 +557,18 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
             : 'Never tested.'}
         </div>
         <div className="flex gap-2">
-          <Button onClick={() => test.mutate()} disabled={test.isPending}>
+          <Button
+            onClick={() => test.mutate()}
+            disabled={readOnly || test.isPending}
+            title={readOnly ? EDIT_FIRST : undefined}
+          >
             {test.isPending ? 'Testing…' : 'Test connection'}
           </Button>
           <Button
             variant="primary"
             onClick={() => save.mutate()}
-            disabled={save.isPending || Object.keys(form).length === 0}
+            disabled={readOnly || save.isPending || Object.keys(form).length === 0}
+            title={readOnly ? EDIT_FIRST : undefined}
           >
             {save.isPending ? 'Saving…' : 'Save connection'}
           </Button>

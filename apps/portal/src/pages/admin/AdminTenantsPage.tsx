@@ -20,9 +20,11 @@ import {
   Spinner,
   StatusBadge,
   formatDate,
+  statusLabel,
   inputClass,
 } from '../../components/ui';
 import { PdfActions } from '../../components/PdfActions';
+import { TenantFormModal } from '../../components/TenantFormModal';
 import { ApiError, api, queryString } from '../../lib/api';
 
 /**
@@ -39,7 +41,8 @@ export function AdminTenantsPage() {
   const [typeFilter, setTypeFilter] = useState('');
   const [aspFilter, setAspFilter] = useState(params.get('aspStatus') ?? '');
   const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState<TenantSummary | null>(null);
+  const [viewing, setViewing] = useState<TenantSummary | null>(null);
+  const navigate = useNavigate();
 
   const exportQuery = queryString({
     q: search,
@@ -169,7 +172,11 @@ export function AdminTenantsPage() {
                   <td className="px-4 py-2 text-right tabular-nums">{tenant.invoiceCount}</td>
                   <td className="px-4 py-2 text-slate-500">{formatDate(tenant.createdAt)}</td>
                   <td className="px-4 py-2">
-                    <TenantActions tenant={tenant} onEdit={() => setEditing(tenant)} />
+                    <TenantActions
+                      tenant={tenant}
+                      onView={() => setViewing(tenant)}
+                      onEdit={() => navigate(`/admin/tenants/${tenant.id}?edit=1`)}
+                    />
                   </td>
                 </tr>
               ))}
@@ -179,7 +186,7 @@ export function AdminTenantsPage() {
       </div>
 
       {creating && <CreateTenantModal onClose={() => setCreating(false)} />}
-      {editing && <EditTenantModal tenant={editing} onClose={() => setEditing(null)} />}
+      {viewing && <TenantFormModal tenant={viewing} readOnly onClose={() => setViewing(null)} />}
     </div>
   );
 }
@@ -206,9 +213,16 @@ const ACTION = 'w-9 justify-center';
  * Editing is refused while locked, which is the whole point of the lock, so
  * the button says so rather than failing at the server.
  */
-function TenantActions({ tenant, onEdit }: { tenant: TenantSummary; onEdit: () => void }) {
+function TenantActions({
+  tenant,
+  onView,
+  onEdit,
+}: {
+  tenant: TenantSummary;
+  onView: () => void;
+  onEdit: () => void;
+}) {
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
 
   const refresh = () => {
@@ -246,12 +260,7 @@ function TenantActions({ tenant, onEdit }: { tenant: TenantSummary; onEdit: () =
   return (
     <div className="flex flex-col items-end gap-1">
       <div className="flex justify-end gap-1">
-        <Button
-          size="sm"
-          className={ACTION}
-          label="View"
-          onClick={() => navigate(`/admin/tenants/${tenant.id}`)}
-        >
+        <Button size="sm" className={ACTION} label="View" onClick={onView}>
           <Icon name="view" />
         </Button>
 
@@ -313,74 +322,6 @@ function TenantActions({ tenant, onEdit }: { tenant: TenantSummary; onEdit: () =
  * changing one is not an edit but a different company, and the endpoint does
  * not accept them either.
  */
-function EditTenantModal({ tenant, onClose }: { tenant: TenantSummary; onClose: () => void }) {
-  const queryClient = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    legalNameEn: tenant.legalNameEn,
-    legalNameAr: tenant.legalNameAr ?? '',
-  });
-
-  const save = useMutation({
-    mutationFn: () =>
-      api(`/api/v1/admin/tenants/${tenant.id}`, {
-        method: 'PATCH',
-        body: {
-          legalNameEn: form.legalNameEn.trim(),
-          legalNameAr: form.legalNameAr.trim() || undefined,
-        },
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['admin-tenants'] });
-      onClose();
-    },
-    onError: (cause) =>
-      setError(cause instanceof ApiError ? cause.message : 'Those changes could not be saved.'),
-  });
-
-  return (
-    <Modal title={`Edit ${tenant.companyCode}`} onClose={onClose}>
-      <div className="space-y-3">
-        {error && <Alert kind="danger">{error}</Alert>}
-
-        <Field label="Legal name (English)" required>
-          <input
-            className={inputClass}
-            value={form.legalNameEn}
-            onChange={(e) => setForm({ ...form, legalNameEn: e.target.value })}
-          />
-        </Field>
-
-        <Field label="Legal name (Arabic)">
-          <input
-            className={`${inputClass} arabic`}
-            lang="ar"
-            dir="rtl"
-            value={form.legalNameAr}
-            onChange={(e) => setForm({ ...form, legalNameAr: e.target.value })}
-          />
-        </Field>
-
-        <p className="text-xs text-slate-500">
-          The TRN, company code and tier identify this tenant on every document already filed
-          under it, so they are not editable here.
-        </p>
-
-        <div className="flex justify-end gap-2 pt-2">
-          <Button onClick={onClose}>Cancel</Button>
-          <Button
-            variant="primary"
-            disabled={!form.legalNameEn.trim() || save.isPending}
-            onClick={() => save.mutate()}
-          >
-            {save.isPending ? 'Saving…' : 'Save'}
-          </Button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
 function CreateTenantModal({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
