@@ -243,6 +243,20 @@ async function seed() {
         email: 'ap@northerngulf.ae',
       },
       {
+        // The other seeded tenant, so the two can bill each other: Al-Bahar
+        // files against this TRN and Gulf Tech receives its own document on
+        // the verification desk, which is the only way to exercise a buyer
+        // accept/reject against a real cleared invoice rather than a pasted one.
+        code: 'CUST-004',
+        nameEn: 'Gulf Tech Solutions FZE',
+        nameAr: 'شركة الخليج للحلول التقنية',
+        type: 'B2B',
+        trn: '100492817400003',
+        emirate: 'Abu Dhabi',
+        street: 'Corniche Road',
+        email: 'ap@gulftech.ae',
+      },
+      {
         code: 'CUST-003',
         nameEn: 'Walk-in retail customer',
         nameAr: null,
@@ -265,6 +279,21 @@ async function seed() {
         )
       `;
     }
+
+    // The mirror of CUST-004: Gulf Tech bills Al-Bahar back. Gulf Tech is
+    // PENDING, so it can compose and validate against this customer but cannot
+    // file until its provider registration completes — which is the point, it
+    // is the fixture for the blocked-submission path.
+    await tx`
+      INSERT INTO customers (
+        tenant_id, customer_code, customer_name_en, customer_name_ar, customer_type,
+        trn, emirate, street_address, contact_email, default_payment_means
+      ) VALUES (
+        ${pendingId}, 'CUST-001', 'Al-Bahar Enterprises LLC', 'شركة البحار للمقاولات ذ.م.م',
+        'B2B'::party_type, '100293847500003', 'Dubai',
+        'Sheikh Zayed Road', 'ap@albahar.ae', '30'
+      )
+    `;
 
     // --- §12.1 Supplier Master Directory (AP) ------------------------------
     await tx`
