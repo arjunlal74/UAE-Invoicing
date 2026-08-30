@@ -11,8 +11,8 @@ import { actorFromContext, audit } from '../../audit/audit.js';
 import { withPlatformAccess, withTenant } from '../../db/client.js';
 import { requireContext, requirePermission, requirePlatform } from '../../http/context.js';
 import { badRequest, notFound } from '../../lib/errors.js';
-import { loadHostInventory } from './inventory.js';
-import { parsePeriod } from './period.js';
+import { loadHostInventory, loadInventoryMovement } from './inventory.js';
+import { parseMovementWindow, parsePeriod } from './period.js';
 import { loadPlatformStatement, loadTenantStatement } from './report.js';
 
 /**
@@ -259,13 +259,17 @@ export function registerInventoryRoutes(app: FastifyInstance) {
   app.get(
     '/api/v1/admin/inventory',
     { preHandler: requirePlatform() },
-    async (_request, reply) => {
-      // Everything here is cumulative on purpose: the shelf is every purchase
-      // ever made minus every sale ever made, and the contract list is most
-      // recent first. The window that matters — the per-provider roll-up, which
-      // would otherwise only grow — is on the provider list instead, chosen in
-      // the dialog that shows those columns.
-      const host = await loadHostInventory();
+    async (request, reply) => {
+      // The headline figures stay cumulative on purpose: the shelf is every
+      // purchase ever made minus every sale ever made, and "can we keep filing"
+      // is not a question about a date range. Alongside them sits the same
+      // shelf as a movement over a window, which is the question asked when a
+      // purchase has to be justified or a month's sales reconciled.
+      const window = parseMovementWindow(request.query);
+      const [host, movement] = await Promise.all([
+        loadHostInventory(),
+        loadInventoryMovement(window.from, window.to),
+      ]);
 
       const data = await withPlatformAccess(async (tx) => {
         const procurements = await tx.unsafe<ProcurementRow[]>(
@@ -338,6 +342,7 @@ export function registerInventoryRoutes(app: FastifyInstance) {
 
       const response: InventoryConsole = {
         host,
+        movement,
         procurements: data.procurements.map(toProcurementSummary),
         tiers,
       };

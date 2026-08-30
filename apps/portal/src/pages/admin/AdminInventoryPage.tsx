@@ -14,17 +14,31 @@ import {
   StatTile,
   cx,
   formatDate,
+  inputBase,
   inputClass,
 } from '../../components/ui';
-import { ApiError, api } from '../../lib/api';
+import { ApiError, api, queryString } from '../../lib/api';
+
+/** Thirty days back to today, the window the shelf is reconciled over. */
+function defaultWindow(): { from: string; to: string } {
+  const today = new Date();
+  const start = new Date(today);
+  start.setUTCDate(start.getUTCDate() - 30);
+  return { from: start.toISOString().slice(0, 10), to: today.toISOString().slice(0, 10) };
+}
 
 /**
  * The data bundle inventory console (SRS v2.8 §15).
  *
  * Ordered around the question an operator arrives with, which is not "what did
- * we buy" but "can we keep filing". So the net platform balance leads, the
- * shelf and the run-rate sit beside it, and the purchase contracts that explain
- * the number are underneath.
+ * we buy" but "what moved". So the shelf leads as a statement over a window —
+ * opening, bought, sold, closing — and the purchase contracts that explain
+ * those numbers are underneath.
+ *
+ * "Can we keep filing" is a different question, and a cumulative one: a date
+ * range cannot answer it. It is not a tile for that reason, and lives in the
+ * buffer alert above, which fires on the net position regardless of the window
+ * the reader happens to have chosen.
  *
  * The tier table is the §15.5 matrix made visible: every account that holds a
  * bundle, what it has left, and whether it is under the floor it asked to be
@@ -33,6 +47,11 @@ import { ApiError, api } from '../../lib/api';
  */
 export function AdminInventoryPage() {
   const queryClient = useQueryClient();
+
+  // The movement window. Held here rather than in the URL because it is a
+  // reading preference, not a place — nobody links a colleague to a date range
+  // on this console, and the buy and sell dialogs above it are the routes.
+  const [period, setPeriod] = useState(defaultWindow);
 
   // Buying and selling have screens of their own; the buffer is one field and
   // stays a dialog over the console it governs. Which is open is a route rather
@@ -46,9 +65,18 @@ export function AdminInventoryPage() {
     queryClient.invalidateQueries({ queryKey: ['admin-inventory'] });
   };
 
+  // An inverted range is refused by the API, so it is not sent: the console
+  // keeps showing the last good window while a date is half-typed.
+  const valid = Boolean(period.from && period.to && period.from <= period.to);
+
   const { data, isLoading } = useQuery({
-    queryKey: ['admin-inventory'],
-    queryFn: () => api<InventoryConsole>('/api/v1/admin/inventory'),
+    queryKey: ['admin-inventory', period.from, period.to],
+    queryFn: () =>
+      api<InventoryConsole>(
+        `/api/v1/admin/inventory${queryString({ from: period.from, to: period.to })}`,
+      ),
+    enabled: valid,
+    placeholderData: (previous) => previous,
   });
 
   // Only to answer "is there anyone to buy from" below. Retired providers are
@@ -63,7 +91,7 @@ export function AdminInventoryPage() {
 
   if (isLoading || !data) return <Spinner label="Loading inventory…" />;
 
-  const { host } = data;
+  const { host, movement } = data;
   const breached = data.tiers.filter((tier) => tier.belowBuffer);
 
   return (
@@ -71,7 +99,32 @@ export function AdminInventoryPage() {
       <PageHeader
         title="Data bundle inventory"
         description="Wholesale procurement, platform stock and every account's remaining balance."
+        actions={
+          <div className="flex flex-nowrap items-center gap-2 text-sm text-slate-600">
+            <span>From</span>
+            <input
+              type="date"
+              className={cx(inputBase, 'w-40')}
+              value={period.from}
+              max={period.to || undefined}
+              onChange={(event) => setPeriod({ ...period, from: event.target.value })}
+            />
+            <span>to</span>
+            <input
+              type="date"
+              className={cx(inputBase, 'w-40')}
+              value={period.to}
+              min={period.from || undefined}
+              onChange={(event) => setPeriod({ ...period, to: event.target.value })}
+            />
+          </div>
+        }
       />
+
+      {!valid && (
+        <Alert kind="warn">That period ends before it starts, so the figures below still
+          cover {movement.from} to {movement.to}.</Alert>
+      )}
 
       {host.belowBuffer && (
         <Alert kind="danger" title="Platform inventory below the minimum buffer">
@@ -96,34 +149,28 @@ export function AdminInventoryPage() {
         </Alert>
       )}
 
-      {/* --- §15.1 the host's position ----------------------------------- */}
+      {/* --- §15.1 the shelf as a movement over the window --------------- */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile
-          label="Net available"
-          value={host.netAvailableUnits.toLocaleString()}
-          hint="Procured − consumed platform-wide"
-          tone={host.belowBuffer ? 'danger' : 'ok'}
+          label="Opening"
+          value={movement.openingUnits.toLocaleString()}
+          hint={`On the shelf before ${formatDate(movement.from)}`}
         />
         <StatTile
-          label="Unsold stock"
-          value={host.currentStockUnits.toLocaleString()}
-          hint="Procured − sold to tenants and partners"
-          tone={host.currentStockUnits <= 0 ? 'danger' : 'neutral'}
+          label="Purchase"
+          value={movement.purchasedUnits.toLocaleString()}
+          hint={`AED ${Number(movement.purchasedCostAed).toLocaleString()} committed`}
         />
         <StatTile
-          label="Consumption"
-          value={host.dailyRunRate.toLocaleString()}
-          hint={
-            host.daysRemaining === null
-              ? 'units/day over 30 days — no recent usage'
-              : `units/day — about ${host.daysRemaining} days left`
-          }
-          tone={host.daysRemaining !== null && host.daysRemaining < 30 ? 'warn' : 'neutral'}
+          label="Sold"
+          value={movement.soldUnits.toLocaleString()}
+          hint="To tenants and partners in this period"
         />
         <StatTile
-          label="Procured to date"
-          value={host.totalProcuredUnits.toLocaleString()}
-          hint={`AED ${Number(host.totalCostAed).toLocaleString()} committed`}
+          label="Balance"
+          value={movement.closingUnits.toLocaleString()}
+          hint="Opening + purchase − sold"
+          tone={movement.closingUnits <= 0 ? 'danger' : 'ok'}
         />
       </div>
 

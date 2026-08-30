@@ -16,6 +16,7 @@ import { badRequest } from '../../lib/errors.js';
  */
 
 const DEFAULT_MONTHS = 12;
+const MOVEMENT_DEFAULT_DAYS = 30;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export interface ParsedPeriod {
@@ -67,6 +68,32 @@ export function parsePeriod(query: unknown): ParsedPeriod {
     to: null,
     label: span === 1 ? 'Last month' : `Last ${span} months`,
   };
+}
+
+/**
+ * The window a movement statement covers — both ends resolved, always.
+ *
+ * A spend report can leave an end open and still mean something; an opening and
+ * closing balance cannot. "Up to whenever" has no closing figure, so both dates
+ * are filled in here rather than being left null for the query to interpret.
+ *
+ * Thirty days by default: the shelf moves on the timescale of a purchase order,
+ * and a month is the window an operator reconciles.
+ */
+export function parseMovementWindow(query: unknown): { from: string; to: string } {
+  const { from, to } = (query ?? {}) as { from?: string; to?: string };
+
+  if (from && !DATE.test(from)) throw badRequest('`from` must be a date as YYYY-MM-DD.');
+  if (to && !DATE.test(to)) throw badRequest('`to` must be a date as YYYY-MM-DD.');
+
+  const end = to ?? isoDay(new Date());
+  const startDefault = new Date();
+  startDefault.setUTCDate(startDefault.getUTCDate() - MOVEMENT_DEFAULT_DAYS);
+  const start = from ?? isoDay(startDefault);
+
+  if (start > end) throw badRequest('That period ends before it starts.');
+
+  return { from: start, to: end };
 }
 
 export function toReportingPeriod(parsed: ParsedPeriod): ReportingPeriod {

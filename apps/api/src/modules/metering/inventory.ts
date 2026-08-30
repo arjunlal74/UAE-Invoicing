@@ -1,3 +1,4 @@
+import type { InventoryMovement } from '@uae/contracts';
 import type { Tx } from '../../db/client.js';
 import { withPlatformAccess } from '../../db/client.js';
 import { badRequest } from '../../lib/errors.js';
@@ -87,6 +88,75 @@ export async function loadHostInventory(): Promise<HostInventory> {
       // the honest answer, and a dashboard should not print ∞ days.
       daysRemaining: runRate > 0 ? Math.floor(netAvailable / runRate) : null,
       totalCostAed: row.cost,
+    };
+  });
+}
+
+
+/**
+ * The shelf as a movement statement over a window (SRS v2.8 §15.1).
+ *
+ * Opening + purchased − sold = closing, and it has to hold exactly or the four
+ * figures are not a statement. That is why every one of them carries the same
+ * two filters the cumulative shelf uses — a lapsed contract is off the shelf,
+ * and a partner's slice is not a second sale of a unit already sold to the
+ * partner. Relaxing either filter for one figure and not the others would
+ * produce a closing balance that does not reconcile with the console above it.
+ *
+ * Dates are half-open at the top end internally (`< to + 1 day`) so that a
+ * sale registered at any hour of the closing day counts, while the caller still
+ * gets to think in inclusive dates.
+ */
+export async function loadInventoryMovement(
+  from: string,
+  to: string,
+): Promise<InventoryMovement> {
+  return withPlatformAccess(async (tx) => {
+    const rows = await tx<
+      {
+        opening_procured: string;
+        opening_sold: string;
+        purchased: string;
+        purchased_cost: string;
+        sold: string;
+      }[]
+    >`
+      SELECT
+        (SELECT coalesce(sum(total_units), 0) FROM asp_bundle_procurements
+          WHERE (expiry_date IS NULL OR expiry_date >= CURRENT_DATE)
+            AND purchase_date < ${from}::date)::text AS opening_procured,
+        (SELECT coalesce(sum(purchased_units), 0) FROM data_bundles
+          WHERE parent_bundle_id IS NULL AND status <> 'EXPIRED'
+            AND created_at < ${from}::date)::text AS opening_sold,
+        (SELECT coalesce(sum(total_units), 0) FROM asp_bundle_procurements
+          WHERE (expiry_date IS NULL OR expiry_date >= CURRENT_DATE)
+            AND purchase_date >= ${from}::date
+            AND purchase_date <= ${to}::date)::text AS purchased,
+        -- Filtered the same way as the units above, so the cost under the tile
+        -- describes the purchases the tile counted and not a wider set.
+        (SELECT coalesce(sum(total_cost_aed), 0) FROM asp_bundle_procurements
+          WHERE (expiry_date IS NULL OR expiry_date >= CURRENT_DATE)
+            AND purchase_date >= ${from}::date
+            AND purchase_date <= ${to}::date)::text AS purchased_cost,
+        (SELECT coalesce(sum(purchased_units), 0) FROM data_bundles
+          WHERE parent_bundle_id IS NULL AND status <> 'EXPIRED'
+            AND created_at >= ${from}::date
+            AND created_at < (${to}::date + 1))::text AS sold
+    `;
+
+    const row = rows[0]!;
+    const opening = Number(row.opening_procured) - Number(row.opening_sold);
+    const purchased = Number(row.purchased);
+    const sold = Number(row.sold);
+
+    return {
+      from,
+      to,
+      openingUnits: opening,
+      purchasedUnits: purchased,
+      soldUnits: sold,
+      closingUnits: opening + purchased - sold,
+      purchasedCostAed: row.purchased_cost,
     };
   });
 }

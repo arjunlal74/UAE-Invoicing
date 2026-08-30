@@ -264,8 +264,36 @@ export const InventoryStatement = z.object({
 });
 export type InventoryStatement = z.infer<typeof InventoryStatement>;
 
+/**
+ * The shelf as a movement statement over a window (SRS v2.8 §15.1).
+ *
+ * The cumulative figures answer "can we keep filing"; they cannot answer "what
+ * happened last month", which is the question asked when a purchase has to be
+ * justified or a sales figure reconciled. Opening + purchased − sold = closing,
+ * by construction, so the four read as a statement rather than four unrelated
+ * counters that happen to sit together.
+ */
+export const InventoryMovement = z.object({
+  /** Inclusive, ISO date. */
+  from: z.string(),
+  /** Inclusive, ISO date. */
+  to: z.string(),
+  /** On the shelf the instant before `from`. */
+  openingUnits: z.number(),
+  /** Bought from providers inside the window. */
+  purchasedUnits: z.number(),
+  /** Sold to tenants and partners inside the window. */
+  soldUnits: z.number(),
+  /** Opening + purchased − sold. The shelf at the close of `to`. */
+  closingUnits: z.number(),
+  /** What the purchases in the window cost. */
+  purchasedCostAed: z.string(),
+});
+export type InventoryMovement = z.infer<typeof InventoryMovement>;
+
 export const InventoryConsole = z.object({
   host: HostInventorySummary,
+  movement: InventoryMovement,
   procurements: z.array(ProcurementSummary),
   tiers: z.array(InventoryTierRow),
 });
