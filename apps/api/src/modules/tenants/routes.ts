@@ -89,6 +89,8 @@ interface TenantListFilters {
   aspStatus?: string;
   /** Company name, A–Z by default. Anything else is ignored rather than trusted. */
   order?: string;
+  /** One partner's sub-tenants. The partner itself is not in the result. */
+  parentTenantId?: string;
 }
 
 /**
@@ -98,7 +100,16 @@ interface TenantListFilters {
  * was printed from would be worse than none: the reader has no way to tell,
  * and these get filed.
  */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function listTenants(query: TenantListFilters) {
+  // Rejected here rather than left to the ::uuid cast, which fails inside the
+  // query and surfaces as a 500 — a malformed filter is the caller's mistake
+  // and should read as one.
+  if (query.parentTenantId && !UUID.test(query.parentTenantId)) {
+    throw badRequest('`parentTenantId` must be a tenant id.');
+  }
+
   return withPlatformAccess(
       (tx) => tx<TenantRow[]>`
         SELECT t.*,
@@ -115,6 +126,8 @@ async function listTenants(query: TenantListFilters) {
           AND (${query.status ?? null}::text IS NULL OR t.status::text = ${query.status ?? null})
           AND (${query.tenantType ?? null}::text IS NULL
                OR t.tenant_type::text = ${query.tenantType ?? null})
+          AND (${query.parentTenantId ?? null}::uuid IS NULL
+               OR t.parent_tenant_id = ${query.parentTenantId ?? null}::uuid)
           -- 'NOT_LIVE' is a connection that exists and is not live, which is
           -- what the dashboard tile linking here counts. Deliberately not
           -- "has no configuration": a channel partner resells capacity and

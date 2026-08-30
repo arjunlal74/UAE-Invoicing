@@ -7,6 +7,7 @@ import type {
   ProviderSummary,
   TenantDetail,
   TenantStatus,
+  TenantSummary,
   TenantType,
   UserSummary,
 } from '@uae/contracts';
@@ -20,10 +21,11 @@ import {
   Field,
   Spinner,
   StatusBadge,
+  formatDate,
   formatDateTime,
   inputClass,
 } from '../../components/ui';
-import { ApiError, api } from '../../lib/api';
+import { ApiError, api, queryString } from '../../lib/api';
 
 /**
  * Tenant detail: identity, provider connection, users, and the activation
@@ -96,6 +98,18 @@ export function AdminTenantDetailPage() {
         kind: 'danger',
         text: cause instanceof ApiError ? cause.message : 'Those names could not be saved.',
       }),
+  });
+
+  // Asked for only when there could be any: every other tier has none by
+  // definition, and a request that can only answer "zero" is a request not
+  // worth making.
+  const { data: subTenants } = useQuery({
+    queryKey: ['admin-sub-tenants', tenantId],
+    queryFn: () =>
+      api<PaginatedResult<TenantSummary>>(
+        `/api/v1/admin/tenants${queryString({ parentTenantId: tenantId })}`,
+      ),
+    enabled: tenant?.tenantType === 'CHANNEL_PARTNER',
   });
 
   const setStatus = useMutation({
@@ -254,6 +268,58 @@ export function AdminTenantDetailPage() {
         tenantType={tenant.tenantType}
         readOnly={!editable}
       />
+
+      {/* Only a partner has any. A count on the identity card said there
+          were sub-tenants without saying which, so the operator had to go
+          back to the tenant list and filter by parent to find out. */}
+      {tenant.tenantType === 'CHANNEL_PARTNER' && (
+        <Card title={`Sub-tenants (${subTenants?.items.length ?? 0})`}>
+          {!subTenants ? (
+            <Spinner />
+          ) : subTenants.items.length === 0 ? (
+            <p className="py-3 text-sm text-slate-500">
+              This partner has not onboarded any clients yet. Its master pool is intact.
+            </p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="pb-2 font-medium">Company</th>
+                  <th className="pb-2 font-medium">TRN</th>
+                  <th className="pb-2 font-medium">Account</th>
+                  <th className="pb-2 font-medium">Provider</th>
+                  <th className="pb-2 text-right font-medium">Invoices</th>
+                  <th className="pb-2 font-medium">Onboarded</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {subTenants.items.map((sub) => (
+                  <tr key={sub.id}>
+                    <td className="py-2">
+                      <Link
+                        to={`/admin/tenants/${sub.id}`}
+                        className="font-medium text-brand-600 underline"
+                      >
+                        {sub.legalNameEn}
+                      </Link>
+                      <div className="text-xs text-slate-400">{sub.companyCode}</div>
+                    </td>
+                    <td className="py-2 font-mono text-xs">{sub.trn ?? '—'}</td>
+                    <td className="py-2">
+                      <StatusBadge status={sub.status} />
+                    </td>
+                    <td className="py-2">
+                      <StatusBadge status={sub.aspStatus} />
+                    </td>
+                    <td className="py-2 text-right tabular-nums">{sub.invoiceCount}</td>
+                    <td className="py-2 text-slate-500">{formatDate(sub.createdAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      )}
 
       <Card title={`Users (${users?.items.length ?? 0})`}>
         {!users || users.items.length === 0 ? (
