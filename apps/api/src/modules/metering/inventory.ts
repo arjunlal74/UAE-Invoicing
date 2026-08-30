@@ -1,4 +1,9 @@
-import type { InventoryAccountRow, InventoryMovement } from '@uae/contracts';
+import type {
+  InventoryAccountRow,
+  InventoryMovement,
+  InventoryPlatformRow,
+} from '@uae/contracts';
+import { config } from '../../config.js';
 import type { Tx } from '../../db/client.js';
 import { withPlatformAccess } from '../../db/client.js';
 import { badRequest } from '../../lib/errors.js';
@@ -200,6 +205,47 @@ export async function loadInventoryMovement(
   });
 }
 
+
+
+/**
+ * The host's own row for the §15.5 tables, on the same columns as its tenants.
+ *
+ * Everything but the opening is already in the movement the tiles are drawn
+ * from — the shelf is the host's unsold, its purchases are the window's
+ * procurement — so this takes that and adds the one figure a tile row never
+ * needed: what had been consumed platform-wide before the window opened.
+ *
+ * That is what makes opening + purchased − consumed = unused hold for the host
+ * exactly as it does for every account beneath it. The tiles' own opening is a
+ * different number on purpose: it opens the shelf, which is the unsold axis.
+ */
+export async function loadPlatformRow(
+  movement: InventoryMovement,
+): Promise<InventoryPlatformRow> {
+  return withPlatformAccess(async (tx) => {
+    const rows = await tx<{ name: string | null; opening_procured: string; opening_consumed: string }[]>`
+      SELECT
+        (SELECT legal_name_en FROM platform_company WHERE id) AS name,
+        (SELECT coalesce(sum(total_units), 0) FROM asp_bundle_procurements
+          WHERE (expiry_date IS NULL OR expiry_date >= CURRENT_DATE)
+            AND purchase_date < ${movement.from}::date)::text AS opening_procured,
+        (SELECT coalesce(sum(units), 0) FROM usage_ledger
+          WHERE NOT is_parent_mirror
+            AND created_at < ${movement.from}::date)::text AS opening_consumed
+    `;
+
+    const row = rows[0]!;
+    return {
+      name: row.name?.trim() || config().PLATFORM_NAME,
+      openingUnits: Number(row.opening_procured) - Number(row.opening_consumed),
+      purchasedUnits: movement.purchasedUnits,
+      soldUnits: movement.soldUnits,
+      unsoldUnits: movement.closingUnits,
+      consumedUnits: movement.consumedUnits,
+      unusedUnits: movement.unusedUnits,
+    };
+  });
+}
 
 /**
  * Every account's movement over the window, for the §15.5 per-tier tables.

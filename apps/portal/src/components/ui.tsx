@@ -59,17 +59,61 @@ export function Button({
  * An identity colour for a card, when several sit in a column and the reader
  * needs to know which one they are in without re-reading the heading.
  *
- * The tint stays on the header and the rim. Colouring the body would put a
- * wash behind the numbers, and a table whose cells are already tinted has no
- * contrast left to say "this row is in trouble" — which is the one thing
- * colour has to be able to do inside a card.
+ * The body carries the tint too, at a fraction of the header's strength. The
+ * gradient is what keeps the heading the heading; a card washed evenly top to
+ * bottom loses the line between its title and its contents.
+ *
+ * The body stays this pale on purpose rather than for taste: a row marking
+ * itself in trouble has to out-shout the card it sits in, and at 40% of a 50
+ * tint a danger row still reads as the loudest thing on the card.
  */
 const CARD_ACCENTS = {
-  slate: { rim: 'border-slate-200', header: 'border-slate-200 bg-white', title: 'text-slate-800' },
-  brand: { rim: 'border-brand-200', header: 'border-brand-100 bg-brand-50', title: 'text-brand-800' },
-  ok: { rim: 'border-ok-200', header: 'border-ok-200 bg-ok-50', title: 'text-ok-700' },
-  warn: { rim: 'border-warn-200', header: 'border-warn-200 bg-warn-50', title: 'text-warn-700' },
-  danger: { rim: 'border-danger-200', header: 'border-danger-200 bg-danger-50', title: 'text-danger-700' },
+  slate: {
+    rim: 'border-slate-200',
+    header: 'border-slate-200 bg-white',
+    body: 'bg-white',
+    title: 'text-slate-800',
+  },
+  // Grey rather than a fourth hue. The card wearing it is the host, which is
+  // not a tier alongside the others but the shelf they all buy from, and a
+  // neutral reads as "not one of these" where a fourth colour would read as
+  // "one more of these".
+  graphite: {
+    rim: 'border-slate-300',
+    header: 'border-slate-300 bg-slate-100',
+    body: 'bg-slate-50/60',
+    title: 'text-slate-800',
+  },
+  // The three carry different weights on purpose. Blue is the darkest tint
+  // the palette holds below its solid steps, and green and amber are thinned
+  // well below their own 50: at equal strength the yellow reads loudest of
+  // the three and pulls the eye to whichever card happens to wear it. The
+  // rims stay at full strength on all three — the tint says which card this
+  // is, and the border is what still separates it from the page.
+  brand: {
+    rim: 'border-brand-200',
+    header: 'border-brand-200 bg-brand-100',
+    body: 'bg-brand-50/40',
+    title: 'text-brand-800',
+  },
+  ok: {
+    rim: 'border-ok-200',
+    header: 'border-ok-200 bg-ok-50/40',
+    body: 'bg-ok-50/20',
+    title: 'text-ok-700',
+  },
+  warn: {
+    rim: 'border-warn-200',
+    header: 'border-warn-200 bg-warn-50/40',
+    body: 'bg-warn-50/20',
+    title: 'text-warn-700',
+  },
+  danger: {
+    rim: 'border-danger-200',
+    header: 'border-danger-200 bg-danger-50',
+    body: 'bg-danger-50/40',
+    title: 'text-danger-700',
+  },
 };
 
 export function Card({
@@ -88,7 +132,7 @@ export function Card({
   const tone = CARD_ACCENTS[accent];
 
   return (
-    <section className={cx('rounded-lg border bg-white shadow-sm', tone.rim, className)}>
+    <section className={cx('rounded-lg border shadow-sm', tone.rim, tone.body, className)}>
       {(title || actions) && (
         <header
           className={cx(

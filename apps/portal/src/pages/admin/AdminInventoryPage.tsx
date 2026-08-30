@@ -6,7 +6,7 @@ import {
 } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -100,10 +100,20 @@ export function AdminInventoryPage() {
 
   // Grouped once here rather than filtered three times in the markup, so the
   // three tables cannot disagree about which tier an account belongs to.
+  const forBlock = (tier: InventoryAccountRow['tier']): BlockRow[] =>
+    data.accounts
+      .filter((row) => row.tier === tier)
+      .map((row) => ({
+        key: row.tenantId,
+        name: row.tenantName,
+        tierLabel: TENANT_TYPE_LABELS[row.tier],
+        ...row,
+      }));
+
   const accounts = {
-    partners: data.accounts.filter((row) => row.tier === 'CHANNEL_PARTNER'),
-    enterprise: data.accounts.filter((row) => row.tier === 'ENTERPRISE_TENANT'),
-    managed: data.accounts.filter((row) => row.tier === 'MANAGED_SUB_TENANT'),
+    partners: forBlock('CHANNEL_PARTNER'),
+    enterprise: forBlock('ENTERPRISE_TENANT'),
+    managed: forBlock('MANAGED_SUB_TENANT'),
   };
   const breached = data.tiers.filter((tier) => tier.belowBuffer);
 
@@ -252,17 +262,30 @@ export function AdminInventoryPage() {
           — only a partner has an allocation axis — and a single table would
           have to leave a third of its cells blank for two thirds of its rows. */}
       <AccountBlock
+        title="Platform"
+        rows={[
+          {
+            ...data.platform,
+            key: 'platform',
+            tierLabel: 'Host',
+          },
+        ]}
+        allocates
+        accent="graphite"
+        empty="The platform holds no stock."
+      />
+      <AccountBlock
         title="Channel partners"
         rows={accounts.partners}
         allocates
-        accent="brand"
+        accent="ok"
         empty="No partner holds a master pool. Sell one from Sell data above."
       />
       <AccountBlock
         title="Enterprise tenants"
         rows={accounts.enterprise}
         allocates={false}
-        accent="ok"
+        accent="brand"
         empty="No direct tenant holds a bundle yet."
       />
       <AccountBlock
@@ -292,6 +315,25 @@ export function AdminInventoryPage() {
  * reconciling a tier is adding it up, and a column footed by hand is a column
  * footed differently by each person who does it.
  */
+/**
+ * A row as the table needs it, rather than as the API happens to shape it.
+ *
+ * The host is not a tenant and carries no tenant id, so the block takes this
+ * instead of `InventoryAccountRow` — otherwise the platform would have to be
+ * given a fake id to sit in a list of real ones.
+ */
+interface BlockRow {
+  key: string;
+  name: string;
+  tierLabel: string;
+  openingUnits: number;
+  purchasedUnits: number;
+  soldUnits: number;
+  unsoldUnits: number;
+  consumedUnits: number;
+  unusedUnits: number;
+}
+
 function AccountBlock({
   title,
   rows,
@@ -300,9 +342,9 @@ function AccountBlock({
   empty,
 }: {
   title: string;
-  rows: InventoryAccountRow[];
+  rows: BlockRow[];
   allocates: boolean;
-  accent: 'brand' | 'ok' | 'warn';
+  accent: 'graphite' | 'brand' | 'ok' | 'warn';
   empty: string;
 }) {
   const total = rows.reduce(
@@ -328,7 +370,7 @@ function AccountBlock({
           <table className="w-full text-sm">
             <thead className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="pb-2 text-right font-medium">#</th>
+                <th className="w-10 pb-2 pr-6 text-right font-medium">#</th>
                 <th className="pb-2 font-medium">Account</th>
                 <th className="pb-2 font-medium">Tier</th>
                 <th className="pb-2 text-right font-medium">Opening</th>
@@ -343,23 +385,15 @@ function AccountBlock({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {rows.map((row, index) => (
-                <tr key={row.tenantId}>
-                  <td className="py-2 text-right tabular-nums text-slate-400">{index + 1}</td>
-                  <td className="py-2 text-slate-800">
-                    {/* A partner is the only tier with a ledger of its own to
-                        read: it buys from this platform and sells on. */}
-                    {allocates ? (
-                      <Link
-                        to={`/admin/inventory/report/${row.tenantId}`}
-                        className="font-medium text-brand-600 underline"
-                      >
-                        {row.tenantName}
-                      </Link>
-                    ) : (
-                      row.tenantName
-                    )}
-                  </td>
-                  <td className="py-2 text-xs text-slate-500">{TENANT_TYPE_LABELS[row.tier]}</td>
+                <tr key={row.key}>
+                  <td className="py-2 pr-6 text-right tabular-nums text-slate-400">{index + 1}</td>
+                  {/* Every tier reads the same here. A partner's own ledger is
+                      reached from Report, which has a tenant picker of its own,
+                      so a link on the name would be a second route to one page
+                      and a column that behaves differently in one of three
+                      otherwise identical tables. */}
+                  <td className="py-2 text-slate-800">{row.name}</td>
+                  <td className="py-2 text-xs text-slate-500">{row.tierLabel}</td>
                   <td className={cx(num, 'text-slate-700')}>
                     {row.openingUnits.toLocaleString()}
                   </td>
@@ -389,7 +423,7 @@ function AccountBlock({
             </tbody>
             <tfoot className="border-t-2 border-slate-300">
               <tr className="font-semibold text-slate-900">
-                <td className="py-2" />
+                <td className="py-2 pr-6" />
                 <td className="py-2">Total</td>
                 <td className="py-2" />
                 <td className={num}>{total.openingUnits.toLocaleString()}</td>

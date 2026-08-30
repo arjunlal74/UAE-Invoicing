@@ -340,9 +340,31 @@ export const InventoryAccountRow = z.object({
 });
 export type InventoryAccountRow = z.infer<typeof InventoryAccountRow>;
 
+/**
+ * The host as one more account, so the top of the chain is on the same table
+ * as everything below it.
+ *
+ * Structurally an `InventoryAccountRow` without a tenant: the platform is not
+ * a tenant and has no id in that table, and inventing one so it could share
+ * the type would put a row in a list that other code is entitled to treat as
+ * tenants. Same columns, same arithmetic, different identity.
+ */
+export const InventoryPlatformRow = z.object({
+  name: z.string(),
+  openingUnits: z.number(),
+  purchasedUnits: z.number(),
+  soldUnits: z.number(),
+  unsoldUnits: z.number(),
+  consumedUnits: z.number(),
+  unusedUnits: z.number(),
+});
+export type InventoryPlatformRow = z.infer<typeof InventoryPlatformRow>;
+
 export const InventoryConsole = z.object({
   host: HostInventorySummary,
   movement: InventoryMovement,
+  /** The host's own row, above the tiers it sells to. */
+  platform: InventoryPlatformRow,
   /** Every account holding or having held a bundle, for the §15.5 tables. */
   accounts: z.array(InventoryAccountRow),
   procurements: z.array(ProcurementSummary),

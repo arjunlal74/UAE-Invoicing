@@ -11,7 +11,12 @@ import { actorFromContext, audit } from '../../audit/audit.js';
 import { withPlatformAccess, withTenant } from '../../db/client.js';
 import { requireContext, requirePermission, requirePlatform } from '../../http/context.js';
 import { badRequest, notFound } from '../../lib/errors.js';
-import { loadHostInventory, loadInventoryAccounts, loadInventoryMovement } from './inventory.js';
+import {
+  loadHostInventory,
+  loadInventoryAccounts,
+  loadInventoryMovement,
+  loadPlatformRow,
+} from './inventory.js';
 import { parseMovementWindow, parsePeriod } from './period.js';
 import { loadPlatformStatement, loadTenantStatement } from './report.js';
 
@@ -271,6 +276,9 @@ export function registerInventoryRoutes(app: FastifyInstance) {
         loadInventoryMovement(window.from, window.to),
         loadInventoryAccounts(window.from, window.to),
       ]);
+      // Derived from the movement rather than alongside it: the host's row is
+      // the same figures the tiles show, plus an opening of its own.
+      const platform = await loadPlatformRow(movement);
 
       const data = await withPlatformAccess(async (tx) => {
         const procurements = await tx.unsafe<ProcurementRow[]>(
@@ -344,6 +352,7 @@ export function registerInventoryRoutes(app: FastifyInstance) {
       const response: InventoryConsole = {
         host,
         movement,
+        platform,
         accounts,
         procurements: data.procurements.map(toProcurementSummary),
         tiers,
