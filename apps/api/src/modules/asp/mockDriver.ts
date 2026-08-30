@@ -2,6 +2,7 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { config } from '../../config.js';
 import { safeEqual } from '../../lib/crypto.js';
 import { logger } from '../../logger.js';
+import { deliverInvoiceToBuyer, deliverResponseToSeller } from './mockNetwork.js';
 import type {
   AspDriver,
   AspResponseOutcome,
@@ -156,6 +157,19 @@ export class MockAspDriver implements AspDriver {
 
     this.scheduleCallback(record, tenantConfig);
 
+    // A rejected document never reaches the buyer: the network carries what the
+    // FTA cleared, not what it refused.
+    if (record.verdict === 'accepted') {
+      deliverInvoiceToBuyer({
+        buyerTrn: request.buyerTrn,
+        senderTenantId: tenantConfig.tenantId,
+        ublXml: request.ublXml,
+        irn: record.irn,
+        invoiceNumber: record.invoiceNumber,
+        notBefore: record.availableAt,
+      });
+    }
+
     return { kind: 'accepted', transmissionReference: reference, httpStatus: 202 };
   }
 
@@ -169,7 +183,7 @@ export class MockAspDriver implements AspDriver {
    */
   async sendResponse(
     request: AspResponseRequest,
-    _tenantConfig: AspTenantConfig,
+    tenantConfig: AspTenantConfig,
   ): Promise<AspResponseOutcome> {
     await new Promise((resolve) =>
       setTimeout(resolve, Math.min(config().ASP_MOCK_LATENCY_MS, 1_500)),
@@ -191,6 +205,15 @@ export class MockAspDriver implements AspDriver {
       },
       'mock provider accepted an application response',
     );
+
+    // …and carries it to the supplier, who on this platform may be a tenant
+    // whose invoice is waiting to hear back.
+    deliverResponseToSeller({
+      recipientTrn: request.recipientTrn,
+      senderTenantId: tenantConfig.tenantId,
+      responseXml: request.responseXml,
+      invoiceNumber: request.invoiceNumber,
+    });
 
     return { kind: 'sent', transmissionReference: reference, httpStatus: 202 };
   }
