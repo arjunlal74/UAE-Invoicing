@@ -331,27 +331,40 @@ async function seed() {
     // open on a platform that has sold 110,000 units it never bought — which is
     // exactly the state v2.8 exists to make impossible.
     //
-    // The provider is a master record rather than a name on the contract, so
-    // that two purchases from the same company add up in a cost report instead
-    // of becoming two providers because somebody typed it differently.
-    const provider = await tx<{ id: string }[]>`
-      INSERT INTO asp_providers (
-        name, accreditation_reference, contact_name, contact_email,
-        default_cost_per_unit_aed, notes
-      ) VALUES (
-        'Accredited ASP UAE', 'MOF-ASP-0042', 'Wholesale Desk',
-        'wholesale@accredited-asp.example', 0.0850,
-        'Demo provider. Replace with a real entry from the Ministry of Finance accredited list.'
-      )
-      RETURNING id
+    // The accredited list, rather than one invented placeholder.
+    //
+    // A provider is a master record rather than a name typed onto a contract,
+    // so that two purchases from the same company add up in a cost report
+    // instead of becoming two providers because somebody spelled it
+    // differently. Seeding the real names means the first purchase an operator
+    // registers picks from the list they would actually pick from, and the
+    // "no accredited provider on file" path is not the first thing they meet.
+    //
+    // Only the accreditation details that are actually known are filled in.
+    // Inventing a reference number for the other five would put five plausible
+    // fabrications in front of someone whose job is to check them.
+    const providers = await tx<{ id: string; name: string }[]>`
+      INSERT INTO asp_providers (name, accreditation_reference, accreditation_from, accreditation_valid_until)
+      VALUES
+        ('BDO Digital Solutions FZ-LLC', NULL, NULL, NULL),
+        ('ComarchFynamics', NULL, NULL, NULL),
+        ('EDICOM Middle East Services', NULL, NULL, NULL),
+        ('InvoiceNow Biz F.Z.C', '184465', DATE '2026-07-01', DATE '2028-07-01'),
+        ('Marmin AI Software Design LLC', NULL, NULL, NULL),
+        ('TronStride FZC', NULL, NULL, NULL)
+      RETURNING id, name
     `;
+
+    // The wholesale contract has to belong to one of them. Any would do; this
+    // is the one the demo data is written around.
+    const provider = providers.filter((row) => row.name.startsWith('Marmin'));
 
     const procurement = await tx<{ id: string }[]>`
       INSERT INTO asp_bundle_procurements (
         asp_provider_id, contract_reference, total_units,
         cost_per_unit_aed, total_cost_aed, purchase_date, notes
       ) VALUES (
-        ${provider[0]!.id}, 'ASP-WHOLESALE-2026-001', 500000,
+        ${provider[0]!.id}, 'MARMIN-2026-001', 500000,
         0.0850, 42500.00, CURRENT_DATE - 30,
         'Opening wholesale purchase. Everything below is sold out of this contract.'
       )
