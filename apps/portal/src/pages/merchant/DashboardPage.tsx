@@ -1,17 +1,23 @@
 import type { DashboardResponse, InvoiceStatus, ResponseStatusCode } from '@uae/contracts';
 import { RESPONSE_CODE_LABELS } from '@uae/contracts';
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Alert,
-  Button,
   Card,
-  EmptyState,
   Spinner,
   StatusBadge,
   cx,
   statusLabel,
 } from '../../components/ui';
+import {
+  DEFAULT_PERIOD,
+  PeriodPicker,
+  periodQuery,
+  periodReady,
+  type PeriodChoice,
+} from '../../components/PeriodPicker';
 import { api } from '../../lib/api';
 
 /**
@@ -21,10 +27,19 @@ import { api } from '../../lib/api';
  * wrong?" — so the needs-attention block comes before the totals.
  */
 export function DashboardPage() {
+  const [period, setPeriod] = useState<PeriodChoice>(DEFAULT_PERIOD);
+  const query = periodQuery(period);
+
   const { data, isLoading } = useQuery({
-    queryKey: ['dashboard'],
-    queryFn: () => api<DashboardResponse>('/api/v1/dashboard'),
+    queryKey: ['dashboard', query],
+    queryFn: () => api<DashboardResponse>(`/api/v1/dashboard?${query}`),
     refetchInterval: 30_000,
+    // A custom window with neither end typed yet would silently mean "the
+    // default", so the request waits until it is a real question.
+    enabled: periodReady(period),
+    // The window changes far more often than the data, and blanking the page
+    // to redraw the same figures reads as a fault rather than a load.
+    placeholderData: (previous) => previous,
   });
 
   if (isLoading || !data) {
@@ -36,10 +51,14 @@ export function DashboardPage() {
   }
 
   const counts = data.counts ?? {};
-  const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-lg font-semibold text-slate-900">Overview</h1>
+        <PeriodPicker label="Documents issued in" value={period} onChange={setPeriod} />
+      </div>
+
       {!data.canSubmit && (
         <Alert kind="warn" title="Submissions are not yet available">
           Your account status is <StatusBadge status={data.tenantStatus} /> and your provider
@@ -48,9 +67,12 @@ export function DashboardPage() {
         </Alert>
       )}
 
-      {/* Always rendered: the buyer-verdict tiles below hold their place at
-          nought, so this card no longer disappears on a quiet morning. */}
-      <Card title="Needs your attention">
+      {/* Always rendered, and never scoped to the window. The tiles hold their
+          place at nought so the card cannot disappear on a quiet morning, and
+          an invoice the FTA refused is still refused whatever month it was
+          issued in — letting a date filter retire it would be a way of solving
+          a problem by waiting. */}
+      <Card title="Needs your attention · all dates">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Tile
             count={data.needsAttention.batchesWithErrors}
@@ -82,7 +104,6 @@ export function DashboardPage() {
             detail="The buyer refuses the invoice. Only a credit note closes one."
             to="/ar/disputes"
             tone="danger"
-            showZero
           />
           <Tile
             count={data.needsAttention.customerQueries}
@@ -90,7 +111,6 @@ export function DashboardPage() {
             detail="The buyer has raised a question and is holding payment until it is answered."
             to="/ar/disputes"
             tone="warn"
-            showZero
           />
           <Tile
             count={data.needsAttention.conditionalAcceptances}
@@ -98,40 +118,29 @@ export function DashboardPage() {
             detail="Accepted, but the buyer attached a condition someone has to meet."
             to="/ar/disputes?state=conditions"
             tone="ok"
-            showZero
           />
         </div>
       </Card>
 
-      <Card title="Invoices by status">
-        {total === 0 ? (
-          <EmptyState
-            title="No invoices yet"
-            description="Download the template, fill in your invoices, and upload the file."
-            action={
-              <Link to="/upload">
-                <Button variant="primary">Get started</Button>
-              </Link>
-            }
-          />
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {CLEARANCE_TILES.map(({ status, tone, detail }) => (
-              <Tile
-                key={status}
-                count={counts[status as keyof typeof counts] ?? 0}
-                label={statusLabel(status)}
-                detail={detail}
-                tone={tone}
-                to={`/invoices?status=${status}`}
-                showZero
-              />
-            ))}
-          </div>
-        )}
+      <Card title={`Invoices by status · ${data.period.label}`}>
+        {/* Drawn whether or not anything has been filed. The shape of the
+            pipeline is what this card is for, and an account with nothing in
+            it still needs to see where documents will appear. */}
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {CLEARANCE_TILES.map(({ status, tone, detail }) => (
+            <Tile
+              key={status}
+              count={counts[status as keyof typeof counts] ?? 0}
+              label={statusLabel(status)}
+              detail={detail}
+              tone={tone}
+              to={`/invoices?status=${status}`}
+            />
+          ))}
+        </div>
       </Card>
 
-      <CustomerResponses data={data.customerResponses} />
+      <CustomerResponses data={data.customerResponses} label={data.period.label} />
     </div>
   );
 }
@@ -206,15 +215,17 @@ const RESPONSE_TILES: { code: ResponseStatusCode; tone: Tone; detail: string }[]
   { code: 'RE', tone: 'danger', detail: 'The buyer refuses it. Only a credit note closes one.' },
 ];
 
-function CustomerResponses({ data }: { data: DashboardResponse['customerResponses'] }) {
+function CustomerResponses({
+  data,
+  label,
+}: {
+  data: DashboardResponse['customerResponses'];
+  label?: string;
+}) {
   const byCode = data.byCode ?? {};
-  const responded = RESPONSE_TILES.reduce((sum, r) => sum + (byCode[r.code] ?? 0), 0);
-
-  // Nothing has reached a buyer yet — seven zeroes would say less than nothing.
-  if (responded === 0 && data.awaitingResponse === 0) return null;
 
   return (
-    <Card title="Customer responses">
+    <Card title={`Customer responses${label ? ` · ${label}` : ''}`}>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {RESPONSE_TILES.map(({ code, tone, detail }) => (
           <Tile
@@ -225,7 +236,6 @@ function CustomerResponses({ data }: { data: DashboardResponse['customerResponse
             tone={tone}
             // No screen lists invoices by response code, so these do not link.
             // The two that have a desk behind them are on the attention card.
-            showZero
           />
         ))}
         <Tile
@@ -233,7 +243,6 @@ function CustomerResponses({ data }: { data: DashboardResponse['customerResponse
           label="No reply yet"
           detail="Delivered to the buyer, with nothing back from them so far."
           tone="neutral"
-          showZero
         />
       </div>
     </Card>
@@ -266,7 +275,6 @@ function Tile({
   detail,
   tone,
   to,
-  showZero = false,
 }: {
   count: number;
   label: string;
@@ -274,14 +282,7 @@ function Tile({
   tone: Tone;
   /** Omitted where no screen lists these rows — a link to nowhere is worse than none. */
   to?: string;
-  /**
-   * Keep the tile on the page at nought. The buyer-verdict counts are held
-   * open this way: "no customer has rejected anything" is itself the answer a
-   * merchant comes to this card for, and a tile that vanishes cannot give it.
-   */
-  showZero?: boolean;
 }) {
-  if (count === 0 && !showZero) return null;
 
   const body = (
     <>

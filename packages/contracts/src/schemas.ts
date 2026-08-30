@@ -1,5 +1,6 @@
 import { EMIRATES, INVOICE_NUMBER_PATTERN, TRN_PATTERN } from '@uae/domain';
 import { z } from 'zod';
+import { ReportingPeriod } from './inventory.js';
 import { StrongPassword } from './password.js';
 import {
   ApPostingStatus,
@@ -739,6 +740,11 @@ export type PartnerOverview = z.infer<typeof PartnerOverview>;
 // --- Dashboard --------------------------------------------------------------
 
 export const DashboardResponse = z.object({
+  /**
+   * The window the volume cards cover. The attention counts ignore it: a
+   * document the FTA refused is still refused, whatever month it was issued.
+   */
+  period: ReportingPeriod,
   tenantStatus: TenantStatus,
   aspStatus: AspConnectionStatus,
   canSubmit: z.boolean(),

@@ -4,6 +4,7 @@ import { withTenant } from '../../db/client.js';
 import { requireContext, requirePermission } from '../../http/context.js';
 import { notFound } from '../../lib/errors.js';
 import { BATCH_SELECT, toBatchSummary, type BatchRow } from '../batches/routes.js';
+import { parsePeriod, toReportingPeriod } from '../metering/period.js';
 
 /**
  * The merchant landing page.
@@ -15,6 +16,11 @@ export function registerDashboardRoutes(app: FastifyInstance) {
   app.get('/api/v1/dashboard', { preHandler: requirePermission('invoice.read') }, async (request, reply) => {
     const ctx = requireContext(request);
     if (!ctx.tenantId) throw notFound('Tenant');
+
+    // The volume cards read through a window; the attention counts do not.
+    // "Three invoices the FTA refused" is true until somebody fixes them, and
+    // scoping it to a month would retire a problem by waiting.
+    const period = parsePeriod(request.query);
 
     const data = await withTenant(ctx.tenantId, async (tx) => {
       const tenants = await tx<{ status: string }[]>`
@@ -30,6 +36,8 @@ export function registerDashboardRoutes(app: FastifyInstance) {
       const statusCounts = await tx<{ status: InvoiceStatus; count: string }[]>`
         SELECT status, count(*)::text AS count FROM invoices
         WHERE tenant_id = ${ctx.tenantId} AND direction = 'OUTBOUND_SALES_AR'
+          AND (${period.from}::date IS NULL OR issue_date >= ${period.from}::date)
+          AND (${period.to}::date IS NULL OR issue_date <= ${period.to}::date)
         GROUP BY status
       `;
 
@@ -96,6 +104,8 @@ export function registerDashboardRoutes(app: FastifyInstance) {
         FROM invoices
         WHERE tenant_id = ${ctx.tenantId} AND direction = 'OUTBOUND_SALES_AR'
           AND latest_response_code IS NOT NULL
+          AND (${period.from}::date IS NULL OR issue_date >= ${period.from}::date)
+          AND (${period.to}::date IS NULL OR issue_date <= ${period.to}::date)
         GROUP BY latest_response_code
       `;
 
@@ -104,6 +114,8 @@ export function registerDashboardRoutes(app: FastifyInstance) {
         WHERE tenant_id = ${ctx.tenantId} AND direction = 'OUTBOUND_SALES_AR'
           AND status IN ('ACCEPTED_BY_FTA', 'DELIVERED_TO_BUYER')
           AND latest_response_code IS NULL
+          AND (${period.from}::date IS NULL OR issue_date >= ${period.from}::date)
+          AND (${period.to}::date IS NULL OR issue_date <= ${period.to}::date)
       `;
 
       const recentBatches = await tx.unsafe<BatchRow[]>(
@@ -131,6 +143,9 @@ export function registerDashboardRoutes(app: FastifyInstance) {
     ) as Record<InvoiceStatus, number>;
 
     return reply.send({
+      // Stated back, so the page can label what its volume cards cover
+      // rather than the reader inferring it from the picker.
+      period: toReportingPeriod(period),
       tenantStatus: data.tenants[0]?.status ?? 'PENDING',
       aspStatus: data.configs[0]?.status ?? 'NOT_CONFIGURED',
       canSubmit: data.tenants[0]?.status === 'ACTIVE' && data.configs[0]?.status === 'ACTIVE',
