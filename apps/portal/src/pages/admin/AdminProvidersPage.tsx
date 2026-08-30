@@ -669,7 +669,12 @@ function ProviderFormModal({
             >
               <option value="MOCK">Simulator (development)</option>
               <option value="GENERIC_REST">Third-party (REST)</option>
-              <option value="NATIVE_AS4">Native (AS4 gateway)</option>
+              {/* Native AS4 is Phase 2 and its driver throws on use, so it is
+                  not offered. A provider already recorded as Native keeps the
+                  value — the option is hidden, not removed from the enum. */}
+              {form.providerType === 'NATIVE_AS4' && (
+                <option value="NATIVE_AS4">Native (AS4 gateway)</option>
+              )}
             </select>
           </Field>
 

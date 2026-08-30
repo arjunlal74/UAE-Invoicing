@@ -313,9 +313,13 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
               });
             }}
           >
-            <option value="MOCK">Simulated provider (development)</option>
-            <option value="GENERIC_REST">Third-party ASP over REST</option>
-            <option value="NATIVE_AS4">Native AS4 gateway (Phase 2 — not implemented)</option>
+            <option value="MOCK">Simulator (development)</option>
+            <option value="GENERIC_REST">Third-party (REST)</option>
+            {/* Hidden while its driver is unimplemented, but kept for a
+                connection already on it, or the select would show a blank. */}
+            {providerType === 'NATIVE_AS4' && (
+              <option value="NATIVE_AS4">Native (AS4 gateway)</option>
+            )}
           </select>
         </Field>
 
