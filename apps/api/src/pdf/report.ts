@@ -41,6 +41,103 @@ export interface ReportPdfInput {
   truncated: boolean;
 }
 
+export interface TenantDirectoryGroup {
+  /** The tier, as a person names it. */
+  title: string;
+  columns: string[];
+  rows: string[][];
+}
+
+export interface TenantDirectoryPdfInput {
+  groups: TenantDirectoryGroup[];
+  /** What the reader filtered to, so the paper says which list this is. */
+  filterLabel: string;
+  platformName: string;
+  generatedFor: string;
+}
+
+/**
+ * The tenant directory, one table per tier (SRS v2.1 §2).
+ *
+ * Grouped rather than sorted, because the tiers are not degrees of the same
+ * thing: a channel partner resells capacity and never files, a managed
+ * sub-tenant files against a slice it did not buy, and a direct tenant does
+ * both. Their columns mean different things, and one flat table invites the
+ * reader to compare a row against the row above it when that comparison is
+ * meaningless.
+ *
+ * An empty tier is still printed, with a line saying so. "No channel partners"
+ * is an answer; a missing section leaves the reader wondering whether the
+ * report covers partners at all.
+ */
+export async function renderTenantDirectoryPdf(input: TenantDirectoryPdfInput): Promise<Buffer> {
+  const pdf = startPdf({
+    title: 'Tenant directory',
+    subject: input.filterLabel,
+    landscape: true,
+    footerNote: `Tenant directory · ${input.platformName} · ${input.filterLabel}`,
+  });
+
+  const { doc } = pdf;
+  const left = doc.page.margins.left;
+  const width = pdf.width;
+
+  drawMasthead(doc, left, width, {
+    title: 'Tenant directory',
+    subtitle: input.filterLabel,
+    rightLines: [input.platformName, input.generatedFor],
+  });
+
+  doc.y += 14;
+
+  for (const group of input.groups) {
+    ensureSpace(doc, SECTION_KEEP_TOGETHER);
+    sectionHeading(doc, `${group.title} (${group.rows.length})`);
+
+    if (group.rows.length === 0) {
+      doc.font(FONT.regular).fontSize(8.5).fillColor(INK.muted);
+      doc.text('None on this list.', left, doc.y + 2, { width });
+      doc.y += 18;
+      continue;
+    }
+
+    const fontSize = 8;
+    const headerFontSize = 6.5;
+    // Measured per group rather than once for the whole document: the tiers
+    // hold different things, and a width set by the widest partner name would
+    // leave the sub-tenant table with a column of air beside it.
+    const widths = autoColumnWidths(
+      doc,
+      group.columns,
+      group.rows,
+      width,
+      fontSize,
+      headerFontSize,
+    );
+    const numeric = numericColumns(group.rows, group.columns.length);
+
+    drawTable(doc, {
+      columns: group.columns.map((header, index) => ({
+        header,
+        width: widths[index]!,
+        align: numeric[index] ? ('right' as const) : ('left' as const),
+      })),
+      rows: group.rows,
+      fontSize,
+      headerFontSize,
+      onPageBreak: () => {
+        doc.font(FONT.regular).fontSize(7).fillColor(INK.faint);
+        doc.text(`${group.title} — continued`, left, doc.y, { width, lineBreak: false });
+        doc.y += 10;
+      },
+    });
+
+    doc.y += 14;
+  }
+
+  return pdf.done();
+}
+
 /** A heading plus a header row and two data rows — enough to be worth the paper. */
 const SECTION_KEEP_TOGETHER = 74;
 

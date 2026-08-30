@@ -1,9 +1,14 @@
-import type { PaginatedResult, TenantSummary, TenantType } from '@uae/contracts';
+import type {
+  PaginatedResult,
+  ProviderSummary,
+  TenantSummary,
+  TenantType,
+} from '@uae/contracts';
 import { TENANT_TYPE_LABELS } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { EMIRATES } from '@uae/domain';
 import { useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -16,6 +21,7 @@ import {
   formatDate,
   inputClass,
 } from '../../components/ui';
+import { PdfActions } from '../../components/PdfActions';
 import { ApiError, api, queryString } from '../../lib/api';
 
 /**
@@ -32,6 +38,14 @@ export function AdminTenantsPage() {
   const [typeFilter, setTypeFilter] = useState('');
   const [aspFilter, setAspFilter] = useState(params.get('aspStatus') ?? '');
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<TenantSummary | null>(null);
+
+  const exportQuery = queryString({
+    q: search,
+    status: statusFilter,
+    tenantType: typeFilter,
+    aspStatus: aspFilter,
+  });
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-tenants', search, statusFilter, typeFilter, aspFilter],
@@ -48,11 +62,23 @@ export function AdminTenantsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-semibold text-slate-900">Tenants</h1>
-        <Button variant="primary" onClick={() => setCreating(true)}>
-          Onboard a tenant
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* The files cover the filtered list, not everything: a printed
+              directory that quietly held a different set from the screen it
+              was printed from is worse than none, because the reader cannot
+              tell which one is wrong. */}
+          <PdfActions
+            path={`/api/v1/admin/tenants.pdf${exportQuery}`}
+            xlsxPath={`/api/v1/admin/tenants.xlsx${exportQuery}`}
+            disabled={!data?.items.length}
+            label="PDF"
+          />
+          <Button variant="primary" onClick={() => setCreating(true)}>
+            Onboard a tenant
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -113,18 +139,14 @@ export function AdminTenantsPage() {
                 <th className="px-4 py-2 font-medium">Provider</th>
                 <th className="px-4 py-2 text-right font-medium">Invoices</th>
                 <th className="px-4 py-2 font-medium">Onboarded</th>
+                <th className="px-4 py-2 text-right font-medium">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {data.items.map((tenant) => (
                 <tr key={tenant.id} className="hover:bg-slate-50">
                   <td className="px-4 py-2">
-                    <Link
-                      to={`/admin/tenants/${tenant.id}`}
-                      className="font-medium text-brand-600 underline"
-                    >
-                      {tenant.legalNameEn}
-                    </Link>
+                    <div className="font-medium text-slate-800">{tenant.legalNameEn}</div>
                     <div className="arabic text-xs text-slate-500" lang="ar">
                       {tenant.legalNameAr}
                     </div>
@@ -145,6 +167,9 @@ export function AdminTenantsPage() {
                   </td>
                   <td className="px-4 py-2 text-right tabular-nums">{tenant.invoiceCount}</td>
                   <td className="px-4 py-2 text-slate-500">{formatDate(tenant.createdAt)}</td>
+                  <td className="px-4 py-2">
+                    <TenantActions tenant={tenant} onEdit={() => setEditing(tenant)} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -153,7 +178,194 @@ export function AdminTenantsPage() {
       </div>
 
       {creating && <CreateTenantModal onClose={() => setCreating(false)} />}
+      {editing && <EditTenantModal tenant={editing} onClose={() => setEditing(null)} />}
     </div>
+  );
+}
+
+/** Every verb the same width, so the column reads as a column. */
+const ACTION = 'w-24 justify-center';
+
+/**
+ * The four things an operator does to a tenant from the list.
+ *
+ * Lock and Suspend are deliberately separate buttons, because they are
+ * separate questions. Locking freezes the record against edits and does not
+ * touch filing; suspending stops the merchant filing and leaves their details
+ * editable. Folding them into one control — as this page first did — means an
+ * operator protecting a record from a typo takes a live merchant off the air.
+ *
+ * Editing is refused while locked, which is the whole point of the lock, so
+ * the button says so rather than failing at the server.
+ */
+function TenantActions({ tenant, onEdit }: { tenant: TenantSummary; onEdit: () => void }) {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = () => {
+    setError(null);
+    void queryClient.invalidateQueries({ queryKey: ['admin-tenants'] });
+  };
+  const fail = (cause: unknown, fallback: string) =>
+    setError(cause instanceof ApiError ? cause.message : fallback);
+
+  const setLock = useMutation({
+    mutationFn: (isLocked: boolean) =>
+      api(`/api/v1/admin/tenants/${tenant.id}`, { method: 'PATCH', body: { isLocked } }),
+    onSuccess: refresh,
+    onError: (cause) => fail(cause, 'That record could not be locked.'),
+  });
+
+  const setStatus = useMutation({
+    mutationFn: (status: 'ACTIVE' | 'SUSPENDED') =>
+      api(`/api/v1/admin/tenants/${tenant.id}/status`, {
+        method: 'POST',
+        // Omitted rather than nulled when reactivating: the field is optional,
+        // not nullable, and a null fails validation.
+        body: {
+          status,
+          ...(status === 'SUSPENDED' ? { reason: 'Suspended from the tenant list.' } : {}),
+        },
+      }),
+    onSuccess: refresh,
+    onError: (cause) => fail(cause, 'That status could not be changed.'),
+  });
+
+  const busy = setLock.isPending || setStatus.isPending;
+  const suspended = tenant.status === 'SUSPENDED';
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex justify-end gap-1">
+        <Button
+          size="sm"
+          className={ACTION}
+          onClick={() => navigate(`/admin/tenants/${tenant.id}`)}
+        >
+          View
+        </Button>
+
+        <Button
+          size="sm"
+          className={ACTION}
+          disabled={tenant.isLocked || busy}
+          title={tenant.isLocked ? 'This record is locked. Unlock it to edit.' : undefined}
+          onClick={onEdit}
+        >
+          Edit
+        </Button>
+
+        <Button
+          size="sm"
+          className={ACTION}
+          disabled={busy}
+          title={
+            tenant.isLocked
+              ? 'Frozen against edits. Filing is unaffected.'
+              : 'Freeze this record against edits. Filing is unaffected.'
+          }
+          onClick={() => setLock.mutate(!tenant.isLocked)}
+        >
+          {tenant.isLocked ? 'Unlock' : 'Lock'}
+        </Button>
+
+        <Button
+          size="sm"
+          className={ACTION}
+          variant={suspended ? 'secondary' : 'danger'}
+          disabled={busy}
+          title={
+            suspended
+              ? 'Let this tenant file again.'
+              : 'Stop this tenant filing. Their record stays editable.'
+          }
+          onClick={() => setStatus.mutate(suspended ? 'ACTIVE' : 'SUSPENDED')}
+        >
+          {suspended ? 'Reactivate' : 'Suspend'}
+        </Button>
+      </div>
+
+      {/* Below the row rather than beside it: an inline message pushed the
+          buttons out of line and the column stopped being a column. */}
+      {error && <span className="max-w-md text-right text-xs text-danger-700">{error}</span>}
+    </div>
+  );
+}
+
+/**
+ * The fields a platform operator may correct after onboarding.
+ *
+ * Deliberately not the TRN, the company code or the tier. Those identify the
+ * tenant to the tax authority and to every document already filed under them;
+ * changing one is not an edit but a different company, and the endpoint does
+ * not accept them either.
+ */
+function EditTenantModal({ tenant, onClose }: { tenant: TenantSummary; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    legalNameEn: tenant.legalNameEn,
+    legalNameAr: tenant.legalNameAr ?? '',
+  });
+
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/api/v1/admin/tenants/${tenant.id}`, {
+        method: 'PATCH',
+        body: {
+          legalNameEn: form.legalNameEn.trim(),
+          legalNameAr: form.legalNameAr.trim() || undefined,
+        },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-tenants'] });
+      onClose();
+    },
+    onError: (cause) =>
+      setError(cause instanceof ApiError ? cause.message : 'Those changes could not be saved.'),
+  });
+
+  return (
+    <Modal title={`Edit ${tenant.companyCode}`} onClose={onClose}>
+      <div className="space-y-3">
+        {error && <Alert kind="danger">{error}</Alert>}
+
+        <Field label="Legal name (English)" required>
+          <input
+            className={inputClass}
+            value={form.legalNameEn}
+            onChange={(e) => setForm({ ...form, legalNameEn: e.target.value })}
+          />
+        </Field>
+
+        <Field label="Legal name (Arabic)">
+          <input
+            className={`${inputClass} arabic`}
+            lang="ar"
+            dir="rtl"
+            value={form.legalNameAr}
+            onChange={(e) => setForm({ ...form, legalNameAr: e.target.value })}
+          />
+        </Field>
+
+        <p className="text-xs text-slate-500">
+          The TRN, company code and tier identify this tenant on every document already filed
+          under it, so they are not editable here.
+        </p>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            variant="primary"
+            disabled={!form.legalNameEn.trim() || save.isPending}
+            onClick={() => save.mutate()}
+          >
+            {save.isPending ? 'Saving…' : 'Save'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -171,9 +383,19 @@ function CreateTenantModal({ onClose }: { onClose: () => void }) {
     street: '',
     city: '',
     emirate: 'Dubai',
+    aspProviderId: '',
     adminEmail: '',
     adminFullName: '',
   });
+
+  // Only the ones still being bought from. A retired provider is kept on file
+  // for the contracts already against it, not offered for a new tenant.
+  const { data: providers } = useQuery({
+    queryKey: ['asp-providers', 'onboarding'],
+    queryFn: () => api<{ items: ProviderSummary[] }>('/api/v1/admin/providers'),
+  });
+  const selectable = (providers?.items ?? []).filter((provider) => provider.isActive);
+  const chosen = selectable.find((provider) => provider.id === form.aspProviderId);
 
   const create = useMutation({
     mutationFn: () =>
@@ -195,6 +417,7 @@ function CreateTenantModal({ onClose }: { onClose: () => void }) {
             postalCode: '',
             countryCode: 'AE',
           },
+          aspProviderId: form.aspProviderId || undefined,
           adminEmail: form.adminEmail || undefined,
           adminFullName: form.adminFullName || undefined,
         },
@@ -354,6 +577,47 @@ function CreateTenantModal({ onClose }: { onClose: () => void }) {
             onChange={(e) => setForm({ ...form, street: e.target.value })}
           />
         </Field>
+
+        <Field
+          label="Accredited provider"
+          hint={
+            chosen
+              ? 'Their connection details are filled in below. Credentials are issued per merchant and are added once they register you.'
+              : 'Optional — the connection can be configured later from the tenant.'
+          }
+        >
+          <select
+            className={inputClass}
+            value={form.aspProviderId}
+            onChange={(e) => setForm({ ...form, aspProviderId: e.target.value })}
+          >
+            <option value="">— Choose later —</option>
+            {selectable.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name}
+                {provider.accreditationReference ? ` · ${provider.accreditationReference}` : ''}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        {/* Read-only on purpose. These are facts about the provider, the same
+            for every merchant on them, so they are shown to confirm the choice
+            rather than offered for editing here — one provider changing its
+            endpoint should be one edit on the provider, not one per tenant. */}
+        {chosen && (
+          <div className="rounded-lg border border-brand-100 bg-brand-50 p-3 text-xs text-slate-700">
+            <div className="font-medium text-brand-800">Filled in from {chosen.name}</div>
+            <dl className="mt-1 grid grid-cols-[8rem_1fr] gap-x-3 gap-y-0.5">
+              <dt className="text-slate-500">Connection</dt>
+              <dd>{chosen.providerType}</dd>
+              <dt className="text-slate-500">Endpoint</dt>
+              <dd className="break-all">{chosen.apiEndpoint || 'Not recorded on the provider'}</dd>
+              <dt className="text-slate-500">Status</dt>
+              <dd>Awaiting registration — credentials are issued per merchant</dd>
+            </dl>
+          </div>
+        )}
 
         <Field
           label="Administrator name"

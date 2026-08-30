@@ -1,5 +1,6 @@
 import {
   CreateTenantRequest,
+  TENANT_TYPE_LABELS,
   UpdateTenantRequest,
   UpdateTenantStatusRequest,
   can,
@@ -10,6 +11,10 @@ import {
 } from '@uae/contracts';
 import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit, diff } from '../../audit/audit.js';
+import { renderWorkbookXlsx } from '../../excel/report.js';
+import { sendXlsx } from '../../excel/reply.js';
+import { renderTenantDirectoryPdf } from '../../pdf/report.js';
+import { sendPdf } from '../../pdf/reply.js';
 import { createInvite } from '../../auth/service.js';
 import { config } from '../../config.js';
 import { jsonb, sql, withPlatformAccess } from '../../db/client.js';
@@ -41,6 +46,7 @@ interface TenantRow {
   vat_group_trn: string | null;
   registered_address: unknown;
   status: TenantSummary['status'];
+  is_locked: boolean;
   asp_status: TenantDetail['aspStatus'] | null;
   invoice_count: string;
   user_count?: string;
@@ -60,29 +66,35 @@ function toSummary(row: TenantRow): TenantSummary {
     legalNameAr: row.legal_name_ar,
     trn: row.trn,
     status: row.status,
+    isLocked: row.is_locked,
     aspStatus: row.asp_status ?? 'NOT_CONFIGURED',
     invoiceCount: Number(row.invoice_count ?? 0),
     createdAt: row.created_at.toISOString(),
   };
 }
 
-export function registerTenantRoutes(app: FastifyInstance) {
-  // --- Platform: list ------------------------------------------------------
-  app.get('/api/v1/admin/tenants', { preHandler: requirePlatform() }, async (request, reply) => {
-    const query = request.query as {
-      q?: string;
-      status?: string;
-      tenantType?: string;
-      /**
-       * The dashboard counts tenants whose provider connection is not live and
-       * links here. Without a filter the operator lands on every tenant and has
-       * to find the ones the tile was counting, which is the work the tile was
-       * supposed to have done.
-       */
-      aspStatus?: string;
-    };
+interface TenantListFilters {
+  q?: string;
+  status?: string;
+  tenantType?: string;
+  /**
+   * The dashboard counts tenants whose provider connection is not live and
+   * links here. Without a filter the operator lands on every tenant and has to
+   * find the ones the tile was counting, which is the work the tile was
+   * supposed to have done.
+   */
+  aspStatus?: string;
+}
 
-    const rows = await withPlatformAccess(
+/**
+ * One query for the screen and for the files it exports.
+ *
+ * A printed directory that quietly covered a different set from the list it
+ * was printed from would be worse than none: the reader has no way to tell,
+ * and these get filed.
+ */
+async function listTenants(query: TenantListFilters) {
+  return withPlatformAccess(
       (tx) => tx<TenantRow[]>`
         SELECT t.*,
                p.legal_name_en AS parent_name,
@@ -110,10 +122,158 @@ export function registerTenantRoutes(app: FastifyInstance) {
                OR c.status::text = ${query.aspStatus ?? null})
         ORDER BY t.created_at DESC
       `,
-    );
+  );
+}
 
+/** What the reader filtered to, in words, for the head of a printed copy. */
+function filterLabel(query: TenantListFilters): string {
+  const parts: string[] = [];
+  if (query.q) parts.push(`matching "${query.q}"`);
+  if (query.status) parts.push(`status ${query.status.toLowerCase()}`);
+  if (query.tenantType) parts.push(TENANT_TYPE_LABELS[query.tenantType as TenantType] ?? query.tenantType);
+  if (query.aspStatus === 'NOT_LIVE') parts.push('provider connection not live');
+  else if (query.aspStatus) parts.push(`provider ${query.aspStatus.toLowerCase()}`);
+
+  return parts.length === 0 ? 'Every tenant' : `Filtered: ${parts.join(', ')}`;
+}
+
+/**
+ * The tiers, in the order the units travel: the host sells to a partner or a
+ * direct tenant, and a partner allocates to its own sub-tenants.
+ */
+/**
+ * The directory's sections, in the order units travel down the hierarchy.
+ *
+ * Managed sub-tenants break out one section per partner rather than sitting in
+ * one list. A sub-tenant's balance comes out of its partner's master pool, so
+ * "who is under Gulf Advisory" is the question actually asked of this tier —
+ * and answering it from a single list means reading a Parent column and
+ * grouping by eye, which is the work the report is for.
+ *
+ * A partner with no sub-tenants still gets a section saying so. Silence would
+ * read as "not covered" rather than "none yet".
+ */
+function directoryGroups(
+  tenants: ReturnType<typeof toSummary>[],
+): { title: string; rows: string[][] }[] {
+  const of = (tier: TenantType) => tenants.filter((tenant) => tenant.tenantType === tier);
+
+  const partners = of('CHANNEL_PARTNER');
+  const managed = of('MANAGED_SUB_TENANT');
+
+  const groups = [
+    { title: TENANT_TYPE_LABELS.CHANNEL_PARTNER, rows: partners.map(directoryRow) },
+    { title: TENANT_TYPE_LABELS.ENTERPRISE_TENANT, rows: of('ENTERPRISE_TENANT').map(directoryRow) },
+  ];
+
+  for (const partner of partners) {
+    groups.push({
+      title: `${TENANT_TYPE_LABELS.MANAGED_SUB_TENANT} — under ${partner.legalNameEn}`,
+      rows: managed.filter((tenant) => tenant.parentName === partner.legalNameEn).map(directoryRow),
+    });
+  }
+
+  // Anything whose partner is not on this list — filtered out, or an orphan.
+  // Dropping them silently would make the sections add up to less than the
+  // total on the front of the report.
+  const named = new Set(partners.map((partner) => partner.legalNameEn));
+  const unplaced = managed.filter((tenant) => !tenant.parentName || !named.has(tenant.parentName));
+  if (unplaced.length > 0) {
+    groups.push({
+      title: `${TENANT_TYPE_LABELS.MANAGED_SUB_TENANT} — partner not on this list`,
+      rows: unplaced.map(directoryRow),
+    });
+  }
+
+  return groups;
+}
+
+const DIRECTORY_COLUMNS = [
+  'Company',
+  'Code',
+  'TRN',
+  'Account',
+  'Provider',
+  'Parent',
+  'Invoices',
+  'Onboarded',
+];
+
+function directoryRow(tenant: ReturnType<typeof toSummary>): string[] {
+  return [
+    tenant.legalNameEn,
+    tenant.companyCode,
+    tenant.trn ?? '—',
+    tenant.status,
+    tenant.aspStatus,
+    tenant.parentName ?? '—',
+    String(tenant.invoiceCount),
+    tenant.createdAt.slice(0, 10),
+  ];
+}
+
+export function registerTenantRoutes(app: FastifyInstance) {
+  // --- Platform: list ------------------------------------------------------
+  app.get('/api/v1/admin/tenants', { preHandler: requirePlatform() }, async (request, reply) => {
+    const rows = await listTenants(request.query as TenantListFilters);
     return reply.send({ items: rows.map(toSummary), total: rows.length, page: 1, pageSize: rows.length });
   });
+
+  // --- Platform: the same list on paper, and in a workbook -----------------
+  //
+  // Grouped by tier rather than sorted by it. The tiers are not degrees of one
+  // thing — a partner resells capacity and never files, a sub-tenant files
+  // against a slice it did not buy — so a flat table invites a comparison
+  // between neighbouring rows that does not mean anything.
+  for (const format of ['pdf', 'xlsx'] as const) {
+    app.get(
+      `/api/v1/admin/tenants.${format}`,
+      { preHandler: requirePlatform() },
+      async (request, reply) => {
+        const query = request.query as TenantListFilters;
+        const tenants = (await listTenants(query)).map(toSummary);
+        const label = filterLabel(query);
+        const stamp = new Date().toISOString().slice(0, 10);
+
+        const groups = directoryGroups(tenants);
+
+        if (format === 'xlsx') {
+          // A tab per tier: the grouping survives sorting, which it would not
+          // if the three tables were stacked on one sheet.
+          return sendXlsx(
+            reply,
+            await renderWorkbookXlsx(
+              groups.map((group) => ({
+                // Excel caps a tab name at 31 characters, so a long partner
+                // name is trimmed there rather than losing the tier prefix.
+                sheetName: group.title.replace('Managed sub-tenant — under ', 'Under '),
+                title: 'Tenant directory',
+                subtitle: group.title,
+                periodLabel: label,
+                holderName: config().PLATFORM_NAME,
+                columns: DIRECTORY_COLUMNS,
+                rows: group.rows,
+              })),
+            ),
+            `tenant-directory-${stamp}`,
+          );
+        }
+
+        const pdf = await renderTenantDirectoryPdf({
+          groups: groups.map((group) => ({
+            title: group.title,
+            columns: DIRECTORY_COLUMNS,
+            rows: group.rows,
+          })),
+          filterLabel: label,
+          platformName: config().PLATFORM_NAME,
+          generatedFor: `${tenants.length} tenant${tenants.length === 1 ? '' : 's'}`,
+        });
+
+        return sendPdf(request, reply, pdf, `tenant-directory-${stamp}`);
+      },
+    );
+  }
 
   // --- Platform: create ----------------------------------------------------
   app.post('/api/v1/admin/tenants', { preHandler: requirePlatform() }, async (request, reply) => {
@@ -270,6 +430,16 @@ export function registerTenantRoutes(app: FastifyInstance) {
       const before = existing[0];
       if (!before) throw notFound('Tenant');
 
+      // Locked means locked. The one edit that gets through is the unlock
+      // itself, or the lock would be a door with no handle on the inside.
+      const keys = Object.keys(body);
+      const unlockOnly = keys.length === 1 && keys[0] === 'isLocked' && body.isLocked === false;
+      if (before.is_locked && !unlockOnly) {
+        throw badRequest(
+          `${before.legal_name_en} is locked. Unlock it before editing. Locking does not affect filing — use Suspend for that.`,
+        );
+      }
+
       // A tenant that claims VAT group membership must name the group, whether
       // the flag or the TRN was the field being edited.
       const isVatGroup = body.isVatGroup ?? before.is_vat_group;
@@ -281,6 +451,7 @@ export function registerTenantRoutes(app: FastifyInstance) {
 
       await tx`
         UPDATE tenants SET
+          is_locked          = ${body.isLocked ?? before.is_locked},
           legal_name_en      = ${body.legalNameEn ?? before.legal_name_en},
           legal_name_ar      = ${body.legalNameAr ?? before.legal_name_ar},
           is_vat_group       = ${isVatGroup},
@@ -318,10 +489,17 @@ export function registerTenantRoutes(app: FastifyInstance) {
       const body = UpdateTenantStatusRequest.parse(request.body);
 
       await withPlatformAccess(async (tx) => {
-        const rows = await tx<{ status: string }[]>`SELECT status FROM tenants WHERE id = ${id}`;
+        const rows = await tx<{ status: string; tenant_type: TenantType }[]>`
+          SELECT status, tenant_type FROM tenants WHERE id = ${id}
+        `;
         if (!rows[0]) throw notFound('Tenant');
 
-        if (body.status === 'ACTIVE') {
+        // A channel partner resells capacity and never files, so it has no
+        // provider connection to check — and holding it to one made a
+        // suspended partner impossible to reactivate through any screen. The
+        // promise activation makes is "this account can do its job", and a
+        // partner's job is onboarding sub-tenants, not submitting documents.
+        if (body.status === 'ACTIVE' && rows[0].tenant_type !== 'CHANNEL_PARTNER') {
           // Activation is a promise that invoices can actually be filed. If the
           // provider connection is not live, that promise is false, and the
           // merchant would discover it only at submission time.

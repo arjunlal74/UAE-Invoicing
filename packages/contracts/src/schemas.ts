@@ -191,6 +191,11 @@ export const CreateTenantRequest = z.object({
 export type CreateTenantRequest = z.infer<typeof CreateTenantRequest>;
 
 export const UpdateTenantRequest = z.object({
+  /**
+   * Record safety, not service. A locked tenant carries on filing exactly as
+   * before; what stops is anyone editing the details underneath them.
+   */
+  isLocked: z.boolean().optional(),
   legalNameEn: z.string().trim().min(1).max(255).optional(),
   legalNameAr: z.string().trim().min(1).max(255).optional(),
   isVatGroup: z.boolean().optional(),
@@ -249,6 +254,8 @@ export const UpdateTenantStatusRequest = z.object({
 export const TenantSummary = z.object({
   id: uuid,
   tenantType: TenantType,
+  /** Frozen against edits. Independent of `status`, which governs filing. */
+  isLocked: z.boolean(),
   parentTenantId: uuid.nullable(),
   parentName: z.string().nullable(),
   companyCode: z.string(),

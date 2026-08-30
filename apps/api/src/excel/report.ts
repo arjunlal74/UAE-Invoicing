@@ -73,7 +73,19 @@ export async function renderWorkbookXlsx(sheets: ReportXlsxInput[]): Promise<Buf
   workbook.creator = sheets[0]?.holderName ?? 'UAE E-Invoicing';
   workbook.created = new Date();
 
-  for (const input of sheets) addSheet(workbook, input);
+  // Two names that differ only past the 31-character cut collide once trimmed,
+  // and Excel refuses a duplicate tab — which would fail the whole download
+  // rather than one sheet. Deduplicated here so no caller has to know.
+  const taken = new Set<string>();
+  for (const input of sheets) {
+    let name = safeSheetName(input.sheetName);
+    for (let suffix = 2; taken.has(name.toLowerCase()); suffix += 1) {
+      const tag = ` (${suffix})`;
+      name = `${safeSheetName(input.sheetName).slice(0, 31 - tag.length)}${tag}`;
+    }
+    taken.add(name.toLowerCase());
+    addSheet(workbook, { ...input, sheetName: name });
+  }
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
