@@ -7,6 +7,7 @@ import {
   Card,
   EmptyState,
   Field,
+  Icon,
   Modal,
   PageHeader,
   Spinner,
@@ -266,7 +267,7 @@ export function AdminProvidersPage() {
                     className={cx('hover:bg-slate-50', !provider.isActive && 'text-slate-400')}
                   >
                     <td className="px-4 py-2">
-                      <span className="font-medium text-slate-800">{provider.name}</span>
+                      <span className="text-slate-800">{provider.name}</span>
                       {!provider.isActive && <Chip>retired</Chip>}
                       {provider.isLocked && <Chip>locked</Chip>}
                       {provider.contactEmail && (
@@ -315,50 +316,59 @@ export function AdminProvidersPage() {
                       )}
                     </td>
                     <td className="px-4 py-2">
-                      {/* One width for the lot: the verb on the last button
-                          changes with the row, and ragged edges down a column
-                          read as a layout fault rather than as information. */}
-                      <div className="flex justify-end gap-1 [&>button]:w-24 [&>button]:justify-center">
-                        <Button size="sm" onClick={() => setViewing(provider)}>
-                          View
+                      {/* Icons rather than words, so eight columns of figures
+                          keep the width. Every one carries its verb as an
+                          accessible name and a tooltip: a glyph is shorthand
+                          for someone who already knows what it means, and must
+                          not be the only way to find out. */}
+                      <div className="flex justify-end gap-1 [&>button]:w-9 [&>button]:justify-center">
+                        <Button size="sm" label="View" onClick={() => setViewing(provider)}>
+                          <Icon name="view" />
                         </Button>
                         <Button
                           size="sm"
+                          label="Edit"
                           disabled={provider.isLocked}
-                          title={provider.isLocked ? LOCKED_HINT : undefined}
+                          title={provider.isLocked ? LOCKED_HINT : 'Edit'}
                           onClick={() => setEditing(provider)}
                         >
-                          Edit
+                          <Icon name="edit" />
                         </Button>
                         <Button
                           size="sm"
+                          label={provider.isLocked ? 'Unlock' : 'Lock'}
                           disabled={patch.isPending}
                           title={
                             provider.isLocked
-                              ? 'Reopen this record for editing.'
-                              : 'Freeze these details. Retirement is unaffected.'
+                              ? 'Unlock — reopen this record for editing.'
+                              : 'Lock — freeze these details. Retirement is unaffected.'
                           }
                           onClick={() =>
                             patch.mutate({ id: provider.id, isLocked: !provider.isLocked })
                           }
                         >
-                          {provider.isLocked ? 'Unlock' : 'Lock'}
+                          <Icon name={provider.isLocked ? 'unlock' : 'lock'} />
                         </Button>
                         <Button
                           size="sm"
+                          label={provider.isActive ? 'Retire' : 'Reactivate'}
                           disabled={patch.isPending || provider.isLocked}
                           title={
                             provider.isLocked
                               ? LOCKED_HINT
-                              : provider.isActive && provider.lifetimeContractCount > 0
-                                ? `${provider.lifetimeContractCount} contract(s) on file — they stay, only the picker loses this provider`
-                                : undefined
+                              : provider.isActive
+                                ? `Retire${
+                                    provider.lifetimeContractCount > 0
+                                      ? ` — ${provider.lifetimeContractCount} contract(s) stay on file; only the picker loses this provider`
+                                      : ''
+                                  }`
+                                : 'Reactivate'
                           }
                           onClick={() =>
                             patch.mutate({ id: provider.id, isActive: !provider.isActive })
                           }
                         >
-                          {provider.isActive ? 'Retire' : 'Reactivate'}
+                          <Icon name={provider.isActive ? 'retire' : 'restore'} />
                         </Button>
                       </div>
                     </td>

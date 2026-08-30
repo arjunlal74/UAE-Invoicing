@@ -15,6 +15,7 @@ import {
   Card,
   EmptyState,
   Field,
+  Icon,
   Modal,
   Spinner,
   StatusBadge,
@@ -146,7 +147,7 @@ export function AdminTenantsPage() {
               {data.items.map((tenant) => (
                 <tr key={tenant.id} className="hover:bg-slate-50">
                   <td className="px-4 py-2">
-                    <div className="font-medium text-slate-800">{tenant.legalNameEn}</div>
+                    <div className="text-slate-800">{tenant.legalNameEn}</div>
                     <div className="arabic text-xs text-slate-500" lang="ar">
                       {tenant.legalNameAr}
                     </div>
@@ -183,8 +184,15 @@ export function AdminTenantsPage() {
   );
 }
 
-/** Every verb the same width, so the column reads as a column. */
-const ACTION = 'w-24 justify-center';
+/**
+ * Every verb the same width, so the column reads as a column.
+ *
+ * Icons rather than words: the row already carries eight columns, and four
+ * labelled buttons took more of it than the figures did. Each one keeps its
+ * verb as an accessible name and a tooltip — a glyph is shorthand for someone
+ * who already knows what it means, never the only way to find out.
+ */
+const ACTION = 'w-9 justify-center';
 
 /**
  * The four things an operator does to a tenant from the list.
@@ -241,48 +249,52 @@ function TenantActions({ tenant, onEdit }: { tenant: TenantSummary; onEdit: () =
         <Button
           size="sm"
           className={ACTION}
+          label="View"
           onClick={() => navigate(`/admin/tenants/${tenant.id}`)}
         >
-          View
+          <Icon name="view" />
         </Button>
 
         <Button
           size="sm"
           className={ACTION}
+          label="Edit"
           disabled={tenant.isLocked || busy}
-          title={tenant.isLocked ? 'This record is locked. Unlock it to edit.' : undefined}
+          title={tenant.isLocked ? 'This record is locked. Unlock it to edit.' : 'Edit'}
           onClick={onEdit}
         >
-          Edit
+          <Icon name="edit" />
         </Button>
 
         <Button
           size="sm"
           className={ACTION}
+          label={tenant.isLocked ? 'Unlock' : 'Lock'}
           disabled={busy}
           title={
             tenant.isLocked
-              ? 'Frozen against edits. Filing is unaffected.'
-              : 'Freeze this record against edits. Filing is unaffected.'
+              ? 'Unlock — this record is frozen against edits. Filing is unaffected.'
+              : 'Lock — freeze this record against edits. Filing is unaffected.'
           }
           onClick={() => setLock.mutate(!tenant.isLocked)}
         >
-          {tenant.isLocked ? 'Unlock' : 'Lock'}
+          <Icon name={tenant.isLocked ? 'unlock' : 'lock'} />
         </Button>
 
         <Button
           size="sm"
           className={ACTION}
+          label={suspended ? 'Reactivate' : 'Suspend'}
           variant={suspended ? 'secondary' : 'danger'}
           disabled={busy}
           title={
             suspended
-              ? 'Let this tenant file again.'
-              : 'Stop this tenant filing. Their record stays editable.'
+              ? 'Reactivate — let this tenant file again.'
+              : 'Suspend — stop this tenant filing. Their record stays editable.'
           }
           onClick={() => setStatus.mutate(suspended ? 'ACTIVE' : 'SUSPENDED')}
         >
-          {suspended ? 'Reactivate' : 'Suspend'}
+          <Icon name={suspended ? 'reactivate' : 'suspend'} />
         </Button>
       </div>
 

@@ -16,6 +16,7 @@ export function Button({
   disabled,
   type = 'button',
   title,
+  label,
   className,
 }: {
   children: ReactNode;
@@ -25,6 +26,14 @@ export function Button({
   disabled?: boolean;
   type?: 'button' | 'submit';
   title?: string;
+  /**
+   * The accessible name, for a button whose content is an icon.
+   *
+   * A tooltip is not a name: it never reaches a screen reader reliably and
+   * never reaches a keyboard user at all, so a button showing only a glyph
+   * announces as "button" without this.
+   */
+  label?: string;
   className?: string;
 }) {
   const variants = {
@@ -40,7 +49,8 @@ export function Button({
       type={type}
       onClick={onClick}
       disabled={disabled}
-      title={title}
+      title={title ?? label}
+      aria-label={label}
       className={cx(
         'inline-flex items-center gap-1.5 rounded-md font-medium transition-colors',
         'focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1',
@@ -115,6 +125,92 @@ const CARD_ACCENTS = {
     title: 'text-danger-700',
   },
 };
+
+/**
+ * The handful of glyphs the admin tables need, drawn rather than imported.
+ *
+ * Five icons do not justify a dependency, and an icon font would arrive after
+ * the first paint and shift the rows it sits in. These inherit the button's
+ * colour through `currentColor`, so a disabled or danger button carries its
+ * icon with it.
+ *
+ * Always paired with a `label` on the button: a glyph is a shorthand for
+ * people who already know what it means, never the only way to find out.
+ */
+export function Icon({ name, className }: { name: IconName; className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={cx('h-4 w-4', className)}
+      aria-hidden="true"
+      focusable="false"
+    >
+      {ICON_PATHS[name]}
+    </svg>
+  );
+}
+
+export type IconName = keyof typeof ICON_PATHS;
+
+const ICON_PATHS = {
+  view: (
+    <>
+      <path d="M1.7 10S4.6 4.8 10 4.8 18.3 10 18.3 10 15.4 15.2 10 15.2 1.7 10 1.7 10Z" />
+      <circle cx="10" cy="10" r="2.4" />
+    </>
+  ),
+  edit: (
+    <>
+      <path d="M13.4 3.6a1.7 1.7 0 0 1 2.4 2.4l-8 8-3.2.8.8-3.2Z" />
+      <path d="M3 17h14" />
+    </>
+  ),
+  lock: (
+    <>
+      <rect x="4.2" y="8.8" width="11.6" height="7.4" rx="1.4" />
+      <path d="M6.9 8.8V6.6a3.1 3.1 0 0 1 6.2 0v2.2" />
+    </>
+  ),
+  unlock: (
+    <>
+      <rect x="4.2" y="8.8" width="11.6" height="7.4" rx="1.4" />
+      {/* The shackle swung clear of the body — the difference a glance has to catch. */}
+      <path d="M6.9 8.8V6.6a3.1 3.1 0 0 1 6.1-.7" />
+    </>
+  ),
+  retire: (
+    <>
+      <rect x="2.6" y="4.2" width="14.8" height="3.6" rx="1" />
+      <path d="M4.2 7.8v7a1.4 1.4 0 0 0 1.4 1.4h8.8a1.4 1.4 0 0 0 1.4-1.4v-7" />
+      <path d="M8.2 10.8h3.6" />
+    </>
+  ),
+  // Service, not record safety: a padlock beside a pause has to read as a
+  // different kind of action at a glance, because they are.
+  suspend: (
+    <>
+      <circle cx="10" cy="10" r="7.2" />
+      <path d="M8.4 7.6v4.8M11.6 7.6v4.8" />
+    </>
+  ),
+  reactivate: (
+    <>
+      <circle cx="10" cy="10" r="7.2" />
+      <path d="M8.5 7.3l4.4 2.7-4.4 2.7Z" />
+    </>
+  ),
+  restore: (
+    <>
+      <path d="M3.4 10a6.6 6.6 0 1 0 1.9-4.6" />
+      <path d="M3 3.2v3.4h3.4" />
+    </>
+  ),
+} as const;
 
 export function Card({
   title,
