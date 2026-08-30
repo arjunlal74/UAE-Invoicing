@@ -7,6 +7,7 @@ import type {
   ProviderSummary,
   TenantDetail,
   TenantStatus,
+  TenantType,
   UserSummary,
 } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -248,7 +249,11 @@ export function AdminTenantDetailPage() {
         </Card>
       </div>
 
-      <AspConfigSection tenantId={tenantId} readOnly={!editable} />
+      <AspConfigSection
+        tenantId={tenantId}
+        tenantType={tenant.tenantType}
+        readOnly={!editable}
+      />
 
       <Card title={`Users (${users?.items.length ?? 0})`}>
         {!users || users.items.length === 0 ? (
@@ -292,13 +297,32 @@ export function AdminTenantDetailPage() {
   );
 }
 
-function AspConfigSection({ tenantId, readOnly }: { tenantId: string; readOnly: boolean }) {
+function AspConfigSection({
+  tenantId,
+  tenantType,
+  readOnly,
+}: {
+  tenantId: string;
+  tenantType: TenantType;
+  readOnly: boolean;
+}) {
   const queryClient = useQueryClient();
   const [message, setMessage] = useState<{ kind: 'ok' | 'danger'; text: string } | null>(null);
 
-  const { data: config } = useQuery({
+  // A channel partner resells capacity and never files, so it has no provider
+  // connection — and asking for one returns a 404 that has nothing to report.
+  const files = tenantType !== 'CHANNEL_PARTNER';
+
+  const {
+    data: config,
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: ['asp-config', tenantId],
     queryFn: () => api<AspConfigResponse>(`/api/v1/admin/tenants/${tenantId}/asp-config`),
+    enabled: files,
+    // A missing configuration is an answer, not a blip worth retrying at.
+    retry: false,
   });
 
   // Only the ones still being bought from: a retired provider stays on file
@@ -373,10 +397,35 @@ function AspConfigSection({ tenantId, readOnly }: { tenantId: string; readOnly: 
       }),
   });
 
-  if (!config) {
+  if (!files) {
+    return (
+      <Card title="Provider connection">
+        <p className="py-2 text-sm text-slate-600">
+          A channel partner resells capacity and does not file its own invoices, so it has no
+          provider connection. Its sub-tenants each have their own.
+        </p>
+      </Card>
+    );
+  }
+
+  if (isLoading) {
     return (
       <Card title="Provider connection">
         <Spinner />
+      </Card>
+    );
+  }
+
+  // Absent and still loading used to render identically, so a tenant with no
+  // configuration span for a spinner that never stopped.
+  if (error || !config) {
+    return (
+      <Card title="Provider connection">
+        <Alert kind="warn" title="No provider connection on file">
+          This tenant has no connection record, so it cannot file. One is normally created at
+          onboarding — re-onboarding is not needed, but a platform administrator has to add it
+          before the tenant is activated.
+        </Alert>
       </Card>
     );
   }
