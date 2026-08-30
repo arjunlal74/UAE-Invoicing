@@ -756,6 +756,12 @@ export const AdminDashboardResponse = z.object({
     total: z.number(),
     active: z.number(),
     pendingInvites: z.number(),
+    /**
+     * Heads per role, so the operator can see the shape of the population
+     * rather than one number that hides it. Absent keys are zero — a role
+     * nobody holds is not a row worth returning.
+     */
+    byRole: z.record(Role, z.number()),
   }),
   invoices: z.object({
     total: z.number(),

@@ -1,4 +1,4 @@
-import type { InvoiceStatus, TenantStatus, TenantType } from '@uae/contracts';
+import type { InvoiceStatus, Role, TenantStatus, TenantType } from '@uae/contracts';
 import type { FastifyInstance } from 'fastify';
 import { withPlatformAccess } from '../../db/client.js';
 import { requirePlatform } from '../../http/context.js';
@@ -29,6 +29,10 @@ export function registerAdminDashboardRoutes(app: FastifyInstance) {
       `;
       const tenantsByType = await tx<CountRow[]>`
         SELECT tenant_type::text AS key, count(*)::text AS count FROM tenants GROUP BY tenant_type
+      `;
+
+      const usersByRole = await tx<CountRow[]>`
+        SELECT role::text AS key, count(*)::text AS count FROM users GROUP BY role
       `;
 
       const users = await tx<{ total: string; active: string; pending: string }[]>`
@@ -147,6 +151,7 @@ export function registerAdminDashboardRoutes(app: FastifyInstance) {
         tenantsByStatus,
         tenantsByType,
         users: users[0]!,
+        usersByRole,
         invoicesByStatus,
         invoiceTotals: invoiceTotals[0]!,
         attention: attention[0]!,
@@ -170,6 +175,7 @@ export function registerAdminDashboardRoutes(app: FastifyInstance) {
         total: Number(data.users.total),
         active: Number(data.users.active),
         pendingInvites: Number(data.users.pending),
+        byRole: tally<Role>(data.usersByRole),
       },
       invoices: {
         total: invoiceTotal,

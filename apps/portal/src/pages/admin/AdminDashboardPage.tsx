@@ -1,11 +1,10 @@
-import { TENANT_TYPE_LABELS, type AdminDashboardResponse, type TenantType } from '@uae/contracts';
+import type { AdminDashboardResponse } from '@uae/contracts';
 import { formatAmount } from '@uae/domain';
 import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Alert,
-  Button,
   Card,
   Spinner,
   StatusBadge,
@@ -38,6 +37,13 @@ export function AdminDashboardPage() {
   }
 
   const a = data.needsAttention;
+  const byRole = data.users.byRole;
+  // The three admin roles are one tile. They are different authorities — the
+  // platform's, a partner's and a company's — but the question this tile
+  // answers is "how many people can administer something", and splitting it
+  // three ways would leave three tiles reading 1 on most installations.
+  const admins =
+    (byRole.GLOBAL_ADMIN ?? 0) + (byRole.PARTNER_ADMIN ?? 0) + (byRole.COMPANY_ADMIN ?? 0);
   const attentionTotal =
     a.stuckTransmissions +
     a.rejectedByFta +
@@ -49,12 +55,7 @@ export function AdminDashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-900">Platform overview</h1>
-        <Link to="/admin/tenants">
-          <Button variant="primary">Onboard a tenant</Button>
-        </Link>
-      </div>
+      <h1 className="text-lg font-semibold text-slate-900">Platform overview</h1>
 
       {!a.mailConfigured && (
         <Alert kind="warn" title="No outgoing mail account is configured">
@@ -76,132 +77,105 @@ export function AdminDashboardPage() {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Attention
               count={a.stuckTransmissions}
-              label="awaiting a verdict"
+              label="Awaiting a verdict"
+              shade="amber"
               detail="Sent to a provider over an hour ago with no response."
-              to="/admin/transmissions?status=SUBMITTED_TO_ASP"
+              // Not a bare status: that would also return every document sent
+              // in the last minute and behaving perfectly.
+              to="/admin/transmissions?stuck=true"
               tone="warn"
             />
             <Attention
               count={a.rejectedByFta}
-              label="rejected by the FTA"
+              label="Rejected by the FTA"
+              shade="rose"
               detail="Not filed. The tenant must correct and resubmit."
               to="/admin/transmissions?status=REJECTED_BY_FTA"
               tone="danger"
             />
             <Attention
               count={a.validationFailed}
-              label="failed validation"
+              label="Failed validation"
+              shade="orange"
               detail="Never reached a provider."
               to="/admin/transmissions?status=VALIDATION_FAILED"
               tone="danger"
             />
             <Attention
               count={a.tenantsPendingActivation}
-              label="tenants pending activation"
+              label="Tenants pending activation"
+              shade="sky"
               detail="Onboarded but not yet able to file."
-              to="/admin/tenants"
+              to="/admin/tenants?status=PENDING"
               tone="warn"
             />
             <Attention
               count={a.aspNotConfigured}
-              label="provider connections not live"
+              label="Provider connections not live"
+              shade="violet"
               detail="These tenants cannot submit until the connection is active."
-              to="/admin/tenants"
+              to="/admin/tenants?aspStatus=NOT_LIVE"
               tone="warn"
             />
             <Attention
               count={a.pendingInvites}
-              label="invitations not accepted"
+              label="Invitations not accepted"
+              shade="teal"
               detail="Accounts created but never signed in to."
-              to="/admin/staff"
+              to="/admin/staff?pending=true"
               tone="warn"
             />
             <Attention
               count={a.failedMail}
-              label="e-mails failed this week"
+              label="E-mails failed this week"
+              shade="fuchsia"
               detail="Delivery was attempted and refused."
-              to="/admin/mail"
+              to="/admin/mail?status=FAILED"
               tone="danger"
             />
           </div>
         )}
       </Card>
 
+      {/* Who is on the platform, by tier and by role. The throughput figures
+          that used to sit here are a question the transmissions monitor and the
+          status card below answer better, and answered twice they disagreed the
+          moment one of them was filtered. */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Tenants" value={data.tenants.total.toLocaleString()}>
-          <span className="text-xs text-slate-500">
-            {data.tenants.byStatus.ACTIVE ?? 0} active · {data.tenants.byStatus.SUSPENDED ?? 0}{' '}
-            suspended
-          </span>
+        <Stat
+          label="Channel partners"
+          shade="emerald"
+          value={(data.tenants.byType.CHANNEL_PARTNER ?? 0).toLocaleString()}
+        />
+        <Stat
+          label="Enterprise tenants"
+          shade="sky"
+          value={(data.tenants.byType.ENTERPRISE_TENANT ?? 0).toLocaleString()}
+        />
+        <Stat
+          label="Managed tenants"
+          shade="amber"
+          value={(data.tenants.byType.MANAGED_SUB_TENANT ?? 0).toLocaleString()}
+        />
+        <Stat label="Admins"
+          shade="violet" value={admins.toLocaleString()}>
+          <span className="text-xs text-slate-500">Platform, partner and company</span>
         </Stat>
-        <Stat label="Users" value={data.users.total.toLocaleString()}>
+        <Stat label="Accountants"
+          shade="cyan" value={(byRole.ACCOUNTANT ?? 0).toLocaleString()} />
+        <Stat label="Tax approvers"
+          shade="rose" value={(byRole.TAX_APPROVER_CFO ?? 0).toLocaleString()} />
+        <Stat label="Auditors"
+          shade="lime" value={(byRole.AUDITOR ?? 0).toLocaleString()} />
+        <Stat label="Total users"
+          shade="slate" value={data.users.total.toLocaleString()}>
           <span className="text-xs text-slate-500">
             {data.users.active.toLocaleString()} active
           </span>
         </Stat>
-        <Stat label="Invoices (30 days)" value={data.invoices.last30Days.toLocaleString()}>
-          <span className="text-xs text-slate-500">
-            {data.invoices.total.toLocaleString()} all time
-          </span>
-        </Stat>
-        <Stat label="Cleared value" value={`AED ${formatAmount(data.invoices.clearedValueAed)}`}>
-          <span className="text-xs text-slate-500">Accepted by the FTA</span>
-        </Stat>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Tenants by tier">
-          <ul className="space-y-2 text-sm">
-            {(Object.keys(TENANT_TYPE_LABELS) as TenantType[])
-              .filter((type) => type !== 'HOST')
-              .map((type) => (
-                <li key={type} className="flex items-center justify-between">
-                  <span className="text-slate-600">{TENANT_TYPE_LABELS[type]}</span>
-                  <span className="font-medium tabular-nums text-slate-900">
-                    {(data.tenants.byType[type] ?? 0).toLocaleString()}
-                  </span>
-                </li>
-              ))}
-          </ul>
-        </Card>
-
-        <Card title="Invoices by status">
-          <div className="grid grid-cols-2 gap-2">
-            {(
-              [
-                'VALIDATED',
-                'PENDING_CFO_APPROVAL',
-                'SUBMITTED_TO_ASP',
-                'ACCEPTED_BY_FTA',
-                'REJECTED_BY_FTA',
-                'VALIDATION_FAILED',
-              ] as const
-            ).map((status) => (
-              <Link
-                key={status}
-                to={`/admin/transmissions?status=${status}`}
-                className="rounded-lg border border-slate-200 p-2 transition-colors hover:border-brand-500 hover:bg-brand-50/40"
-              >
-                <div className="text-xl font-semibold tabular-nums text-slate-900">
-                  {(data.invoices.byStatus[status] ?? 0).toLocaleString()}
-                </div>
-                <StatusBadge status={status} className="mt-1" />
-              </Link>
-            ))}
-          </div>
-        </Card>
-      </div>
-
-      <ActivityChart data={data.last30DaysTrend} />
-
-      <Card
-        title="Busiest tenants (30 days)"
-        actions={
-          <Link to="/admin/tenants" className="text-sm text-brand-600 underline">
-            All tenants
-          </Link>
-        }
-      >
+      <Card title="Busiest tenants (30 days)">
         {data.topTenants.length === 0 ? (
           <p className="py-4 text-center text-sm text-slate-500">No tenants yet.</p>
         ) : (
@@ -219,14 +193,7 @@ export function AdminDashboardPage() {
             <tbody className="divide-y divide-slate-100">
               {data.topTenants.map((tenant) => (
                 <tr key={tenant.tenantId} className="hover:bg-slate-50">
-                  <td className="py-2">
-                    <Link
-                      to={`/admin/tenants/${tenant.tenantId}`}
-                      className="font-medium text-brand-600 underline"
-                    >
-                      {tenant.tenantName}
-                    </Link>
-                  </td>
+                  <td className="py-2 font-medium text-slate-800">{tenant.tenantName}</td>
                   <td className="py-2">
                     <StatusBadge status={tenant.status} />
                   </td>
@@ -287,20 +254,44 @@ export function AdminDashboardPage() {
 function Stat({
   label,
   value,
+  shade,
   children,
 }: {
   label: string;
   value: string;
+  shade: keyof typeof TILE_SHADES;
   children?: ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+    <div className={cx('rounded-lg border p-3 shadow-sm', TILE_SHADES[shade])}>
       <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
       <div className="mt-1 text-2xl font-semibold tabular-nums text-slate-900">{value}</div>
       {children}
     </div>
   );
 }
+
+/**
+ * A tint per tile, so a reader can say which one they were looking at.
+ *
+ * These are identity, not severity. Every one is a 50, pale enough that the
+ * figure sitting on it stays the loudest thing in the tile — which matters more
+ * here than anywhere else on the page, because an attention tile only appears
+ * at all when something is wrong, and the severity has to survive the tint.
+ */
+const TILE_SHADES = {
+  amber: 'border-amber-200 bg-amber-50 hover:bg-amber-100/60',
+  rose: 'border-rose-200 bg-rose-50 hover:bg-rose-100/60',
+  orange: 'border-orange-200 bg-orange-50 hover:bg-orange-100/60',
+  sky: 'border-sky-200 bg-sky-50 hover:bg-sky-100/60',
+  violet: 'border-violet-200 bg-violet-50 hover:bg-violet-100/60',
+  teal: 'border-teal-200 bg-teal-50 hover:bg-teal-100/60',
+  fuchsia: 'border-fuchsia-200 bg-fuchsia-50 hover:bg-fuchsia-100/60',
+  emerald: 'border-emerald-200 bg-emerald-50',
+  cyan: 'border-cyan-200 bg-cyan-50',
+  lime: 'border-lime-200 bg-lime-50',
+  slate: 'border-slate-300 bg-slate-100',
+};
 
 /** Rendered only when it is non-zero — a wall of noughts is not attention. */
 function Attention({
@@ -309,24 +300,22 @@ function Attention({
   detail,
   to,
   tone,
+  shade,
 }: {
   count: number;
   label: string;
   detail: string;
   to: string;
+  /** Severity. Kept on the figure, which frees the tint to be identity. */
   tone: 'danger' | 'warn';
+  shade: keyof typeof TILE_SHADES;
 }) {
   if (count === 0) return null;
 
   return (
     <Link
       to={to}
-      className={cx(
-        'block rounded-lg border p-3 transition-colors',
-        tone === 'danger'
-          ? 'border-danger-200 bg-danger-50 hover:bg-danger-50/70'
-          : 'border-warn-200 bg-warn-50 hover:bg-warn-50/70',
-      )}
+      className={cx('block rounded-lg border p-3 transition-colors', TILE_SHADES[shade])}
     >
       <div
         className={cx(
@@ -339,68 +328,5 @@ function Attention({
       <div className="text-sm font-medium text-slate-800">{label}</div>
       <p className="mt-0.5 text-xs text-slate-600">{detail}</p>
     </Link>
-  );
-}
-
-/**
- * Platform-wide version of the merchant chart. Same hand-rolled bars for the
- * same reason: three series of thirty values does not justify a charting
- * dependency, and this one stays accessible and printable.
- */
-function ActivityChart({ data }: { data: AdminDashboardResponse['last30DaysTrend'] }) {
-  const max = Math.max(1, ...data.map((d) => d.submitted));
-  const total = data.reduce((sum, d) => sum + d.submitted, 0);
-
-  return (
-    <Card title="Last 30 days, all tenants">
-      {total === 0 ? (
-        <p className="py-4 text-center text-sm text-slate-500">
-          No invoices have been ingested in the last 30 days.
-        </p>
-      ) : (
-        <>
-          <div className="flex items-end gap-1" style={{ height: 120 }}>
-            {data.map((day) => {
-              const height = (day.submitted / max) * 100;
-              const accepted = day.submitted > 0 ? (day.accepted / day.submitted) * height : 0;
-              const rejected = day.submitted > 0 ? (day.rejected / day.submitted) * height : 0;
-              const pending = height - accepted - rejected;
-
-              return (
-                <div
-                  key={day.date}
-                  className="flex flex-1 flex-col justify-end"
-                  style={{ height: '100%' }}
-                  title={`${day.date}: ${day.submitted} ingested, ${day.accepted} accepted, ${day.rejected} rejected`}
-                >
-                  {rejected > 0 && (
-                    <div className="bg-danger-500" style={{ height: `${rejected}%` }} />
-                  )}
-                  {pending > 0.5 && (
-                    <div className="bg-warn-500" style={{ height: `${pending}%` }} />
-                  )}
-                  {accepted > 0 && <div className="bg-ok-500" style={{ height: `${accepted}%` }} />}
-                  {day.submitted === 0 && <div className="h-px bg-slate-200" />}
-                </div>
-              );
-            })}
-          </div>
-          <div className="mt-3 flex gap-4 text-xs text-slate-600">
-            <Legend colour="bg-ok-500" label="Accepted" />
-            <Legend colour="bg-warn-500" label="In flight" />
-            <Legend colour="bg-danger-500" label="Rejected" />
-          </div>
-        </>
-      )}
-    </Card>
-  );
-}
-
-function Legend({ colour, label }: { colour: string; label: string }) {
-  return (
-    <span className="flex items-center gap-1.5">
-      <span className={cx('inline-block h-2.5 w-2.5 rounded-sm', colour)} />
-      {label}
-    </span>
   );
 }
