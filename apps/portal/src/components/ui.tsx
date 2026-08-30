@@ -80,7 +80,7 @@ const CARD_ACCENTS = {
   // "one more of these".
   graphite: {
     rim: 'border-slate-300',
-    header: 'border-slate-300 bg-slate-100',
+    header: 'border-slate-300 bg-slate-200',
     body: 'bg-slate-50/60',
     title: 'text-slate-800',
   },
