@@ -114,11 +114,11 @@ const ADMIN_NAV: NavItem[] = [
     // linked to and closed with the browser's back button.
     children: [
       { to: '/admin/inventory', label: 'Overview', end: true },
-      { to: '/admin/inventory/report', label: 'Report' },
-      { to: '/admin/inventory/buffer', label: 'Minimum buffer' },
       { to: '/admin/inventory/providers', label: 'Providers' },
       { to: '/admin/inventory/buy', label: 'Buy data' },
       { to: '/admin/inventory/sell', label: 'Sell data' },
+      { to: '/admin/inventory/report', label: 'Report' },
+      { to: '/admin/inventory/buffer', label: 'Minimum buffer' },
     ],
   },
   { to: '/admin/audit', label: 'Audit log' },
