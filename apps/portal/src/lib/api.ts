@@ -134,6 +134,18 @@ export async function apiBlob(path: string): Promise<{ blob: Blob; filename: str
 }
 
 /** Save a server-rendered PDF to disk under the filename the API chose. */
+/**
+ * Save any server-rendered file.
+ *
+ * No print sibling: no browser renders a spreadsheet, so "print this workbook"
+ * has no meaning here — the Print button asks for the PDF, which is the
+ * rendering meant for paper.
+ */
+export async function downloadFile(path: string): Promise<void> {
+  const { blob, filename } = await apiBlob(path);
+  downloadBlob(blob, filename);
+}
+
 export async function downloadPdf(path: string): Promise<void> {
   const { blob, filename } = await apiBlob(path);
   downloadBlob(blob, filename);

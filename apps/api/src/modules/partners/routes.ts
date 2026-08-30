@@ -16,6 +16,7 @@ import { jsonb, withPlatformAccess } from '../../db/client.js';
 import { requireContext, requirePartner } from '../../http/context.js';
 import { parsePeriod } from '../metering/period.js';
 import { loadTenantStatement } from '../metering/report.js';
+import { sendStatement } from '../metering/statementExport.js';
 import { badRequest, forbidden, notFound } from '../../lib/errors.js';
 import { logger } from '../../logger.js';
 
@@ -147,6 +148,39 @@ export function registerPartnerRoutes(app: FastifyInstance) {
       );
     },
   );
+
+  // The same statement as a file. The ownership check above is repeated rather
+  // than shared: a partner must not be able to print a statement it is not
+  // allowed to read, and the cheapest way to guarantee that is for the export
+  // route to make the same check itself instead of trusting a caller.
+  for (const format of ['pdf', 'xlsx'] as const) {
+    app.get(
+      `/api/v1/partner/inventory/report.${format}`,
+      { preHandler: requirePartner() },
+      async (request, reply) => {
+        const ctx = requireContext(request);
+        const partnerId = partnerTenantId(ctx);
+        const { tenantId } = request.query as { tenantId?: string };
+
+        if (tenantId && tenantId !== partnerId) {
+          const owned = await withPlatformAccess(
+            (tx) => tx<{ id: string }[]>`
+              SELECT id FROM tenants
+              WHERE id = ${tenantId} AND parent_tenant_id = ${partnerId}
+            `,
+          );
+          if (!owned[0]) throw notFound('Sub-tenant');
+        }
+
+        return sendStatement(
+          request,
+          reply,
+          await loadTenantStatement(tenantId ?? partnerId, parsePeriod(request.query)),
+          format,
+        );
+      },
+    );
+  }
 
   // --- The partner's sub-tenants -------------------------------------------
   app.get(

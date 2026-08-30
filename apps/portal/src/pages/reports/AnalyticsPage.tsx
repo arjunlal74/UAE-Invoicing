@@ -39,7 +39,13 @@ export function AnalyticsPage() {
       <PageHeader
         title="Dispute analytics"
         description="Outbound sales disputes and inbound purchase rejections across both modules."
-        actions={<PdfActions path="/api/v1/reports/analytics/pdf" label="Export PDF" />}
+        actions={
+          <PdfActions
+            path="/api/v1/reports/analytics/pdf"
+            xlsxPath="/api/v1/reports/analytics/xlsx"
+            label="PDF"
+          />
+        }
       />
 
       {kpis.unresolvedOver30Days > 0 && (

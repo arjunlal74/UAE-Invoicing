@@ -75,11 +75,15 @@ export function ReportLibraryPage() {
           <div className="flex flex-wrap items-center gap-2">
             <PdfActions
               path={`/api/v1/reports/${selected}/pdf${queryString({ dateFrom, dateTo })}`}
+              xlsxPath={`/api/v1/reports/${selected}/xlsx${queryString({ dateFrom, dateTo })}`}
               disabled={!data?.rows.length}
-              label="Export PDF"
+              label="PDF"
             />
-            <Button variant="primary" onClick={exportCsv} disabled={!data?.rows.length}>
-              Export CSV
+            {/* CSV stays beside Excel rather than being replaced by it: the
+                systems that swallow these reports on the far side often want a
+                plain delimited file, and a workbook is not one. */}
+            <Button onClick={exportCsv} disabled={!data?.rows.length}>
+              CSV
             </Button>
           </div>
         }

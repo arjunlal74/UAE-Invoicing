@@ -8,6 +8,7 @@ import {
   periodReady,
   type PeriodChoice,
 } from '../../components/InventoryReportView';
+import { PdfActions } from '../../components/PdfActions';
 import { PageHeader, Spinner, cx, inputClass } from '../../components/ui';
 import { api } from '../../lib/api';
 
@@ -63,6 +64,14 @@ export function PartnerInventoryPage() {
       <PageHeader
         title="Data inventory"
         description="What you bought from the platform, what you allocated to your clients, and the balance each movement left behind."
+        actions={
+          <PdfActions
+            path={`/api/v1/partner/inventory/report.pdf?${query}${tenantId ? `&tenantId=${tenantId}` : ''}`}
+            xlsxPath={`/api/v1/partner/inventory/report.xlsx?${query}${tenantId ? `&tenantId=${tenantId}` : ''}`}
+            disabled={!data?.rows.length}
+            label="PDF"
+          />
+        }
       />
 
       {isLoading || !data ? (

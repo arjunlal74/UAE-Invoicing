@@ -10,6 +10,7 @@ import {
   periodReady,
   type PeriodChoice,
 } from '../../components/InventoryReportView';
+import { PdfActions } from '../../components/PdfActions';
 import { Alert, PageHeader, Spinner, cx, inputClass } from '../../components/ui';
 import { api } from '../../lib/api';
 
@@ -38,14 +39,14 @@ export function AdminInventoryReportPage() {
   });
 
   const query = periodQuery(period);
+  const reportPath = tenantId
+    ? `/api/v1/admin/inventory/report/${tenantId}`
+    : '/api/v1/admin/inventory/report';
+
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['admin-inventory-report', tenantId ?? 'platform', query],
     queryFn: () =>
-      api<InventoryStatement>(
-        tenantId
-          ? `/api/v1/admin/inventory/report/${tenantId}?${query}`
-          : `/api/v1/admin/inventory/report?${query}`,
-      ),
+      api<InventoryStatement>(`${reportPath}?${query}`),
     enabled: periodReady(period),
     // The window changes far more often than the account, and blanking a
     // statement to redraw the same one reads as a fault rather than a load.
@@ -91,6 +92,17 @@ export function AdminInventoryReportPage() {
       <PageHeader
         title="Data inventory report"
         description="Every movement of units over a window, with the balance each one leaves behind — for this platform or for any account on it."
+        actions={
+          <PdfActions
+            // The exports carry the same window the table is showing, so the
+            // file and the screen are the same statement rather than two runs
+            // of the same report a few keystrokes apart.
+            path={`${reportPath}.pdf?${query}`}
+            xlsxPath={`${reportPath}.xlsx?${query}`}
+            disabled={!data?.rows.length}
+            label="PDF"
+          />
+        }
       />
 
       {error ? (

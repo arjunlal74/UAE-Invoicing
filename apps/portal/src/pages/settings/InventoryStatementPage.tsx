@@ -8,6 +8,7 @@ import {
   periodReady,
   type PeriodChoice,
 } from '../../components/InventoryReportView';
+import { PdfActions } from '../../components/PdfActions';
 import { PageHeader, Spinner } from '../../components/ui';
 import { api } from '../../lib/api';
 
@@ -39,6 +40,14 @@ export function InventoryStatementPage() {
       <PageHeader
         title="Data inventory"
         description="Every movement of units on your account — what arrived, what each filing took, and the balance it left."
+        actions={
+          <PdfActions
+            path={`/api/v1/billing/inventory/report.pdf?${query}`}
+            xlsxPath={`/api/v1/billing/inventory/report.xlsx?${query}`}
+            disabled={!data?.rows.length}
+            label="PDF"
+          />
+        }
       />
 
       {isLoading || !data ? (

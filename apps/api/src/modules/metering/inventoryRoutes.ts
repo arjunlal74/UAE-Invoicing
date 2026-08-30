@@ -19,6 +19,7 @@ import {
 } from './inventory.js';
 import { parseMovementWindow, parsePeriod } from './period.js';
 import { loadPlatformStatement, loadTenantStatement } from './report.js';
+import { sendStatement } from './statementExport.js';
 
 /**
  * The wholesale half of the bundle lifecycle — SRS v2.8 §15.
@@ -239,6 +240,20 @@ export function registerInventoryRoutes(app: FastifyInstance) {
     },
   );
 
+  for (const format of ['pdf', 'xlsx'] as const) {
+    app.get(
+      `/api/v1/admin/inventory/report.${format}`,
+      { preHandler: requirePlatform() },
+      async (request, reply) =>
+        sendStatement(
+          request,
+          reply,
+          await loadPlatformStatement(parsePeriod(request.query)),
+          format,
+        ),
+    );
+  }
+
   app.get(
     '/api/v1/admin/inventory/report/:tenantId',
     { preHandler: requirePlatform() },
@@ -247,6 +262,22 @@ export function registerInventoryRoutes(app: FastifyInstance) {
       return reply.send(await loadTenantStatement(tenantId, parsePeriod(request.query)));
     },
   );
+
+  for (const format of ['pdf', 'xlsx'] as const) {
+    app.get(
+      `/api/v1/admin/inventory/report/:tenantId.${format}`,
+      { preHandler: requirePlatform() },
+      async (request, reply) => {
+        const { tenantId } = request.params as { tenantId: string };
+        return sendStatement(
+          request,
+          reply,
+          await loadTenantStatement(tenantId, parsePeriod(request.query)),
+          format,
+        );
+      },
+    );
+  }
 
   // The account's own statement. Its own tenant and no other — the id is the
   // caller's context, never a parameter.
@@ -259,6 +290,23 @@ export function registerInventoryRoutes(app: FastifyInstance) {
       return reply.send(await loadTenantStatement(ctx.tenantId, parsePeriod(request.query)));
     },
   );
+
+  for (const format of ['pdf', 'xlsx'] as const) {
+    app.get(
+      `/api/v1/billing/inventory/report.${format}`,
+      { preHandler: requirePermission('billing.read') },
+      async (request, reply) => {
+        const ctx = requireContext(request);
+        if (!ctx.tenantId) throw notFound('Tenant');
+        return sendStatement(
+          request,
+          reply,
+          await loadTenantStatement(ctx.tenantId, parsePeriod(request.query)),
+          format,
+        );
+      },
+    );
+  }
 
   // --- §15.1–15.5 the whole picture ----------------------------------------
   app.get(
