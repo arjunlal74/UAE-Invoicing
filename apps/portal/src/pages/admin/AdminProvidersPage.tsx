@@ -250,6 +250,7 @@ export function AdminProvidersPage() {
                 <tr>
                   <th className="px-4 py-2 font-medium">Provider</th>
                   <th className="px-4 py-2 font-medium">Connection</th>
+                  <th className="px-4 py-2 font-medium">Account id</th>
                   <th className="px-4 py-2 font-medium">Accreditation</th>
                   <th className="px-4 py-2 font-medium">Accredited from</th>
                   <th className="px-4 py-2 font-medium">Valid until</th>
@@ -279,6 +280,9 @@ export function AdminProvidersPage() {
                       {provider.providerType !== 'MOCK' && provider.apiEndpoint && (
                         <p className="break-all text-slate-400">{provider.apiEndpoint}</p>
                       )}
+                    </td>
+                    <td className="px-4 py-2 font-mono text-xs text-slate-600">
+                      {provider.providerAccountId ?? '—'}
                     </td>
                     <td className="px-4 py-2 font-mono text-xs text-slate-500">
                       {provider.accreditationReference ?? '—'}
@@ -468,6 +472,7 @@ function ProviderFormModal({
     name: provider?.name ?? '',
     providerType: provider?.providerType ?? ('GENERIC_REST' as AspProviderType),
     apiEndpoint: provider?.apiEndpoint ?? '',
+    providerAccountId: provider?.providerAccountId ?? '',
     accreditationReference: provider?.accreditationReference ?? '',
     accreditationFrom: provider?.accreditationFrom ?? '',
     accreditationValidUntil: provider?.accreditationValidUntil ?? '',
@@ -490,6 +495,7 @@ function ProviderFormModal({
         // has no endpoint, and a provider can be recorded before their API
         // documentation arrives.
         apiEndpoint: form.apiEndpoint.trim(),
+        providerAccountId: form.providerAccountId.trim() || null,
         accreditationReference: form.accreditationReference.trim() || null,
         accreditationFrom: form.accreditationFrom || null,
         accreditationValidUntil: form.accreditationValidUntil || null,
@@ -584,6 +590,24 @@ function ProviderFormModal({
               value={form.apiEndpoint}
               disabled={readOnly || !needsEndpoint(form.providerType)}
               onChange={(event) => setForm({ ...form, apiEndpoint: event.target.value })}
+            />
+          </Field>
+
+          <Field
+            label="Account id"
+            required={needsEndpoint(form.providerType)}
+            hint={
+              needsEndpoint(form.providerType)
+                ? 'What this platform is called at that provider. Sent with every document so they know whose account it is.'
+                : 'Not used by the simulator — it never leaves this system.'
+            }
+          >
+            <input
+              className={inputClass}
+              placeholder="ACCT-000123"
+              value={form.providerAccountId}
+              disabled={!needsEndpoint(form.providerType)}
+              onChange={(event) => setForm({ ...form, providerAccountId: event.target.value })}
             />
           </Field>
 

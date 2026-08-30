@@ -42,8 +42,18 @@ export function registerAspRoutes(app: FastifyInstance) {
       const { id } = request.params as { id: string };
       const body = UpsertAspConfigRequest.parse(request.body);
 
-      if (body.status === 'ACTIVE' && body.providerType !== 'MOCK' && !body.apiEndpoint) {
-        throw badRequest('An endpoint URL is required before this connection can be made active.');
+      if (body.status === 'ACTIVE' && body.providerType !== 'MOCK') {
+        if (!body.apiEndpoint) {
+          throw badRequest('An endpoint URL is required before this connection can be made active.');
+        }
+        // Sent with every document as the account it belongs to. Marking the
+        // connection active without it promises a merchant they can file, and
+        // the provider refuses the first submission for an unknown account.
+        if (!body.providerAccountId?.trim()) {
+          throw badRequest(
+            'A provider account id is required before this connection can be made active.',
+          );
+        }
       }
 
       const updated = await withPlatformAccess(async (tx) => {

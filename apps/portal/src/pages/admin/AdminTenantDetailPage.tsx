@@ -361,6 +361,8 @@ function AspConfigSection({ tenantId, readOnly }: { tenantId: string; readOnly: 
   const providerType = (form.providerType ?? config.providerType) as AspProviderType;
   const linkedId = form.aspProviderId === undefined ? config.aspProviderId : form.aspProviderId;
   const matching = selectable.filter((provider) => provider.providerType === providerType);
+  /** Whether this connection actually leaves the building. */
+  const network = providerType !== 'MOCK';
 
   return (
     <Card
@@ -436,7 +438,16 @@ function AspConfigSection({ tenantId, readOnly }: { tenantId: string; readOnly: 
               setForm({
                 ...form,
                 aspProviderId: event.target.value || null,
-                ...(chosen ? { displayName: chosen.name, apiEndpoint: chosen.apiEndpoint } : {}),
+                ...(chosen
+                  ? {
+                      displayName: chosen.name,
+                      apiEndpoint: chosen.apiEndpoint,
+                      // The account the provider knows this platform by. A
+                      // provider that issues one per merchant can still have
+                      // it overwritten below; this is the default, not a rule.
+                      providerAccountId: chosen.providerAccountId ?? '',
+                    }
+                  : {}),
               });
             }}
           >
@@ -475,20 +486,39 @@ function AspConfigSection({ tenantId, readOnly }: { tenantId: string; readOnly: 
           </select>
         </Field>
 
-        <Field label="API endpoint" hint="Base URL of the provider's API.">
+        {/* Both are addressed to a network the simulator never touches, so
+            they are off for it — matching the providers screen, and keeping
+            anyone from filling in a value that nothing will ever send. */}
+        <Field
+          label="API endpoint"
+          required={network}
+          hint={
+            network
+              ? "Base URL of the provider's API."
+              : 'Not used by the simulator — it never leaves this system.'
+          }
+        >
           <input
             className={inputClass}
-            disabled={readOnly}
+            disabled={readOnly || !network}
             placeholder="https://api.provider.ae"
             value={value('apiEndpoint', config.apiEndpoint)}
             onChange={(e) => setForm({ ...form, apiEndpoint: e.target.value })}
           />
         </Field>
 
-        <Field label="Provider account id" hint="The merchant's identifier at the provider.">
+        <Field
+          label="Provider account id"
+          required={network}
+          hint={
+            network
+              ? 'What this platform is called at that provider. Filled from the provider — change it only if they issued this merchant its own.'
+              : 'Not used by the simulator — it never leaves this system.'
+          }
+        >
           <input
             className={inputClass}
-            disabled={readOnly}
+            disabled={readOnly || !network}
             value={value('providerAccountId', config.providerAccountId ?? '')}
             onChange={(e) => setForm({ ...form, providerAccountId: e.target.value })}
           />

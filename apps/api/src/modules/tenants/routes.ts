@@ -327,12 +327,13 @@ export function registerTenantRoutes(app: FastifyInstance) {
         name: string;
         provider_type: string;
         api_endpoint: string;
+        provider_account_id: string | null;
       }
       let chosen: ChosenProvider | null = null;
 
       if (body.aspProviderId) {
         const found = await tx<ChosenProvider[]>`
-          SELECT id, name, provider_type, api_endpoint
+          SELECT id, name, provider_type, api_endpoint, provider_account_id
           FROM asp_providers
           WHERE id = ${body.aspProviderId} AND is_active
         `;
@@ -344,7 +345,8 @@ export function registerTenantRoutes(app: FastifyInstance) {
 
       await tx`
         INSERT INTO tenant_asp_configs (
-          tenant_id, asp_provider_id, provider_type, display_name, api_endpoint, status
+          tenant_id, asp_provider_id, provider_type, display_name, api_endpoint,
+          provider_account_id, status
         )
         VALUES (
           ${tenantId},
@@ -352,6 +354,7 @@ export function registerTenantRoutes(app: FastifyInstance) {
           ${(chosen?.provider_type ?? config().ASP_DEFAULT_DRIVER)}::asp_provider_type,
           ${chosen?.name ?? 'Not yet selected'},
           ${chosen?.api_endpoint ?? ''},
+          ${chosen?.provider_account_id ?? null},
           ${chosen ? 'PENDING_REGISTRATION' : 'NOT_CONFIGURED'}
         )
       `;

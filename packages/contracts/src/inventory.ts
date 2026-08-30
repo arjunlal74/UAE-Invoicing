@@ -26,6 +26,15 @@ export const CreateProviderRequest = z.object({
    */
   providerType: AspProviderType.optional(),
   apiEndpoint: z.string().trim().url().or(z.literal('')).optional(),
+  /**
+   * What this platform is called at that provider.
+   *
+   * The ASP's contract is with the platform — it buys the capacity and resells
+   * it — so the account reference belongs here. A tenant's connection takes it
+   * as a default and may override it, for a provider that issues a sub-account
+   * per merchant.
+   */
+  providerAccountId: z.string().trim().max(255).nullable().optional(),
   /** The provider's entry on the MoF's published accreditation list. */
   accreditationReference: z.string().trim().max(100).nullable().optional(),
   /** The day that entry took effect. Null when it has not been recorded. */
@@ -67,6 +76,7 @@ export const ProviderSummary = z.object({
   name: z.string(),
   providerType: AspProviderType,
   apiEndpoint: z.string(),
+  providerAccountId: z.string().nullable(),
   accreditationReference: z.string().nullable(),
   /**
    * When the accreditation took effect. Kept beside its expiry because the pair

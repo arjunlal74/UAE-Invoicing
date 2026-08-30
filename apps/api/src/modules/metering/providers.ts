@@ -39,6 +39,7 @@ interface ProviderRow {
   is_locked: boolean;
   provider_type: ProviderSummary['providerType'];
   api_endpoint: string;
+  provider_account_id: string | null;
   notes: string | null;
   created_at: Date;
   contract_count: string;
@@ -55,6 +56,7 @@ function toSummary(row: ProviderRow): ProviderSummary {
     name: row.name,
     providerType: row.provider_type,
     apiEndpoint: row.api_endpoint,
+    providerAccountId: row.provider_account_id,
     accreditationReference: row.accreditation_reference,
     accreditationFrom: row.accreditation_from
       ? row.accreditation_from.toISOString().slice(0, 10)
@@ -101,7 +103,7 @@ const PROVIDER_SELECT = `
   v.accreditation_from, v.accreditation_valid_until,
   v.contact_name, v.contact_email,
   v.contact_phone, v.website, v.is_active, v.is_locked, v.notes, v.created_at,
-  v.provider_type, v.api_endpoint,
+  v.provider_type, v.api_endpoint, v.provider_account_id,
   v.default_cost_per_unit_aed::text AS default_cost_per_unit_aed,
   (SELECT count(*) FROM asp_bundle_procurements p
     WHERE p.asp_provider_id = v.id
@@ -163,10 +165,23 @@ function assertAccreditationOrdered(from?: string | null, until?: string | null)
 export function assertConnectionUsable(
   providerType: UpdateProviderRequest['providerType'],
   apiEndpoint: string | null | undefined,
+  providerAccountId: string | null | undefined,
 ): void {
-  if (providerType && providerType !== 'MOCK' && !apiEndpoint?.trim()) {
+  if (!providerType || providerType === 'MOCK') return;
+
+  if (!apiEndpoint?.trim()) {
     throw badRequest(
       'A provider reached over the network needs its API endpoint. Only the simulator can go without one.',
+    );
+  }
+
+  // Sent on every submission as the account the document belongs to. A
+  // provider with many customers cannot place a document without it, so a
+  // connection recorded without one looks configured and is refused at the
+  // first filing.
+  if (!providerAccountId?.trim()) {
+    throw badRequest(
+      'A provider reached over the network needs the account id they issued this platform. Only the simulator can go without one.',
     );
   }
 }
@@ -232,7 +247,7 @@ export function registerProviderRoutes(app: FastifyInstance) {
       const ctx = requireContext(request);
       const body = CreateProviderRequest.parse(request.body);
       assertAccreditationOrdered(body.accreditationFrom, body.accreditationValidUntil);
-      assertConnectionUsable(body.providerType, body.apiEndpoint);
+      assertConnectionUsable(body.providerType, body.apiEndpoint, body.providerAccountId);
 
       const id = await withPlatformAccess(async (tx) => {
         // Checked case-insensitively, because the whole point of the master is
@@ -252,7 +267,7 @@ export function registerProviderRoutes(app: FastifyInstance) {
             accreditation_from, accreditation_valid_until,
             contact_name, contact_email,
             contact_phone, website, default_cost_per_unit_aed, notes,
-            provider_type, api_endpoint,
+            provider_type, api_endpoint, provider_account_id,
             created_by_user_id
           ) VALUES (
             ${body.name}, ${body.accreditationReference ?? null},
@@ -261,6 +276,7 @@ export function registerProviderRoutes(app: FastifyInstance) {
             ${body.contactPhone ?? null}, ${body.website ?? null},
             ${body.defaultCostPerUnitAed ?? null}, ${body.notes ?? null},
             ${body.providerType ?? 'MOCK'}::asp_provider_type, ${body.apiEndpoint ?? ''},
+            ${body.providerAccountId ?? null},
             ${ctx.userId}
           )
           RETURNING id
@@ -305,6 +321,9 @@ export function registerProviderRoutes(app: FastifyInstance) {
       assertConnectionUsable(
         body.providerType ?? before.provider_type,
         body.apiEndpoint === undefined ? before.api_endpoint : body.apiEndpoint,
+        body.providerAccountId === undefined
+          ? before.provider_account_id
+          : body.providerAccountId,
       );
 
       if (before.is_locked && !isUnlockOnly(body)) {
@@ -368,6 +387,11 @@ export function registerProviderRoutes(app: FastifyInstance) {
             ),
             api_endpoint              = ${
               body.apiEndpoint === undefined ? tx.unsafe('api_endpoint') : body.apiEndpoint
+            },
+            provider_account_id       = ${
+              body.providerAccountId === undefined
+                ? tx.unsafe('provider_account_id')
+                : body.providerAccountId
             },
             is_active                 = coalesce(${body.isActive ?? null}, is_active),
             is_locked                 = coalesce(${body.isLocked ?? null}, is_locked)
