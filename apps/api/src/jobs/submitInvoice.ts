@@ -1,5 +1,10 @@
 import { USAGE_REASONS } from '@uae/contracts';
-import { VAT_CATEGORIES, type StagedInvoice, type VatCategoryCode } from '@uae/domain';
+import {
+  VAT_CATEGORIES,
+  participantIdFromTrn,
+  type StagedInvoice,
+  type VatCategoryCode,
+} from '@uae/domain';
 import { buildInvoiceXml, buildQrPayload } from '@uae/ubl';
 import { SYSTEM_ACTOR, audit } from '../audit/audit.js';
 import { jsonb, withPlatformAccess } from '../db/client.js';
@@ -72,8 +77,9 @@ export async function submitInvoiceJob(job: SubmitInvoiceJob): Promise<void> {
       legal_name_ar: string;
       registered_address: { street?: string; city?: string; emirate?: string; postalCode?: string };
       trn: string;
+      peppol_participant_id: string | null;
     }[]>`
-      SELECT legal_name_en, legal_name_ar, registered_address, trn
+      SELECT legal_name_en, legal_name_ar, registered_address, trn, peppol_participant_id
       FROM tenants WHERE id = ${tenantId}
     `;
 
@@ -215,6 +221,10 @@ export async function submitInvoiceJob(job: SubmitInvoiceJob): Promise<void> {
       peppolUuid: invoice.peppol_uuid,
       invoiceNumber: invoice.invoice_number,
       sellerTrn: invoice.seller_trn,
+      // The tenant's own address, not the one on the document: a filing goes
+      // out under the account that filed it.
+      sellerParticipantId:
+        tenant.peppol_participant_id ?? participantIdFromTrn(invoice.seller_trn),
       buyerTrn: invoice.buyer_trn,
       payableAmount: invoice.payable_amount,
       currency: invoice.currency_code,

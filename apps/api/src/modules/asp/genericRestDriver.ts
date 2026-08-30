@@ -101,6 +101,7 @@ export class GenericRestAspDriver implements AspDriver {
       submission_id: request.idempotencyKey,
       tenant_metadata: {
         trn: request.sellerTrn,
+        participant_id: request.sellerParticipantId,
         account_id: config.providerAccountId,
       },
       invoice_metadata: {

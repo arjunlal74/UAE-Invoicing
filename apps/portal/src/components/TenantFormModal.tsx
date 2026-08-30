@@ -97,6 +97,17 @@ export function TenantFormModal({
             <input className={inputClass} disabled value={tenant.trn ?? '—'} />
           </Field>
 
+          <Field
+            label="Peppol participant id"
+            hint="This tenant's address on the network. Registered by the provider."
+          >
+            <input
+              className={inputClass}
+              disabled
+              value={tenant.peppolParticipantId ?? '—'}
+            />
+          </Field>
+
           <Field label="Under" hint="The channel partner this account sits beneath.">
             <input className={inputClass} disabled value={tenant.parentName ?? '—'} />
           </Field>

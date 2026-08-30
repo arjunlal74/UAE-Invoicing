@@ -31,6 +31,11 @@ export interface AspSubmissionRequest {
   peppolUuid: string;
   invoiceNumber: string;
   sellerTrn: string;
+  /**
+   * The seller's Peppol address. Sent alongside the TRN because they are not
+   * interchangeable: the TRN identifies the taxpayer, this routes the document.
+   */
+  sellerParticipantId: string | null;
   buyerTrn: string | null;
   payableAmount: string;
   currency: string;

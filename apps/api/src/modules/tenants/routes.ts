@@ -9,6 +9,7 @@ import {
   type TenantSummary,
   type TenantType,
 } from '@uae/contracts';
+import { participantIdFromTrn } from '@uae/domain';
 import type { FastifyInstance } from 'fastify';
 import { actorFromContext, audit, diff } from '../../audit/audit.js';
 import { renderWorkbookXlsx } from '../../excel/report.js';
@@ -47,6 +48,7 @@ interface TenantRow {
   registered_address: unknown;
   status: TenantSummary['status'];
   is_locked: boolean;
+  peppol_participant_id: string | null;
   asp_status: TenantDetail['aspStatus'] | null;
   invoice_count: string;
   user_count?: string;
@@ -67,6 +69,7 @@ function toSummary(row: TenantRow): TenantSummary {
     trn: row.trn,
     status: row.status,
     isLocked: row.is_locked,
+    peppolParticipantId: row.peppol_participant_id,
     aspStatus: row.asp_status ?? 'NOT_CONFIGURED',
     invoiceCount: Number(row.invoice_count ?? 0),
     createdAt: row.created_at.toISOString(),
@@ -299,11 +302,11 @@ export function registerTenantRoutes(app: FastifyInstance) {
 
       const inserted = await tx<{ id: string }[]>`
         INSERT INTO tenants (
-          tenant_type, parent_tenant_id, company_code, legal_name_en, legal_name_ar, trn,
+          tenant_type, parent_tenant_id, company_code, legal_name_en, legal_name_ar, trn, peppol_participant_id,
           is_vat_group, vat_group_trn, registered_address, status
         ) VALUES (
           ${body.tenantType}::tenant_type, ${body.parentTenantId ?? null},
-          ${body.companyCode}, ${body.legalNameEn}, ${body.legalNameAr}, ${body.trn ?? null},
+          ${body.companyCode}, ${body.legalNameEn}, ${body.legalNameAr}, ${body.trn ?? null}, ${participantIdFromTrn(body.trn)},
           ${body.isVatGroup}, ${body.vatGroupTrn ?? null},
           ${jsonb(tx, body.registeredAddress)}, 'PENDING'
         )
@@ -490,6 +493,13 @@ export function registerTenantRoutes(app: FastifyInstance) {
       await tx`
         UPDATE tenants SET
           is_locked          = ${body.isLocked ?? before.is_locked},
+          -- Undefined leaves it alone; null clears it. Re-deriving from the TRN
+          -- on every edit would overwrite an identifier the ASP issued by hand.
+          peppol_participant_id = ${
+            body.peppolParticipantId === undefined
+              ? before.peppol_participant_id
+              : body.peppolParticipantId
+          },
           legal_name_en      = ${body.legalNameEn ?? before.legal_name_en},
           legal_name_ar      = ${body.legalNameAr ?? before.legal_name_ar},
           is_vat_group       = ${isVatGroup},

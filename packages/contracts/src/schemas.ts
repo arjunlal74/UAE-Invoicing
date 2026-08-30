@@ -205,6 +205,11 @@ export const UpdateTenantRequest = z.object({
    * before; what stops is anyone editing the details underneath them.
    */
   isLocked: z.boolean().optional(),
+  /**
+   * Overrides the value derived from the TRN, for an ASP that issued something
+   * else. Null clears it back to nothing rather than silently re-deriving.
+   */
+  peppolParticipantId: z.string().trim().max(100).nullable().optional(),
   legalNameEn: z.string().trim().min(1).max(255).optional(),
   legalNameAr: z.string().trim().min(1).max(255).optional(),
   isVatGroup: z.boolean().optional(),
@@ -265,6 +270,11 @@ export const TenantSummary = z.object({
   tenantType: TenantType,
   /** Frozen against edits. Independent of `status`, which governs filing. */
   isLocked: z.boolean(),
+  /**
+   * The tenant's address on the Peppol network — `0235:<TIN>`, defaulted from
+   * the TRN. Null until the ASP registers it, and for anyone who never files.
+   */
+  peppolParticipantId: z.string().nullable(),
   parentTenantId: uuid.nullable(),
   parentName: z.string().nullable(),
   companyCode: z.string(),

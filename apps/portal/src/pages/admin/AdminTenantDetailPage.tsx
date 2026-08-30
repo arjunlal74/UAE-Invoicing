@@ -44,7 +44,7 @@ export function AdminTenantDetailPage() {
 
   // Seeded from the record once it arrives, so the fields are not empty on
   // the first paint and a half-typed name is not lost to a background refetch.
-  const [names, setNames] = useState({ legalNameEn: '', legalNameAr: '' });
+  const [names, setNames] = useState({ legalNameEn: '', legalNameAr: '', peppolParticipantId: '' });
 
   const { data: tenant, isLoading } = useQuery({
     queryKey: ['admin-tenant', tenantId],
@@ -60,13 +60,19 @@ export function AdminTenantDetailPage() {
   // it does — and only then, or every refetch would overwrite what is being
   // typed.
   useEffect(() => {
-    if (tenant) setNames({ legalNameEn: tenant.legalNameEn, legalNameAr: tenant.legalNameAr ?? '' });
+    if (tenant)
+      setNames({
+        legalNameEn: tenant.legalNameEn,
+        legalNameAr: tenant.legalNameAr ?? '',
+        peppolParticipantId: tenant.peppolParticipantId ?? '',
+      });
   }, [tenant?.id, tenant?.updatedAt]);
 
   const renamed =
     !!tenant &&
     (names.legalNameEn !== tenant.legalNameEn ||
-      names.legalNameAr !== (tenant.legalNameAr ?? ''));
+      names.legalNameAr !== (tenant.legalNameAr ?? '') ||
+      names.peppolParticipantId !== (tenant.peppolParticipantId ?? ''));
 
   const renameTenant = useMutation({
     mutationFn: () =>
@@ -75,10 +81,12 @@ export function AdminTenantDetailPage() {
         body: {
           legalNameEn: names.legalNameEn.trim(),
           legalNameAr: names.legalNameAr.trim() || undefined,
+          // Null clears it; the server does not silently re-derive from the TRN.
+          peppolParticipantId: names.peppolParticipantId.trim() || null,
         },
       }),
     onSuccess: () => {
-      setMessage({ kind: 'ok', text: 'Legal names saved.' });
+      setMessage({ kind: 'ok', text: 'Identity saved.' });
       void queryClient.invalidateQueries({ queryKey: ['admin-tenant', tenantId] });
       void queryClient.invalidateQueries({ queryKey: ['admin-tenants'] });
     },
@@ -157,13 +165,27 @@ export function AdminTenantDetailPage() {
                 />
               </Field>
 
+              <Field
+                label="Peppol participant id"
+                hint="Defaulted from the TRN as 0235:<TIN>. Change it only if the provider issued something else."
+              >
+                <input
+                  className={inputClass}
+                  placeholder="0235:1002938475"
+                  value={names.peppolParticipantId}
+                  onChange={(event) =>
+                    setNames({ ...names, peppolParticipantId: event.target.value })
+                  }
+                />
+              </Field>
+
               <div className="sm:col-span-2 flex justify-end">
                 <Button
                   variant="primary"
                   disabled={!names.legalNameEn.trim() || renameTenant.isPending || !renamed}
                   onClick={() => renameTenant.mutate()}
                 >
-                  {renameTenant.isPending ? 'Saving…' : 'Save names'}
+                  {renameTenant.isPending ? 'Saving…' : 'Save identity'}
                 </Button>
               </div>
             </div>
@@ -172,6 +194,11 @@ export function AdminTenantDetailPage() {
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
             <Detail label="Company code" value={tenant.companyCode} />
             <Detail label="TRN" value={tenant.trn ?? '—'} mono />
+            <Detail
+              label="Peppol participant id"
+              value={tenant.peppolParticipantId ?? '—'}
+              mono
+            />
             <Detail label="Users" value={String(tenant.userCount)} />
             <Detail label="Invoices filed" value={String(tenant.invoiceCount)} />
             <Detail

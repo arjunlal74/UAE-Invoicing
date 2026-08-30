@@ -124,6 +124,28 @@ export const BASE_CURRENCY = 'AED';
  */
 export const TRN_PATTERN = /^1\d{14}$/;
 
+/**
+ * The UAE Peppol scheme code. Joined to the TIN, it is a business's address on
+ * the network.
+ */
+export const PEPPOL_SCHEME_AE = '0235';
+
+/**
+ * A tenant's participant identifier, derived from its TRN.
+ *
+ * The TIN is the first ten digits of the fifteen-digit TRN, and the identifier
+ * is the scheme code joined to it — `0235:1002938475`. Not a copy of the TRN,
+ * and not something to be guessed at a call site: getting the length wrong
+ * addresses a document to a business that does not exist.
+ *
+ * Null for anything that is not a valid TRN. A channel partner has none because
+ * it never files, and half a TRN is not half an address.
+ */
+export function participantIdFromTrn(trn: string | null | undefined): string | null {
+  if (!trn || !TRN_PATTERN.test(trn.trim())) return null;
+  return `${PEPPOL_SCHEME_AE}:${trn.trim().slice(0, 10)}`;
+}
+
 export function isValidTrn(value: string | null | undefined): boolean {
   return typeof value === 'string' && TRN_PATTERN.test(value.trim());
 }
