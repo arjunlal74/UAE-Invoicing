@@ -763,12 +763,6 @@ export const AdminDashboardResponse = z.object({
      */
     byRole: z.record(Role, z.number()),
   }),
-  invoices: z.object({
-    total: z.number(),
-    byStatus: z.record(InvoiceStatus, z.number()),
-    last30Days: z.number(),
-    clearedValueAed: z.string(),
-  }),
   needsAttention: z.object({
     stuckTransmissions: z.number(),
     rejectedByFta: z.number(),
@@ -780,9 +774,6 @@ export const AdminDashboardResponse = z.object({
     /** False until an outgoing account exists; invitations are not sent. */
     mailConfigured: z.boolean(),
   }),
-  last30DaysTrend: z.array(
-    z.object({ date: z.string(), submitted: z.number(), accepted: z.number(), rejected: z.number() }),
-  ),
   topTenants: z.array(
     z.object({
       tenantId: uuid,

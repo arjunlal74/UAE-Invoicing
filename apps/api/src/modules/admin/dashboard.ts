@@ -1,4 +1,4 @@
-import type { InvoiceStatus, Role, TenantStatus, TenantType } from '@uae/contracts';
+import type { Role, TenantStatus, TenantType } from '@uae/contracts';
 import type { FastifyInstance } from 'fastify';
 import { withPlatformAccess } from '../../db/client.js';
 import { requirePlatform } from '../../http/context.js';
@@ -45,23 +45,6 @@ export function registerAdminDashboardRoutes(app: FastifyInstance) {
         FROM users
       `;
 
-      const invoicesByStatus = await tx<CountRow[]>`
-        SELECT status::text AS key, count(*)::text AS count FROM invoices
-        WHERE direction = 'OUTBOUND_SALES_AR'
-        GROUP BY status
-      `;
-
-      const invoiceTotals = await tx<{ last30: string; cleared_value: string }[]>`
-        SELECT
-          count(*) FILTER (WHERE created_at >= now() - interval '30 days')::text AS last30,
-          coalesce(sum(payable_amount_aed) FILTER (WHERE status = 'ACCEPTED_BY_FTA'), 0)::text
-            AS cleared_value
-        FROM invoices
-        -- The platform bills for what tenants file. Inbound purchase invoices
-        -- are received rather than filed and belong to a different figure.
-        WHERE direction = 'OUTBOUND_SALES_AR'
-      `;
-
       const attention = await tx<{
         stuck: string;
         rejected: string;
@@ -94,20 +77,6 @@ export function registerAdminDashboardRoutes(app: FastifyInstance) {
           EXISTS (SELECT 1 FROM mail_accounts WHERE is_default AND is_active) AS configured,
           (SELECT count(*) FROM mail_deliveries
             WHERE status = 'FAILED' AND created_at >= now() - interval '7 days')::text AS failed
-      `;
-
-      const trend = await tx<
-        { date: string; submitted: string; accepted: string; rejected: string }[]
-      >`
-        SELECT
-          to_char(d.day, 'YYYY-MM-DD') AS date,
-          count(i.id)::text AS submitted,
-          count(i.id) FILTER (WHERE i.status = 'ACCEPTED_BY_FTA')::text AS accepted,
-          count(i.id) FILTER (WHERE i.status = 'REJECTED_BY_FTA')::text AS rejected
-        FROM generate_series(CURRENT_DATE - interval '29 days', CURRENT_DATE, interval '1 day') AS d(day)
-        LEFT JOIN invoices i ON i.created_at::date = d.day::date
-        GROUP BY d.day
-        ORDER BY d.day
       `;
 
       const topTenants = await tx<{
@@ -152,18 +121,14 @@ export function registerAdminDashboardRoutes(app: FastifyInstance) {
         tenantsByType,
         users: users[0]!,
         usersByRole,
-        invoicesByStatus,
-        invoiceTotals: invoiceTotals[0]!,
         attention: attention[0]!,
         mail: mail[0]!,
-        trend,
         topTenants,
         activity,
       };
     });
 
     const tenantTotal = data.tenantsByStatus.reduce((sum, r) => sum + Number(r.count), 0);
-    const invoiceTotal = data.invoicesByStatus.reduce((sum, r) => sum + Number(r.count), 0);
 
     return reply.send({
       tenants: {
@@ -177,12 +142,6 @@ export function registerAdminDashboardRoutes(app: FastifyInstance) {
         pendingInvites: Number(data.users.pending),
         byRole: tally<Role>(data.usersByRole),
       },
-      invoices: {
-        total: invoiceTotal,
-        byStatus: tally<InvoiceStatus>(data.invoicesByStatus),
-        last30Days: Number(data.invoiceTotals.last30),
-        clearedValueAed: data.invoiceTotals.cleared_value,
-      },
       needsAttention: {
         stuckTransmissions: Number(data.attention.stuck),
         rejectedByFta: Number(data.attention.rejected),
@@ -193,12 +152,6 @@ export function registerAdminDashboardRoutes(app: FastifyInstance) {
         failedMail: Number(data.mail.failed),
         mailConfigured: data.mail.configured,
       },
-      last30DaysTrend: data.trend.map((t) => ({
-        date: t.date,
-        submitted: Number(t.submitted),
-        accepted: Number(t.accepted),
-        rejected: Number(t.rejected),
-      })),
       topTenants: data.topTenants.map((t) => ({
         tenantId: t.tenant_id,
         tenantName: t.tenant_name,
