@@ -75,7 +75,7 @@ export async function renderReportPdf(input: ReportPdfInput): Promise<Buffer> {
   drawMasthead(doc, left, width, {
     title: input.name,
     subtitle: input.description,
-    chipLabel: input.module,
+    chipLabel: input.module === 'BOTH' ? null : input.module,
     chipTone: MODULE_TONES[input.module] ?? MODULE_TONES.BOTH!,
     rightLines: [input.tenantName, period],
   });
@@ -161,7 +161,7 @@ export async function renderAnalyticsPdf(input: AnalyticsPdfInput): Promise<Buff
   drawMasthead(doc, left, width, {
     title: 'Dispute analytics',
     subtitle: 'Outbound sales disputes and inbound purchase rejections across both modules.',
-    chipLabel: 'AR + AP',
+    chipLabel: null,
     chipTone: MODULE_TONES.BOTH!,
     rightLines: [input.tenantName, period],
   });
@@ -347,8 +347,9 @@ function drawMasthead(
   options: {
     title: string;
     subtitle: string;
-    chipLabel: string;
-    chipTone: { fill: string; text: string };
+    /** Omitted where it would only restate the title. */
+    chipLabel?: string | null;
+    chipTone?: { fill: string; text: string };
     rightLines: string[];
   },
 ): void {
@@ -370,14 +371,19 @@ function drawMasthead(
     y += 13;
   }
 
-  doc.font(FONT.bold).fontSize(6.5);
-  const label = options.chipLabel.toUpperCase();
-  const chipWidth = doc.widthOfString(label) + 12;
-  doc.roundedRect(left + width - 14 - chipWidth, top + height - 20, chipWidth, 12, 3).fill(
-    options.chipTone.fill,
-  );
-  doc.fillColor(options.chipTone.text);
-  doc.text(label, left + width - 14 - chipWidth + 6, top + height - 16.5, { lineBreak: false });
+  // A chip that says "BOTH" narrows nothing: the reader already knows which
+  // report they asked for, and a badge that is always true on a document is
+  // furniture. Drawn only where it actually tells them something.
+  if (options.chipLabel && options.chipTone) {
+    doc.font(FONT.bold).fontSize(6.5);
+    const label = options.chipLabel.toUpperCase();
+    const chipWidth = doc.widthOfString(label) + 12;
+    doc.roundedRect(left + width - 14 - chipWidth, top + height - 20, chipWidth, 12, 3).fill(
+      options.chipTone.fill,
+    );
+    doc.fillColor(options.chipTone.text);
+    doc.text(label, left + width - 14 - chipWidth + 6, top + height - 16.5, { lineBreak: false });
+  }
 
   doc.y = top + height;
   doc.fillColor(INK.body);
