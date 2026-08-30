@@ -127,11 +127,17 @@ async function seed() {
       )
     `;
 
-    await tx`
-      INSERT INTO users (tenant_id, email, full_name, role, password_hash, is_active)
-      VALUES (${pendingId}, 'admin@gulftech.local', 'Omar Haddad', 'COMPANY_ADMIN',
-              ${passwordHash}, TRUE)
-    `;
+    for (const [email, name, role] of [
+      ['admin@gulftech.local', 'Omar Haddad', 'COMPANY_ADMIN'],
+      ['finance@gulftech.local', 'Noura Al-Suwaidi', 'TAX_APPROVER_CFO'],
+      ['clerk@gulftech.local', 'Daniel Fernandes', 'ACCOUNTANT'],
+      ['auditor@gulftech.local', 'Hana Darwish', 'AUDITOR'],
+    ] as const) {
+      await tx`
+        INSERT INTO users (tenant_id, email, full_name, role, password_hash, is_active)
+        VALUES (${pendingId}, ${email}, ${name}, ${role}::user_role, ${passwordHash}, TRUE)
+      `;
+    }
 
     // --- Channel partner ----------------------------------------------------
     // No TRN: an advisory firm resells capacity, it does not file under its own
@@ -362,6 +368,9 @@ async function seed() {
 
   Gulf Tech Solutions — enterprise tenant, PENDING (upload only)
     COMPANY ADMIN      admin@gulftech.local
+    TAX APPROVER/CFO   finance@gulftech.local    (blocked: tenant not registered)
+    ACCOUNTANT         clerk@gulftech.local      (prepares, cannot file)
+    AUDITOR            auditor@gulftech.local
 
   Gulf Advisory Partners — channel partner
     PARTNER ADMIN      partner@gulfadvisory.local
