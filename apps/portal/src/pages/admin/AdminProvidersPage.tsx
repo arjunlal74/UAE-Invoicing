@@ -391,14 +391,11 @@ export function AdminProvidersPage() {
       )}
 
       {viewing && (
-        <ViewProviderModal
+        <ProviderFormModal
           provider={viewing}
-          period={PERIODS.find((p) => p.value === period)?.label ?? ''}
+          readOnly
+          period={PERIODS.find((entry) => entry.value === period)?.label ?? ''}
           onClose={() => setViewing(null)}
-          onEdit={() => {
-            setEditing(viewing);
-            setViewing(null);
-          }}
         />
       )}
 
@@ -429,137 +426,6 @@ function Chip({ children }: { children: string }) {
 }
 
 /** Everything on file about one provider, including the fields the table has no room for. */
-function ViewProviderModal({
-  provider,
-  period,
-  onClose,
-  onEdit,
-}: {
-  provider: ProviderSummary;
-  /** Which window the roll-up figures below were read through. */
-  period: string;
-  onClose: () => void;
-  onEdit: () => void;
-}) {
-  return (
-    <Modal
-      title={provider.name}
-      onClose={onClose}
-      width="lg"
-      footer={
-        <>
-          <Button onClick={onClose}>Close</Button>
-          <Button
-            variant="primary"
-            disabled={provider.isLocked}
-            title={provider.isLocked ? LOCKED_HINT : undefined}
-            onClick={onEdit}
-          >
-            Edit
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span
-            className={cx(
-              'rounded-full px-2 py-0.5',
-              provider.isActive ? 'bg-ok-50 text-ok-700' : 'bg-slate-100 text-slate-600',
-            )}
-          >
-            {provider.isActive ? 'Active — available when registering a purchase' : 'Retired'}
-          </span>
-          {provider.isLocked && (
-            <span className="rounded-full bg-warn-50 px-2 py-0.5 text-warn-700">
-              Locked against edits
-            </span>
-          )}
-        </div>
-
-        <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
-          <Detail label="Accreditation reference" mono>
-            {provider.accreditationReference}
-          </Detail>
-          <Detail label="Accredited from">
-            {provider.accreditationFrom ? formatDate(provider.accreditationFrom) : null}
-          </Detail>
-          <div>
-            <dt className="text-xs font-medium text-slate-700">Accreditation valid until</dt>
-            <dd className="mt-0.5 text-sm">
-              <Accreditation validUntil={provider.accreditationValidUntil} />
-            </dd>
-          </div>
-          <Detail label="Usual rate (AED/unit)">
-            {provider.defaultCostPerUnitAed
-              ? Number(provider.defaultCostPerUnitAed).toFixed(4)
-              : null}
-          </Detail>
-          <Detail label="Billing contact">{provider.contactName}</Detail>
-          <Detail label="Contact email">{provider.contactEmail}</Detail>
-          <Detail label="Contact phone">{provider.contactPhone}</Detail>
-          <Detail label="Website">{provider.website}</Detail>
-          <Detail label="On file since">{formatDate(provider.createdAt)}</Detail>
-        </dl>
-
-        {provider.notes && (
-          <div>
-            <p className="text-xs font-medium text-slate-700">Notes</p>
-            <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{provider.notes}</p>
-          </div>
-        )}
-
-        <div className="rounded-md bg-slate-50 p-3">
-          <p className="text-xs font-medium text-slate-700">{period}</p>
-          <div className="mt-2 grid grid-cols-3 gap-3 text-sm">
-            <Figure label="Contracts" value={provider.contractCount.toLocaleString()} />
-            <Figure label="Units" value={provider.totalUnitsPurchased.toLocaleString()} />
-            <Figure
-              label="Spend (AED)"
-              value={Number(provider.totalSpendAed).toLocaleString(undefined, {
-                minimumFractionDigits: 2,
-              })}
-            />
-          </div>
-          <p className="mt-2 text-xs text-slate-500">
-            {provider.lifetimeContractCount} contract
-            {provider.lifetimeContractCount === 1 ? '' : 's'} on file at any date — only a provider
-            with none has never supplied this platform.
-            {provider.lastPurchaseDate && (
-              <>
-                {' '}
-                The last was {formatDate(provider.lastPurchaseDate)}
-                {provider.lastCostPerUnitAed &&
-                  ` at ${Number(provider.lastCostPerUnitAed).toFixed(4)} per unit`}
-                .
-              </>
-            )}
-          </p>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-function Detail({
-  label,
-  mono,
-  children,
-}: {
-  label: string;
-  mono?: boolean;
-  children: string | null;
-}) {
-  return (
-    <div>
-      <dt className="text-xs font-medium text-slate-700">{label}</dt>
-      <dd className={cx('mt-0.5 text-sm text-slate-600', mono && 'font-mono text-xs')}>
-        {children || <span className="text-slate-400">—</span>}
-      </dd>
-    </div>
-  );
-}
-
 function Figure({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -574,15 +440,29 @@ function Figure({ label, value }: { label: string; value: string }) {
  * request method differ, and keeping them one component is what stops the two
  * drifting apart a field at a time.
  */
+/**
+ * One form for adding, editing and reading a provider.
+ *
+ * Viewing used to be a separate layout, which meant a field could be added to
+ * the form and quietly never appear on the screen most people open first. The
+ * same fields in the same order, disabled, cannot drift like that — and the
+ * reader sees exactly what an editor would change.
+ */
 function ProviderFormModal({
   provider,
+  readOnly = false,
+  period,
   onClose,
   onDone,
 }: {
   /** Null when adding. */
   provider: ProviderSummary | null;
+  /** Read the record rather than change it: every control off, one way out. */
+  readOnly?: boolean;
+  /** Which window the roll-up figures were read through. Viewing only. */
+  period?: string;
   onClose: () => void;
-  onDone: () => void;
+  onDone?: () => void;
 }) {
   const [form, setForm] = useState({
     name: provider?.name ?? '',
@@ -626,15 +506,24 @@ function ProviderFormModal({
         ? api(`/api/v1/admin/providers/${provider.id}`, { method: 'PATCH', body })
         : api('/api/v1/admin/providers', { method: 'POST', body });
     },
-    onSuccess: onDone,
+    onSuccess: () => onDone?.(),
   });
 
   return (
     <Modal
-      title={provider ? `Edit ${provider.name}` : 'Add an accredited provider'}
+      title={
+        readOnly && provider
+          ? provider.name
+          : provider
+            ? `Edit ${provider.name}`
+            : 'Add an accredited provider'
+      }
       onClose={onClose}
       width="lg"
       footer={
+        readOnly ? (
+          <Button onClick={onClose}>Close</Button>
+        ) : (
         <>
           <Button onClick={onClose}>Cancel</Button>
           <Button
@@ -651,6 +540,7 @@ function ProviderFormModal({
                 : 'Add provider'}
           </Button>
         </>
+        )
       }
     >
       <div className="space-y-4">
@@ -662,6 +552,7 @@ function ProviderFormModal({
           >
             <select
               className={inputClass}
+              disabled={readOnly}
               value={form.providerType}
               onChange={(event) =>
                 setForm({ ...form, providerType: event.target.value as AspProviderType })
@@ -691,7 +582,7 @@ function ProviderFormModal({
               className={inputClass}
               placeholder="https://api.provider.ae"
               value={form.apiEndpoint}
-              disabled={!needsEndpoint(form.providerType)}
+              disabled={readOnly || !needsEndpoint(form.providerType)}
               onChange={(event) => setForm({ ...form, apiEndpoint: event.target.value })}
             />
           </Field>
@@ -699,6 +590,7 @@ function ProviderFormModal({
           <Field label="Name">
             <input
               className={inputClass}
+              disabled={readOnly}
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               placeholder="e.g. Accredited ASP UAE"
@@ -707,6 +599,7 @@ function ProviderFormModal({
           <Field label="Accreditation reference" hint="Their entry on the Ministry of Finance list.">
             <input
               className={inputClass}
+              disabled={readOnly}
               value={form.accreditationReference}
               onChange={(e) => setForm({ ...form, accreditationReference: e.target.value })}
             />
@@ -714,6 +607,7 @@ function ProviderFormModal({
           <Field label="Accredited from" hint="The day their entry took effect.">
             <input
               className={inputClass}
+              disabled={readOnly}
               type="date"
               value={form.accreditationFrom}
               max={form.accreditationValidUntil || undefined}
@@ -726,6 +620,7 @@ function ProviderFormModal({
           >
             <input
               className={inputClass}
+              disabled={readOnly}
               type="date"
               value={form.accreditationValidUntil}
               min={form.accreditationFrom || undefined}
@@ -735,6 +630,7 @@ function ProviderFormModal({
           <Field label="Billing contact">
             <input
               className={inputClass}
+              disabled={readOnly}
               value={form.contactName}
               onChange={(e) => setForm({ ...form, contactName: e.target.value })}
             />
@@ -742,6 +638,7 @@ function ProviderFormModal({
           <Field label="Contact email">
             <input
               className={inputClass}
+              disabled={readOnly}
               type="email"
               value={form.contactEmail}
               onChange={(e) => setForm({ ...form, contactEmail: e.target.value })}
@@ -750,6 +647,7 @@ function ProviderFormModal({
           <Field label="Contact phone">
             <input
               className={inputClass}
+              disabled={readOnly}
               value={form.contactPhone}
               onChange={(e) => setForm({ ...form, contactPhone: e.target.value })}
             />
@@ -757,6 +655,7 @@ function ProviderFormModal({
           <Field label="Website">
             <input
               className={inputClass}
+              disabled={readOnly}
               value={form.website}
               onChange={(e) => setForm({ ...form, website: e.target.value })}
               placeholder="https://"
@@ -768,6 +667,7 @@ function ProviderFormModal({
           >
             <input
               className={inputClass}
+              disabled={readOnly}
               inputMode="decimal"
               value={form.defaultCostPerUnitAed}
               onChange={(e) => setForm({ ...form, defaultCostPerUnitAed: e.target.value })}
@@ -776,9 +676,40 @@ function ProviderFormModal({
           </Field>
         </div>
 
+        {readOnly && provider && (
+          <div className="rounded-md bg-slate-50 p-3">
+            <p className="text-xs font-medium text-slate-700">{period}</p>
+            <div className="mt-2 grid grid-cols-3 gap-3 text-sm">
+              <Figure label="Contracts" value={provider.contractCount.toLocaleString()} />
+              <Figure label="Units" value={provider.totalUnitsPurchased.toLocaleString()} />
+              <Figure
+                label="Spend (AED)"
+                value={Number(provider.totalSpendAed).toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                })}
+              />
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              {provider.lifetimeContractCount} contract
+              {provider.lifetimeContractCount === 1 ? '' : 's'} on file at any date — only a
+              provider with none has never supplied this platform.
+              {provider.lastPurchaseDate && (
+                <>
+                  {' '}
+                  The last was {formatDate(provider.lastPurchaseDate)}
+                  {provider.lastCostPerUnitAed &&
+                    ` at ${Number(provider.lastCostPerUnitAed).toFixed(4)} per unit`}
+                  .
+                </>
+              )}
+            </p>
+          </div>
+        )}
+
         <Field label="Notes">
           <input
             className={inputClass}
+              disabled={readOnly}
             value={form.notes}
             onChange={(e) => setForm({ ...form, notes: e.target.value })}
           />
