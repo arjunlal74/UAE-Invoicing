@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { EMIRATES, PAYMENT_MEANS, isValidTrn } from '@uae/domain';
 import type { CustomerSummary, PaginatedResult } from '@uae/contracts';
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -16,6 +16,7 @@ import {
   inputClass,
 } from '../../components/ui';
 import { ApiError, api, queryString } from '../../lib/api';
+import { withOrigin } from '../../lib/navigation';
 import { can, useAuthStore } from '../../stores/auth';
 
 /**
@@ -106,6 +107,7 @@ export function CustomersPage() {
   const editable = can(user, 'directory.manage');
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [search, setSearch] = useState('');
   const [includeInactive, setIncludeInactive] = useState(false);
@@ -247,7 +249,7 @@ export function CustomersPage() {
                         <Button
                           size="sm"
                           onClick={() =>
-                            navigate(`/ar/new-invoice?customerId=${customer.id}`)
+                            navigate(withOrigin(`/ar/new-invoice?customerId=${customer.id}`, location))
                           }
                         >
                           Invoice

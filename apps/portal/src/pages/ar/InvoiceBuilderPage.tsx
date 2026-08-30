@@ -9,7 +9,7 @@ import {
   type StagedLine,
 } from '@uae/domain';
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { LineItemsGrid, TotalsStrip, type LineFindings } from '../../components/builder/LineItemsGrid';
 import {
   Alert,
@@ -21,6 +21,7 @@ import {
   inputClass,
 } from '../../components/ui';
 import { ApiError, api, queryString } from '../../lib/api';
+import { originFrom } from '../../lib/navigation';
 import { canFile, useAuthStore } from '../../stores/auth';
 
 /**
@@ -70,6 +71,9 @@ export function InvoiceBuilderPage() {
   const { draftId } = useParams<{ draftId?: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  // Where Cancel returns to: the customer directory, the drafts list, or
+  // wherever else the builder was opened from.
+  const origin = originFrom(useLocation().search, { to: '/ar/drafts', label: 'Drafts' });
   const user = useAuthStore((s) => s.user);
   const files = canFile(user);
 
@@ -236,6 +240,9 @@ export function InvoiceBuilderPage() {
         description="Compose a sales invoice directly, without a spreadsheet."
         actions={
           <>
+            <Button onClick={() => navigate(origin.to)} disabled={busy}>
+              Cancel
+            </Button>
             <Button onClick={() => save.mutate()} disabled={busy}>
               Save draft
             </Button>

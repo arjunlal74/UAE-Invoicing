@@ -250,7 +250,7 @@ export function DisputesPage() {
                           size="sm"
                           variant="primary"
                           onClick={() =>
-                            navigate(`/ar/credit-notes/new?invoiceId=${dispute.id}`)
+                            navigate(withOrigin(`/ar/credit-notes/new?invoiceId=${dispute.id}`, location))
                           }
                         >
                           Generate credit note

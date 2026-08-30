@@ -19,7 +19,7 @@ import {
   type StagedLine,
 } from '@uae/domain';
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { LineItemsGrid, TotalsStrip } from '../../components/builder/LineItemsGrid';
 import {
   Alert,
@@ -34,6 +34,7 @@ import {
   inputClass,
 } from '../../components/ui';
 import { ApiError, api, queryString } from '../../lib/api';
+import { originFrom } from '../../lib/navigation';
 import { canFile, useAuthStore } from '../../stores/auth';
 import { FindingsPanel } from './InvoiceBuilderPage';
 
@@ -56,6 +57,10 @@ const REASON_CODES = RejectionReasonCode.options;
 export function CreditNoteBuilderPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  // Where Cancel returns to. The builder is opened from the dispute desk, from
+  // an invoice and from the drafts list, so an abandoned credit note has to go
+  // back to whichever of those the accountant left.
+  const origin = originFrom(useLocation().search, { to: '/ar/drafts', label: 'Drafts' });
   const user = useAuthStore((s) => s.user);
   const files = canFile(user);
 
@@ -237,6 +242,9 @@ export function CreditNoteBuilderPage() {
         description="UBL Type 381, referencing the cleared invoice it corrects."
         actions={
           <>
+            <Button onClick={() => navigate(origin.to)} disabled={busy}>
+              Cancel
+            </Button>
             <Button onClick={() => save.mutate()} disabled={!ready || busy}>
               Save draft
             </Button>

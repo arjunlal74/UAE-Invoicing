@@ -21,6 +21,7 @@
 const ORIGINS: Record<string, string> = {
   '/invoices': 'All invoices',
   '/approvals': 'Approvals',
+  '/ar/customers': 'Customers',
   '/ar/disputes': 'Customer responses',
   '/ar/drafts': 'Drafts',
   '/batches': 'Batches',

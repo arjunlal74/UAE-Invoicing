@@ -189,7 +189,9 @@ export function InvoiceDetailPage() {
               <Button
                 variant="primary"
                 size="sm"
-                onClick={() => navigate(`/ar/credit-notes/new?invoiceId=${invoiceId}`)}
+                onClick={() =>
+                  navigate(keepOrigin(`/ar/credit-notes/new?invoiceId=${invoiceId}`, origin))
+                }
               >
                 Generate corrective credit note
               </Button>
