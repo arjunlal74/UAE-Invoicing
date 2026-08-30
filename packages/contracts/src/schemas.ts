@@ -172,6 +172,15 @@ export const CreateTenantRequest = z.object({
   isVatGroup: z.boolean().default(false),
   vatGroupTrn: trn.nullable().optional(),
   registeredAddress: AddressSchema,
+  /**
+   * The accredited provider this tenant will file through.
+   *
+   * Optional, because a tenant can be onboarded before the provider is chosen
+   * and the connection configured later. Supplying it fills in the half of the
+   * connection that belongs to the provider; the credentials and the account
+   * identifier are issued per merchant and cannot be guessed here.
+   */
+  aspProviderId: uuid.nullable().optional(),
   /** Optional first administrator, invited as part of onboarding. */
   adminEmail: z.string().trim().toLowerCase().email().optional(),
   adminFullName: z.string().trim().min(1).max(200).optional(),
@@ -304,6 +313,13 @@ export type UserSummary = z.infer<typeof UserSummary>;
 // --- ASP configuration ------------------------------------------------------
 
 export const UpsertAspConfigRequest = z.object({
+  /**
+   * Which accredited provider this connection is with.
+   *
+   * Nullable so a connection can be detached from the master — a provider that
+   * was chosen in error should be removable without inventing a replacement.
+   */
+  aspProviderId: uuid.nullable().optional(),
   providerType: AspProviderType,
   displayName: z.string().trim().min(1).max(100),
   apiEndpoint: z.string().trim().url().or(z.literal('')),
@@ -328,6 +344,8 @@ export const UpsertAspConfigRequest = z.object({
 export type UpsertAspConfigRequest = z.infer<typeof UpsertAspConfigRequest>;
 
 export const AspConfigResponse = z.object({
+  /** The accredited provider on file, when one has been chosen. */
+  aspProviderId: uuid.nullable(),
   id: uuid,
   tenantId: uuid,
   providerType: AspProviderType,

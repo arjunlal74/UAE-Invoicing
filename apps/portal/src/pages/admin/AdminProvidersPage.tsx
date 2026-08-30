@@ -1,4 +1,4 @@
-import type { ProviderSummary, ReportingPeriod } from '@uae/contracts';
+import type { AspProviderType, ProviderSummary, ReportingPeriod } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import {
@@ -15,6 +15,23 @@ import {
   inputClass,
 } from '../../components/ui';
 import { ApiError, api } from '../../lib/api';
+
+/** How a provider is reached, in the words the forms use. */
+const CONNECTION_LABELS: Record<AspProviderType, string> = {
+  MOCK: 'Simulator',
+  GENERIC_REST: 'Third-party',
+  NATIVE_AS4: 'Native',
+};
+
+/**
+ * The simulator is the one connection that goes nowhere, so it is the one that
+ * needs no address. Anything else is a real network call, and recording such a
+ * provider without an endpoint leaves a record that looks configured and fails
+ * at the first submission.
+ */
+function needsEndpoint(type: AspProviderType): boolean {
+  return type !== 'MOCK';
+}
 
 /**
  * The accredited provider master (SRS v2.8 §15.1).
@@ -231,6 +248,7 @@ export function AdminProvidersPage() {
               <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600">
                 <tr>
                   <th className="px-4 py-2 font-medium">Provider</th>
+                  <th className="px-4 py-2 font-medium">Connection</th>
                   <th className="px-4 py-2 font-medium">Accreditation</th>
                   <th className="px-4 py-2 font-medium">Accredited from</th>
                   <th className="px-4 py-2 font-medium">Valid until</th>
@@ -253,6 +271,12 @@ export function AdminProvidersPage() {
                       {provider.isLocked && <Chip>locked</Chip>}
                       {provider.contactEmail && (
                         <p className="text-xs text-slate-500">{provider.contactEmail}</p>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-xs">
+                      {CONNECTION_LABELS[provider.providerType]}
+                      {provider.providerType !== 'MOCK' && provider.apiEndpoint && (
+                        <p className="break-all text-slate-400">{provider.apiEndpoint}</p>
                       )}
                     </td>
                     <td className="px-4 py-2 font-mono text-xs text-slate-500">
@@ -552,6 +576,8 @@ function ProviderFormModal({
 }) {
   const [form, setForm] = useState({
     name: provider?.name ?? '',
+    providerType: provider?.providerType ?? ('GENERIC_REST' as AspProviderType),
+    apiEndpoint: provider?.apiEndpoint ?? '',
     accreditationReference: provider?.accreditationReference ?? '',
     accreditationFrom: provider?.accreditationFrom ?? '',
     accreditationValidUntil: provider?.accreditationValidUntil ?? '',
@@ -569,6 +595,11 @@ function ProviderFormModal({
       // distinguishes the two, and null is what erases what was there before.
       const body = {
         name: form.name.trim(),
+        providerType: form.providerType,
+        // Empty is a legitimate value here, not a cleared one: the simulator
+        // has no endpoint, and a provider can be recorded before their API
+        // documentation arrives.
+        apiEndpoint: form.apiEndpoint.trim(),
         accreditationReference: form.accreditationReference.trim() || null,
         accreditationFrom: form.accreditationFrom || null,
         accreditationValidUntil: form.accreditationValidUntil || null,
@@ -614,6 +645,42 @@ function ProviderFormModal({
     >
       <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2">
+          <Field
+            label="Provider type"
+            required
+            hint="How this provider is talked to. The simulator files without leaving this system."
+          >
+            <select
+              className={inputClass}
+              value={form.providerType}
+              onChange={(event) =>
+                setForm({ ...form, providerType: event.target.value as AspProviderType })
+              }
+            >
+              <option value="MOCK">Simulator (development)</option>
+              <option value="GENERIC_REST">Third-party (REST)</option>
+              <option value="NATIVE_AS4">Native (AS4 gateway)</option>
+            </select>
+          </Field>
+
+          <Field
+            label="API endpoint"
+            required={needsEndpoint(form.providerType)}
+            hint={
+              needsEndpoint(form.providerType)
+                ? "Base URL of the provider's API. The same for every merchant on them."
+                : 'Not used by the simulator — it never leaves this system.'
+            }
+          >
+            <input
+              className={inputClass}
+              placeholder="https://api.provider.ae"
+              value={form.apiEndpoint}
+              disabled={!needsEndpoint(form.providerType)}
+              onChange={(event) => setForm({ ...form, apiEndpoint: event.target.value })}
+            />
+          </Field>
+
           <Field label="Name">
             <input
               className={inputClass}

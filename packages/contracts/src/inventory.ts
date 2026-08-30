@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { TenantType } from './enums.js';
+import { AspProviderType, TenantType } from './enums.js';
 
 /**
  * The multi-tier data bundle inventory lifecycle — SRS v2.8 §15.
@@ -19,6 +19,13 @@ const uuid = z.string().uuid();
 
 export const CreateProviderRequest = z.object({
   name: z.string().trim().min(2).max(120),
+  /**
+   * How this provider is talked to, and where. Both are the same for every
+   * merchant on them, which is why they live here rather than being retyped
+   * into each tenant's connection.
+   */
+  providerType: AspProviderType.optional(),
+  apiEndpoint: z.string().trim().url().or(z.literal('')).optional(),
   /** The provider's entry on the MoF's published accreditation list. */
   accreditationReference: z.string().trim().max(100).nullable().optional(),
   /** The day that entry took effect. Null when it has not been recorded. */
@@ -58,6 +65,8 @@ export type UpdateProviderRequest = z.infer<typeof UpdateProviderRequest>;
 export const ProviderSummary = z.object({
   id: uuid,
   name: z.string(),
+  providerType: AspProviderType,
+  apiEndpoint: z.string(),
   accreditationReference: z.string().nullable(),
   /**
    * When the accreditation took effect. Kept beside its expiry because the pair

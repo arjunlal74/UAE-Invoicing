@@ -37,6 +37,8 @@ interface ProviderRow {
   default_cost_per_unit_aed: string | null;
   is_active: boolean;
   is_locked: boolean;
+  provider_type: ProviderSummary['providerType'];
+  api_endpoint: string;
   notes: string | null;
   created_at: Date;
   contract_count: string;
@@ -51,6 +53,8 @@ function toSummary(row: ProviderRow): ProviderSummary {
   return {
     id: row.id,
     name: row.name,
+    providerType: row.provider_type,
+    apiEndpoint: row.api_endpoint,
     accreditationReference: row.accreditation_reference,
     accreditationFrom: row.accreditation_from
       ? row.accreditation_from.toISOString().slice(0, 10)
@@ -97,6 +101,7 @@ const PROVIDER_SELECT = `
   v.accreditation_from, v.accreditation_valid_until,
   v.contact_name, v.contact_email,
   v.contact_phone, v.website, v.is_active, v.is_locked, v.notes, v.created_at,
+  v.provider_type, v.api_endpoint,
   v.default_cost_per_unit_aed::text AS default_cost_per_unit_aed,
   (SELECT count(*) FROM asp_bundle_procurements p
     WHERE p.asp_provider_id = v.id
@@ -144,6 +149,25 @@ function isoDay(date: Date | null): string | null {
 function assertAccreditationOrdered(from?: string | null, until?: string | null): void {
   if (from && until && until < from) {
     throw badRequest('An accreditation cannot expire before it starts.');
+  }
+}
+
+/**
+ * A provider that is talked to over a network needs an address.
+ *
+ * Checked against the values the record will hold after the edit, not against
+ * the ones the request happens to carry: switching an existing simulator to
+ * third-party without supplying an endpoint is exactly the case worth
+ * catching, and a body-only check would wave it through.
+ */
+export function assertConnectionUsable(
+  providerType: UpdateProviderRequest['providerType'],
+  apiEndpoint: string | null | undefined,
+): void {
+  if (providerType && providerType !== 'MOCK' && !apiEndpoint?.trim()) {
+    throw badRequest(
+      'A provider reached over the network needs its API endpoint. Only the simulator can go without one.',
+    );
   }
 }
 
@@ -208,6 +232,7 @@ export function registerProviderRoutes(app: FastifyInstance) {
       const ctx = requireContext(request);
       const body = CreateProviderRequest.parse(request.body);
       assertAccreditationOrdered(body.accreditationFrom, body.accreditationValidUntil);
+      assertConnectionUsable(body.providerType, body.apiEndpoint);
 
       const id = await withPlatformAccess(async (tx) => {
         // Checked case-insensitively, because the whole point of the master is
@@ -227,6 +252,7 @@ export function registerProviderRoutes(app: FastifyInstance) {
             accreditation_from, accreditation_valid_until,
             contact_name, contact_email,
             contact_phone, website, default_cost_per_unit_aed, notes,
+            provider_type, api_endpoint,
             created_by_user_id
           ) VALUES (
             ${body.name}, ${body.accreditationReference ?? null},
@@ -234,6 +260,7 @@ export function registerProviderRoutes(app: FastifyInstance) {
             ${body.contactName ?? null}, ${body.contactEmail ?? null},
             ${body.contactPhone ?? null}, ${body.website ?? null},
             ${body.defaultCostPerUnitAed ?? null}, ${body.notes ?? null},
+            ${body.providerType ?? 'MOCK'}::asp_provider_type, ${body.apiEndpoint ?? ''},
             ${ctx.userId}
           )
           RETURNING id
@@ -273,6 +300,11 @@ export function registerProviderRoutes(app: FastifyInstance) {
         body.accreditationValidUntil === undefined
           ? isoDay(before.accreditation_valid_until)
           : body.accreditationValidUntil,
+      );
+
+      assertConnectionUsable(
+        body.providerType ?? before.provider_type,
+        body.apiEndpoint === undefined ? before.api_endpoint : body.apiEndpoint,
       );
 
       if (before.is_locked && !isUnlockOnly(body)) {
@@ -330,6 +362,12 @@ export function registerProviderRoutes(app: FastifyInstance) {
             },
             notes                     = ${
               body.notes === undefined ? tx.unsafe('notes') : body.notes
+            },
+            provider_type             = coalesce(
+              ${body.providerType ?? null}::asp_provider_type, provider_type
+            ),
+            api_endpoint              = ${
+              body.apiEndpoint === undefined ? tx.unsafe('api_endpoint') : body.apiEndpoint
             },
             is_active                 = coalesce(${body.isActive ?? null}, is_active),
             is_locked                 = coalesce(${body.isLocked ?? null}, is_locked)

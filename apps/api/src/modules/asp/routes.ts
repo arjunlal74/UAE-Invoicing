@@ -47,6 +47,17 @@ export function registerAspRoutes(app: FastifyInstance) {
       }
 
       const updated = await withPlatformAccess(async (tx) => {
+        // Checked rather than trusted: a retired provider is kept on file for
+        // the contracts already against it, not offered for new connections.
+        if (body.aspProviderId) {
+          const provider = await tx<{ id: string }[]>`
+            SELECT id FROM asp_providers WHERE id = ${body.aspProviderId} AND is_active
+          `;
+          if (!provider[0]) {
+            throw badRequest('That accredited provider is not on file, or has been retired.');
+          }
+        }
+
         const existing = await tx<AspConfigRow[]>`
           SELECT * FROM tenant_asp_configs WHERE tenant_id = ${id} AND is_active FOR UPDATE
         `;
@@ -70,6 +81,7 @@ export function registerAspRoutes(app: FastifyInstance) {
 
         await tx`
           UPDATE tenant_asp_configs SET
+            asp_provider_id     = ${body.aspProviderId === undefined ? current.asp_provider_id : body.aspProviderId},
             provider_type       = ${body.providerType}::asp_provider_type,
             display_name        = ${body.displayName},
             api_endpoint        = ${body.apiEndpoint},

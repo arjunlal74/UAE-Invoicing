@@ -4,6 +4,7 @@ import type {
   AspConnectionStatus,
   AspProviderType,
   PaginatedResult,
+  ProviderSummary,
   TenantDetail,
   TenantStatus,
   UserSummary,
@@ -184,7 +185,16 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
     queryFn: () => api<AspConfigResponse>(`/api/v1/admin/tenants/${tenantId}/asp-config`),
   });
 
+  // Only the ones still being bought from: a retired provider stays on file
+  // for the contracts already against it, and the server refuses it here too.
+  const { data: providers } = useQuery({
+    queryKey: ['asp-providers', 'picker'],
+    queryFn: () => api<{ items: ProviderSummary[] }>('/api/v1/admin/providers'),
+  });
+  const selectable = (providers?.items ?? []).filter((provider) => provider.isActive);
+
   const [form, setForm] = useState<{
+    aspProviderId?: string | null;
     providerType?: AspProviderType;
     displayName?: string;
     apiEndpoint?: string;
@@ -202,6 +212,8 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
       api<AspConfigResponse>(`/api/v1/admin/tenants/${tenantId}/asp-config`, {
         method: 'PUT',
         body: {
+          aspProviderId:
+            form.aspProviderId === undefined ? config?.aspProviderId : form.aspProviderId,
           providerType: form.providerType ?? config?.providerType ?? 'MOCK',
           displayName: form.displayName ?? config?.displayName ?? '',
           apiEndpoint: form.apiEndpoint ?? config?.apiEndpoint ?? '',
@@ -256,6 +268,11 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
   const value = <K extends keyof typeof form>(key: K, fallback: string) =>
     (form[key] as string | undefined) ?? fallback;
 
+  // The cascade: the chosen protocol, and the providers reachable over it.
+  const providerType = (form.providerType ?? config.providerType) as AspProviderType;
+  const linkedId = form.aspProviderId === undefined ? config.aspProviderId : form.aspProviderId;
+  const matching = selectable.filter((provider) => provider.providerType === providerType);
+
   return (
     <Card
       title="Provider connection (ASP)"
@@ -275,15 +292,67 @@ function AspConfigSection({ tenantId }: { tenantId: string }) {
       </Alert>
 
       <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {/* Type first, then who. The type decides which providers can even be
+            reached this way, so choosing it first narrows the list below rather
+            than letting an operator pick a provider and then a type that
+            contradicts it. */}
         <Field label="Provider type">
           <select
             className={inputClass}
-            value={value('providerType', config.providerType)}
-            onChange={(e) => setForm({ ...form, providerType: e.target.value as AspProviderType })}
+            value={providerType}
+            onChange={(event) => {
+              const next = event.target.value as AspProviderType;
+              // A provider that does not speak the newly chosen protocol cannot
+              // stay selected — leaving it would show a name in a box that its
+              // own list no longer offers.
+              const keep = matching.find((provider) => provider.id === linkedId);
+              setForm({
+                ...form,
+                providerType: next,
+                ...(keep && keep.providerType === next ? {} : { aspProviderId: null }),
+              });
+            }}
           >
             <option value="MOCK">Simulated provider (development)</option>
             <option value="GENERIC_REST">Third-party ASP over REST</option>
             <option value="NATIVE_AS4">Native AS4 gateway (Phase 2 — not implemented)</option>
+          </select>
+        </Field>
+
+        <Field
+          label="Accredited provider"
+          hint={
+            matching.length === 0
+              ? 'No provider on file is reached this way. Set one up on the providers screen.'
+              : 'Choosing one fills in what they are called and where they are reached.'
+          }
+        >
+          <select
+            className={inputClass}
+            disabled={matching.length === 0}
+            value={linkedId ?? ''}
+            onChange={(event) => {
+              const chosen = matching.find((provider) => provider.id === event.target.value);
+              // The provider owns what it is called and where it is reached, so
+              // picking one fills those in rather than leaving the operator to
+              // copy them across from the providers screen by hand. They stay
+              // editable: a merchant occasionally sits on a different endpoint,
+              // and the master's value is a default rather than a rule. The
+              // type is not filled here — the list is already narrowed to it.
+              setForm({
+                ...form,
+                aspProviderId: event.target.value || null,
+                ...(chosen ? { displayName: chosen.name, apiEndpoint: chosen.apiEndpoint } : {}),
+              });
+            }}
+          >
+            <option value="">— Not linked to an accredited provider —</option>
+            {matching.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name}
+                {provider.accreditationReference ? ` · ${provider.accreditationReference}` : ''}
+              </option>
+            ))}
           </select>
         </Field>
 

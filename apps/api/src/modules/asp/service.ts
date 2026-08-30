@@ -42,6 +42,7 @@ registerDriver({
 interface AspConfigRow {
   id: string;
   tenant_id: string;
+  asp_provider_id: string | null;
   provider_type: AspTenantConfig['providerType'];
   display_name: string;
   api_endpoint: string;
@@ -63,6 +64,7 @@ export function toAspConfigResponse(row: AspConfigRow): AspConfigResponse {
   return {
     id: row.id,
     tenantId: row.tenant_id,
+    aspProviderId: row.asp_provider_id,
     providerType: row.provider_type,
     displayName: row.display_name,
     apiEndpoint: row.api_endpoint,

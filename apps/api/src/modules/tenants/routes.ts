@@ -312,13 +312,48 @@ export function registerTenantRoutes(app: FastifyInstance) {
 
       const tenantId = inserted[0]!.id;
 
-      // Every tenant gets an ASP configuration row up front, in the
-      // NOT_CONFIGURED state, so the admin panel always has something concrete
-      // to show and edit rather than a special "no config yet" case.
+      // Every tenant gets an ASP configuration row up front, so the admin
+      // panel always has something concrete to show and edit rather than a
+      // special "no config yet" case.
+      //
+      // Naming a provider fills in the half of that row that belongs to the
+      // provider — how it is talked to, and where. What it cannot fill is the
+      // credentials and the account identifier, which the provider issues per
+      // merchant, so the connection lands in PENDING_REGISTRATION rather than
+      // ACTIVE: addressed and named, but not yet authenticated. Claiming
+      // otherwise would let the tenant be activated and fail at submission.
+      interface ChosenProvider {
+        id: string;
+        name: string;
+        provider_type: string;
+        api_endpoint: string;
+      }
+      let chosen: ChosenProvider | null = null;
+
+      if (body.aspProviderId) {
+        const found = await tx<ChosenProvider[]>`
+          SELECT id, name, provider_type, api_endpoint
+          FROM asp_providers
+          WHERE id = ${body.aspProviderId} AND is_active
+        `;
+        chosen = found[0] ?? null;
+        if (!chosen) {
+          throw badRequest('That accredited provider is not on file, or has been retired.');
+        }
+      }
+
       await tx`
-        INSERT INTO tenant_asp_configs (tenant_id, provider_type, display_name, status)
-        VALUES (${tenantId}, ${config().ASP_DEFAULT_DRIVER}::asp_provider_type,
-                'Not yet selected', 'NOT_CONFIGURED')
+        INSERT INTO tenant_asp_configs (
+          tenant_id, asp_provider_id, provider_type, display_name, api_endpoint, status
+        )
+        VALUES (
+          ${tenantId},
+          ${chosen?.id ?? null},
+          ${(chosen?.provider_type ?? config().ASP_DEFAULT_DRIVER)}::asp_provider_type,
+          ${chosen?.name ?? 'Not yet selected'},
+          ${chosen?.api_endpoint ?? ''},
+          ${chosen ? 'PENDING_REGISTRATION' : 'NOT_CONFIGURED'}
+        )
       `;
 
       let inviteToken: string | null = null;
