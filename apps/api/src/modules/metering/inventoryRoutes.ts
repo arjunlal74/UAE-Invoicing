@@ -11,7 +11,7 @@ import { actorFromContext, audit } from '../../audit/audit.js';
 import { withPlatformAccess, withTenant } from '../../db/client.js';
 import { requireContext, requirePermission, requirePlatform } from '../../http/context.js';
 import { badRequest, notFound } from '../../lib/errors.js';
-import { loadHostInventory, loadInventoryMovement } from './inventory.js';
+import { loadHostInventory, loadInventoryAccounts, loadInventoryMovement } from './inventory.js';
 import { parseMovementWindow, parsePeriod } from './period.js';
 import { loadPlatformStatement, loadTenantStatement } from './report.js';
 
@@ -266,9 +266,10 @@ export function registerInventoryRoutes(app: FastifyInstance) {
       // shelf as a movement over a window, which is the question asked when a
       // purchase has to be justified or a month's sales reconciled.
       const window = parseMovementWindow(request.query);
-      const [host, movement] = await Promise.all([
+      const [host, movement, accounts] = await Promise.all([
         loadHostInventory(),
         loadInventoryMovement(window.from, window.to),
+        loadInventoryAccounts(window.from, window.to),
       ]);
 
       const data = await withPlatformAccess(async (tx) => {
@@ -343,6 +344,7 @@ export function registerInventoryRoutes(app: FastifyInstance) {
       const response: InventoryConsole = {
         host,
         movement,
+        accounts,
         procurements: data.procurements.map(toProcurementSummary),
         tiers,
       };

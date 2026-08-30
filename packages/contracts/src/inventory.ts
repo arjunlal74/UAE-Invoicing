@@ -284,16 +284,67 @@ export const InventoryMovement = z.object({
   purchasedUnits: z.number(),
   /** Sold to tenants and partners inside the window. */
   soldUnits: z.number(),
-  /** Opening + purchased − sold. The shelf at the close of `to`. */
+  /** Opening + purchased − sold. Still unsold at the close of `to`. */
   closingUnits: z.number(),
   /** What the purchases in the window cost. */
   purchasedCostAed: z.string(),
+  /** Filed against a bundle inside the window, counted once across tiers. */
+  consumedUnits: z.number(),
+  /**
+   * Billable events in the window, not units. Higher than `consumedUnits` by
+   * however many were zero-rated: §15 gives a technical rejection a ledger row
+   * and no charge, so the count and the units answer different questions.
+   */
+  transactionCount: z.number(),
+  /** `consumedUnits` spread over the days the window covers. */
+  dailyAverageUnits: z.number(),
+  /** Whole days in the window, both ends included. The divisor above. */
+  windowDays: z.number(),
+  /**
+   * Procured − consumed as at the close of `to`: everything bought and not yet
+   * spent, wherever it is sitting. Deliberately overlaps `closingUnits`, which
+   * is the unsold part of this same figure.
+   */
+  unusedUnits: z.number(),
 });
 export type InventoryMovement = z.infer<typeof InventoryMovement>;
+
+/**
+ * One account's movement over the window, for the per-tier tables (§15.5).
+ *
+ * Opening + purchased − consumed = unused holds at every tier, so the three
+ * tables read as the same statement told about different holders rather than
+ * three unrelated grids.
+ *
+ * `sold` and `unsold` are the allocation axis and only mean anything for a
+ * channel partner: a sub-tenant's filing draws down the partner's master pool,
+ * while carving a slice out of it does not. Netting the two axes together would
+ * charge the partner twice for one document.
+ */
+export const InventoryAccountRow = z.object({
+  tenantId: uuid,
+  tenantName: z.string(),
+  tier: TenantType,
+  /** Held at the instant before `from`: purchased − consumed, all history. */
+  openingUnits: z.number(),
+  /** Bundles that arrived in the window — bought, or allocated by a partner. */
+  purchasedUnits: z.number(),
+  /** Partners only: allocated to sub-tenants in the window. */
+  soldUnits: z.number(),
+  /** Partners only: bought to date − allocated to date. The uncarved pool. */
+  unsoldUnits: z.number(),
+  /** Filed in the window. For a partner, its sub-tenants' filings on its pool. */
+  consumedUnits: z.number(),
+  /** Opening + purchased − consumed. Capacity still to spend. */
+  unusedUnits: z.number(),
+});
+export type InventoryAccountRow = z.infer<typeof InventoryAccountRow>;
 
 export const InventoryConsole = z.object({
   host: HostInventorySummary,
   movement: InventoryMovement,
+  /** Every account holding or having held a bundle, for the §15.5 tables. */
+  accounts: z.array(InventoryAccountRow),
   procurements: z.array(ProcurementSummary),
   tiers: z.array(InventoryTierRow),
 });

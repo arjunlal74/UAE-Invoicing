@@ -1,4 +1,9 @@
-import { TENANT_TYPE_LABELS, type InventoryConsole, type ProviderSummary } from '@uae/contracts';
+import {
+  TENANT_TYPE_LABELS,
+  type InventoryAccountRow,
+  type InventoryConsole,
+  type ProviderSummary,
+} from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -92,7 +97,23 @@ export function AdminInventoryPage() {
   if (isLoading || !data) return <Spinner label="Loading inventory…" />;
 
   const { host, movement } = data;
+
+  // Grouped once here rather than filtered three times in the markup, so the
+  // three tables cannot disagree about which tier an account belongs to.
+  const accounts = {
+    partners: data.accounts.filter((row) => row.tier === 'CHANNEL_PARTNER'),
+    enterprise: data.accounts.filter((row) => row.tier === 'ENTERPRISE_TENANT'),
+    managed: data.accounts.filter((row) => row.tier === 'MANAGED_SUB_TENANT'),
+  };
   const breached = data.tiers.filter((tier) => tier.belowBuffer);
+
+  // Runway at the rate this period actually ran at, rather than the rolling
+  // 30-day rate on `host`: the tile is answering "at this rate", and this is
+  // the rate it just showed.
+  const runwayDays =
+    movement.dailyAverageUnits > 0
+      ? Math.floor(movement.unusedUnits / movement.dailyAverageUnits)
+      : null;
 
   return (
     <div className="space-y-4">
@@ -149,28 +170,73 @@ export function AdminInventoryPage() {
         </Alert>
       )}
 
-      {/* --- §15.1 the shelf as a movement over the window --------------- */}
+      {/* --- §15.1 the shelf as a movement over the window ---------------
+          Colour is assigned by what the figure is, not decoratively: the
+          statement line reads as one blue set, the two figures that can be
+          in trouble carry the verdict tones, and money out is deliberately
+          not green. */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile
           label="Opening"
           value={movement.openingUnits.toLocaleString()}
-          hint={`On the shelf before ${formatDate(movement.from)}`}
+          hint={`Unsold before ${formatDate(movement.from)}`}
+          tone="info"
         />
         <StatTile
           label="Purchase"
           value={movement.purchasedUnits.toLocaleString()}
           hint={`AED ${Number(movement.purchasedCostAed).toLocaleString()} committed`}
+          tone="info"
         />
         <StatTile
           label="Sold"
           value={movement.soldUnits.toLocaleString()}
           hint="To tenants and partners in this period"
+          tone="info"
         />
         <StatTile
-          label="Balance"
+          label="Unsold"
           value={movement.closingUnits.toLocaleString()}
           hint="Opening + purchase − sold"
           tone={movement.closingUnits <= 0 ? 'danger' : 'ok'}
+        />
+        <StatTile
+          label="Total transactions"
+          value={movement.transactionCount.toLocaleString()}
+          hint={
+            movement.transactionCount === movement.consumedUnits
+              ? 'Billable events — every one charged a unit'
+              : `Billable events — ${(movement.transactionCount - movement.consumedUnits).toLocaleString()} zero-rated`
+          }
+          tone="info"
+        />
+        <StatTile
+          label="Total consumption"
+          value={movement.consumedUnits.toLocaleString()}
+          hint={`Filed over ${movement.windowDays} day${movement.windowDays === 1 ? '' : 's'}`}
+          tone="info"
+        />
+        <StatTile
+          label="Average consumption / day"
+          value={movement.dailyAverageUnits.toLocaleString()}
+          hint={
+            runwayDays === null
+              ? 'No filing in this period — no runway to project'
+              : `about ${runwayDays.toLocaleString()} days of unused capacity left`
+          }
+          tone={runwayDays !== null && runwayDays < 30 ? 'warn' : 'info'}
+        />
+        <StatTile
+          label="Total unused"
+          value={movement.unusedUnits.toLocaleString()}
+          hint="Procured − consumed, unsold stock included"
+          tone={
+            movement.unusedUnits <= 0
+              ? 'danger'
+              : host.minimumBufferUnits > 0 && movement.unusedUnits < host.minimumBufferUnits
+                ? 'warn'
+                : 'ok'
+          }
         />
       </div>
 
@@ -181,138 +247,163 @@ export function AdminInventoryPage() {
         </Alert>
       )}
 
-      {/* --- §15.5 the tier matrix --------------------------------------- */}
-      <Card title={`Account balances (${data.tiers.length})`}>
-        {data.tiers.length === 0 ? (
-          <EmptyState
-            title="No bundles issued"
-            description="Register a provider purchase from Buy data above, then sell bundles to tenants and partners."
-          />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="pb-2 font-medium">Account</th>
-                  <th className="pb-2 font-medium">Tier</th>
-                  <th className="pb-2 text-right font-medium">Purchased</th>
-                  <th className="pb-2 text-right font-medium">Allocated</th>
-                  <th className="pb-2 text-right font-medium">Consumed</th>
-                  <th className="pb-2 text-right font-medium">Available</th>
-                  <th className="pb-2 text-right font-medium">Floor</th>
-                  <th className="pb-2 text-right font-medium">Days left</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {data.tiers.map((tier) => (
-                  <tr key={tier.bundleId} className={cx(tier.belowBuffer && 'bg-danger-50')}>
-                    <td className="py-2 text-slate-800">
-                      {/* A partner is the only tier with a ledger of its own to
-                          read: it buys from this platform and sells on. */}
-                      {tier.tier === 'CHANNEL_PARTNER' && tier.tenantId ? (
-                        <Link
-                          to={`/admin/inventory/report/${tier.tenantId}`}
-                          className="font-medium text-brand-600 underline"
-                        >
-                          {tier.tenantName}
-                        </Link>
-                      ) : (
-                        tier.tenantName
-                      )}
-                    </td>
-                    <td className="py-2 text-xs text-slate-500">
-                      {TENANT_TYPE_LABELS[tier.tier]}
-                    </td>
-                    <td className="py-2 text-right tabular-nums text-slate-700">
-                      {tier.purchasedUnits.toLocaleString()}
-                    </td>
-                    <td className="py-2 text-right tabular-nums text-slate-500">
-                      {/* Only a partner carves slices; for everyone else this is
-                          structurally zero and a dash reads better than 0. */}
-                      {tier.allocatedUnits > 0 ? tier.allocatedUnits.toLocaleString() : '—'}
-                    </td>
-                    <td className="py-2 text-right tabular-nums text-slate-700">
-                      {tier.consumedUnits.toLocaleString()}
-                    </td>
-                    <td
-                      className={cx(
-                        'py-2 text-right font-medium tabular-nums',
-                        tier.belowBuffer ? 'text-danger-700' : 'text-slate-900',
-                      )}
-                    >
-                      {tier.availableUnits.toLocaleString()}
-                    </td>
-                    <td className="py-2 text-right tabular-nums text-slate-500">
-                      {tier.minimumBufferUnits > 0 ? tier.minimumBufferUnits.toLocaleString() : '—'}
-                    </td>
-                    <td className="py-2 text-right tabular-nums text-slate-500">
-                      {tier.daysRemaining ?? '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-
-      {/* --- §15.1 the contracts behind the stock ------------------------ */}
-      <Card title={`Provider purchases (${data.procurements.length})`}>
-        {data.procurements.length === 0 ? (
-          <EmptyState
-            title="No purchases registered"
-            description="The platform cannot sell units it has not bought. Register the provider contract first."
-          />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="pb-2 font-medium">Contract</th>
-                  <th className="pb-2 font-medium">Provider</th>
-                  <th className="pb-2 font-medium">Purchased</th>
-                  <th className="pb-2 text-right font-medium">Units</th>
-                  <th className="pb-2 text-right font-medium">Allocated</th>
-                  <th className="pb-2 text-right font-medium">Unsold</th>
-                  <th className="pb-2 text-right font-medium">Cost (AED)</th>
-                  <th className="pb-2 font-medium">Expires</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {data.procurements.map((row) => (
-                  <tr key={row.id}>
-                    <td className="py-2 font-mono text-xs text-slate-700">
-                      {row.contractReference}
-                    </td>
-                    <td className="py-2 text-slate-700">{row.aspProviderName}</td>
-                    <td className="py-2 text-xs text-slate-500">{formatDate(row.purchaseDate)}</td>
-                    <td className="py-2 text-right tabular-nums text-slate-800">
-                      {row.totalUnits.toLocaleString()}
-                    </td>
-                    <td className="py-2 text-right tabular-nums text-slate-500">
-                      {row.allocatedUnits.toLocaleString()}
-                    </td>
-                    <td className="py-2 text-right tabular-nums text-slate-700">
-                      {row.remainingUnits.toLocaleString()}
-                    </td>
-                    <td className="py-2 text-right tabular-nums text-slate-700">
-                      {Number(row.totalCostAed).toLocaleString()}
-                    </td>
-                    <td className="py-2 text-xs text-slate-500">
-                      {row.expiryDate ? formatDate(row.expiryDate) : 'no expiry'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+      {/* --- §15.5 the tier matrix, one table per tier ------------------
+          Split rather than filtered in one grid: the columns genuinely differ
+          — only a partner has an allocation axis — and a single table would
+          have to leave a third of its cells blank for two thirds of its rows. */}
+      <AccountBlock
+        title="Channel partners"
+        rows={accounts.partners}
+        allocates
+        accent="brand"
+        empty="No partner holds a master pool. Sell one from Sell data above."
+      />
+      <AccountBlock
+        title="Enterprise tenants"
+        rows={accounts.enterprise}
+        allocates={false}
+        accent="ok"
+        empty="No direct tenant holds a bundle yet."
+      />
+      <AccountBlock
+        title="Managed tenants"
+        rows={accounts.managed}
+        allocates={false}
+        accent="warn"
+        empty="No sub-tenant has been allocated a slice by its partner."
+      />
 
       {action === 'buffer' && (
         <BufferModal current={host.minimumBufferUnits} onClose={close} onDone={done} />
       )}
     </div>
+  );
+}
+
+/**
+ * One tier's accounts, as a statement with a total.
+ *
+ * The three tiers differ only in which columns apply — a partner allocates and
+ * so has a sold/unsold axis, a filing tenant does not — so they are one
+ * component told which columns to draw rather than three near-identical tables
+ * that would drift apart the first time a column was renamed in two of them.
+ *
+ * The total row is the point of the table as much as the rows are: an operator
+ * reconciling a tier is adding it up, and a column footed by hand is a column
+ * footed differently by each person who does it.
+ */
+function AccountBlock({
+  title,
+  rows,
+  allocates,
+  accent,
+  empty,
+}: {
+  title: string;
+  rows: InventoryAccountRow[];
+  allocates: boolean;
+  accent: 'brand' | 'ok' | 'warn';
+  empty: string;
+}) {
+  const total = rows.reduce(
+    (sum, row) => ({
+      openingUnits: sum.openingUnits + row.openingUnits,
+      purchasedUnits: sum.purchasedUnits + row.purchasedUnits,
+      soldUnits: sum.soldUnits + row.soldUnits,
+      unsoldUnits: sum.unsoldUnits + row.unsoldUnits,
+      consumedUnits: sum.consumedUnits + row.consumedUnits,
+      unusedUnits: sum.unusedUnits + row.unusedUnits,
+    }),
+    { openingUnits: 0, purchasedUnits: 0, soldUnits: 0, unsoldUnits: 0, consumedUnits: 0, unusedUnits: 0 },
+  );
+
+  const num = 'py-2 text-right tabular-nums';
+
+  return (
+    <Card title={`${title} (${rows.length})`} accent={accent}>
+      {rows.length === 0 ? (
+        <EmptyState title="No accounts at this tier" description={empty} />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="pb-2 text-right font-medium">#</th>
+                <th className="pb-2 font-medium">Account</th>
+                <th className="pb-2 font-medium">Tier</th>
+                <th className="pb-2 text-right font-medium">Opening</th>
+                <th className="pb-2 text-right font-medium">Purchased</th>
+                {allocates && <th className="pb-2 text-right font-medium">Sold</th>}
+                {allocates && <th className="pb-2 text-right font-medium">Unsold</th>}
+                <th className="pb-2 text-right font-medium">Consumed</th>
+                <th className="pb-2 text-right font-medium">
+                  {allocates ? 'Unused' : 'Available'}
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {rows.map((row, index) => (
+                <tr key={row.tenantId}>
+                  <td className="py-2 text-right tabular-nums text-slate-400">{index + 1}</td>
+                  <td className="py-2 text-slate-800">
+                    {/* A partner is the only tier with a ledger of its own to
+                        read: it buys from this platform and sells on. */}
+                    {allocates ? (
+                      <Link
+                        to={`/admin/inventory/report/${row.tenantId}`}
+                        className="font-medium text-brand-600 underline"
+                      >
+                        {row.tenantName}
+                      </Link>
+                    ) : (
+                      row.tenantName
+                    )}
+                  </td>
+                  <td className="py-2 text-xs text-slate-500">{TENANT_TYPE_LABELS[row.tier]}</td>
+                  <td className={cx(num, 'text-slate-700')}>
+                    {row.openingUnits.toLocaleString()}
+                  </td>
+                  <td className={cx(num, 'text-slate-700')}>
+                    {row.purchasedUnits.toLocaleString()}
+                  </td>
+                  {allocates && (
+                    <td className={cx(num, 'text-slate-700')}>{row.soldUnits.toLocaleString()}</td>
+                  )}
+                  {allocates && (
+                    <td className={cx(num, 'text-slate-700')}>{row.unsoldUnits.toLocaleString()}</td>
+                  )}
+                  <td className={cx(num, 'text-slate-700')}>
+                    {row.consumedUnits.toLocaleString()}
+                  </td>
+                  <td
+                    className={cx(
+                      num,
+                      'font-medium',
+                      row.unusedUnits <= 0 ? 'text-danger-700' : 'text-slate-900',
+                    )}
+                  >
+                    {row.unusedUnits.toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="border-t-2 border-slate-300">
+              <tr className="font-semibold text-slate-900">
+                <td className="py-2" />
+                <td className="py-2">Total</td>
+                <td className="py-2" />
+                <td className={num}>{total.openingUnits.toLocaleString()}</td>
+                <td className={num}>{total.purchasedUnits.toLocaleString()}</td>
+                {allocates && <td className={num}>{total.soldUnits.toLocaleString()}</td>}
+                {allocates && <td className={num}>{total.unsoldUnits.toLocaleString()}</td>}
+                <td className={num}>{total.consumedUnits.toLocaleString()}</td>
+                <td className={num}>{total.unusedUnits.toLocaleString()}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }
 

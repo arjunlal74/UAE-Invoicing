@@ -1,4 +1,4 @@
-import type { InventoryMovement } from '@uae/contracts';
+import type { InventoryAccountRow, InventoryMovement } from '@uae/contracts';
 import type { Tx } from '../../db/client.js';
 import { withPlatformAccess } from '../../db/client.js';
 import { badRequest } from '../../lib/errors.js';
@@ -119,6 +119,10 @@ export async function loadInventoryMovement(
         purchased: string;
         purchased_cost: string;
         sold: string;
+        consumed: string;
+        transactions: string;
+        procured_to_date: string;
+        consumed_to_date: string;
       }[]
     >`
       SELECT
@@ -141,13 +145,43 @@ export async function loadInventoryMovement(
         (SELECT coalesce(sum(purchased_units), 0) FROM data_bundles
           WHERE parent_bundle_id IS NULL AND status <> 'EXPIRED'
             AND created_at >= ${from}::date
-            AND created_at < (${to}::date + 1))::text AS sold
+            AND created_at < (${to}::date + 1))::text AS sold,
+        -- Tenant rows only. A partner mirror is the same physical invoice seen
+        -- from the pool above it, and adding it would double the platform's
+        -- consumption — the same reason the cumulative figure excludes it.
+        (SELECT coalesce(sum(units), 0) FROM usage_ledger
+          WHERE NOT is_parent_mirror
+            AND created_at >= ${from}::date
+            AND created_at < (${to}::date + 1))::text AS consumed,
+        -- Rows, not units: a zero-rated event is still a transaction, and the
+        -- same filters apply so the two figures describe one population.
+        (SELECT count(*) FROM usage_ledger
+          WHERE NOT is_parent_mirror
+            AND created_at >= ${from}::date
+            AND created_at < (${to}::date + 1))::text AS transactions,
+        -- As at the close of the window, not today: a movement statement that
+        -- mixed one figure from the closing date with another from now would
+        -- not describe any single moment.
+        (SELECT coalesce(sum(total_units), 0) FROM asp_bundle_procurements
+          WHERE (expiry_date IS NULL OR expiry_date >= CURRENT_DATE)
+            AND purchase_date <= ${to}::date)::text AS procured_to_date,
+        (SELECT coalesce(sum(units), 0) FROM usage_ledger
+          WHERE NOT is_parent_mirror
+            AND created_at < (${to}::date + 1))::text AS consumed_to_date
     `;
 
     const row = rows[0]!;
     const opening = Number(row.opening_procured) - Number(row.opening_sold);
     const purchased = Number(row.purchased);
     const sold = Number(row.sold);
+    const consumed = Number(row.consumed);
+
+    // Both ends included: 1 March to 1 March is a day, not nothing, and a
+    // zero here would divide the average into infinity.
+    const days = Math.max(
+      1,
+      Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1,
+    );
 
     return {
       from,
@@ -157,7 +191,114 @@ export async function loadInventoryMovement(
       soldUnits: sold,
       closingUnits: opening + purchased - sold,
       purchasedCostAed: row.purchased_cost,
+      consumedUnits: consumed,
+      transactionCount: Number(row.transactions),
+      dailyAverageUnits: Math.round((consumed / days) * 100) / 100,
+      windowDays: days,
+      unusedUnits: Number(row.procured_to_date) - Number(row.consumed_to_date),
     };
+  });
+}
+
+
+/**
+ * Every account's movement over the window, for the §15.5 per-tier tables.
+ *
+ * One query for all three tiers rather than one per tier, because they are the
+ * same statement about different holders and three queries would be three
+ * chances for them to disagree about what a balance is.
+ *
+ * Two axes, deliberately not netted together:
+ *
+ *   consumption   opening + purchased − consumed = unused    (all tiers)
+ *   allocation    purchased to date − allocated to date = unsold  (partners)
+ *
+ * A sub-tenant filing draws down its own slice and mirrors onto the partner's
+ * master pool, while carving the slice out of that pool does not touch it. So
+ * a partner's consumption is its clients' filings, and subtracting allocation
+ * from the same running figure would take the same unit off twice.
+ *
+ * Accounts that never held a bundle and never filed are left out entirely: a
+ * table of zeroes for tenants who have no relationship with the inventory is
+ * noise in the one place an operator is counting.
+ */
+export async function loadInventoryAccounts(
+  from: string,
+  to: string,
+): Promise<InventoryAccountRow[]> {
+  return withPlatformAccess(async (tx) => {
+    const rows = await tx<
+      {
+        tenant_id: string;
+        tenant_name: string;
+        tier: InventoryAccountRow['tier'];
+        opening_in: string;
+        opening_out: string;
+        purchased: string;
+        consumed: string;
+        sold: string;
+        purchased_to_date: string;
+        allocated_to_date: string;
+      }[]
+    >`
+      SELECT t.id AS tenant_id,
+             t.legal_name_en AS tenant_name,
+             t.tenant_type AS tier,
+             -- Everything before the window, netted, rather than a stored
+             -- total: a carried number can disagree with its own history.
+             (SELECT coalesce(sum(b.purchased_units), 0) FROM data_bundles b
+               WHERE b.tenant_id = t.id AND b.created_at < ${from}::date)::text
+               AS opening_in,
+             (SELECT coalesce(sum(u.units), 0) FROM usage_ledger u
+               WHERE u.tenant_id = t.id AND u.created_at < ${from}::date)::text
+               AS opening_out,
+             (SELECT coalesce(sum(b.purchased_units), 0) FROM data_bundles b
+               WHERE b.tenant_id = t.id
+                 AND b.created_at >= ${from}::date
+                 AND b.created_at < (${to}::date + 1))::text AS purchased,
+             -- Mirror rows included on purpose: under a partner they are the
+             -- clients' filings, which is exactly what drew down its pool.
+             (SELECT coalesce(sum(u.units), 0) FROM usage_ledger u
+               WHERE u.tenant_id = t.id
+                 AND u.created_at >= ${from}::date
+                 AND u.created_at < (${to}::date + 1))::text AS consumed,
+             (SELECT coalesce(sum(s.purchased_units), 0)
+                FROM data_bundles s JOIN data_bundles m ON m.id = s.parent_bundle_id
+               WHERE m.tenant_id = t.id
+                 AND s.created_at >= ${from}::date
+                 AND s.created_at < (${to}::date + 1))::text AS sold,
+             (SELECT coalesce(sum(b.purchased_units), 0) FROM data_bundles b
+               WHERE b.tenant_id = t.id
+                 AND b.parent_bundle_id IS NULL
+                 AND b.created_at < (${to}::date + 1))::text AS purchased_to_date,
+             (SELECT coalesce(sum(s.purchased_units), 0)
+                FROM data_bundles s JOIN data_bundles m ON m.id = s.parent_bundle_id
+               WHERE m.tenant_id = t.id
+                 AND s.created_at < (${to}::date + 1))::text AS allocated_to_date
+      FROM tenants t
+      WHERE t.tenant_type IN ('CHANNEL_PARTNER', 'ENTERPRISE_TENANT', 'MANAGED_SUB_TENANT')
+        AND (EXISTS (SELECT 1 FROM data_bundles b WHERE b.tenant_id = t.id)
+          OR EXISTS (SELECT 1 FROM usage_ledger u WHERE u.tenant_id = t.id))
+      ORDER BY t.legal_name_en
+      LIMIT 500
+    `;
+
+    return rows.map((row) => {
+      const opening = Number(row.opening_in) - Number(row.opening_out);
+      const purchased = Number(row.purchased);
+      const consumed = Number(row.consumed);
+      return {
+        tenantId: row.tenant_id,
+        tenantName: row.tenant_name,
+        tier: row.tier,
+        openingUnits: opening,
+        purchasedUnits: purchased,
+        soldUnits: Number(row.sold),
+        unsoldUnits: Number(row.purchased_to_date) - Number(row.allocated_to_date),
+        consumedUnits: consumed,
+        unusedUnits: opening + purchased - consumed,
+      };
+    });
   });
 }
 

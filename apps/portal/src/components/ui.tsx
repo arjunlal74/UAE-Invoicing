@@ -55,23 +55,49 @@ export function Button({
   );
 }
 
+/**
+ * An identity colour for a card, when several sit in a column and the reader
+ * needs to know which one they are in without re-reading the heading.
+ *
+ * The tint stays on the header and the rim. Colouring the body would put a
+ * wash behind the numbers, and a table whose cells are already tinted has no
+ * contrast left to say "this row is in trouble" — which is the one thing
+ * colour has to be able to do inside a card.
+ */
+const CARD_ACCENTS = {
+  slate: { rim: 'border-slate-200', header: 'border-slate-200 bg-white', title: 'text-slate-800' },
+  brand: { rim: 'border-brand-200', header: 'border-brand-100 bg-brand-50', title: 'text-brand-800' },
+  ok: { rim: 'border-ok-200', header: 'border-ok-200 bg-ok-50', title: 'text-ok-700' },
+  warn: { rim: 'border-warn-200', header: 'border-warn-200 bg-warn-50', title: 'text-warn-700' },
+  danger: { rim: 'border-danger-200', header: 'border-danger-200 bg-danger-50', title: 'text-danger-700' },
+};
+
 export function Card({
   title,
   actions,
   children,
   className,
+  accent = 'slate',
 }: {
   title?: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
   className?: string;
+  accent?: keyof typeof CARD_ACCENTS;
 }) {
+  const tone = CARD_ACCENTS[accent];
+
   return (
-    <section className={cx('rounded-lg border border-slate-200 bg-white shadow-sm', className)}>
+    <section className={cx('rounded-lg border bg-white shadow-sm', tone.rim, className)}>
       {(title || actions) && (
-        <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+        <header
+          className={cx(
+            'flex items-center justify-between gap-3 rounded-t-lg border-b px-4 py-3',
+            tone.header,
+          )}
+        >
           {typeof title === 'string' ? (
-            <h2 className="text-sm font-semibold text-slate-800">{title}</h2>
+            <h2 className={cx('text-sm font-semibold', tone.title)}>{title}</h2>
           ) : (
             title
           )}
@@ -656,16 +682,22 @@ export function StatTile({
   label: string;
   value: string | number;
   hint?: string;
-  tone?: 'neutral' | 'ok' | 'warn' | 'danger';
+  tone?: 'neutral' | 'info' | 'ok' | 'warn' | 'danger';
   onClick?: () => void;
 }) {
   // The tile carries the colour, not just the figure inside it. Tinting only
   // the number left a wall of white cards that had to be read one at a time to
   // find the one in trouble, which is the opposite of what a row of tiles is
-  // for. Neutral stays white on purpose: no signal is itself a signal, and
-  // colouring everything would make the coloured ones ordinary.
+  // for.
+  //
+  // Two of these are not verdicts. Neutral is white — no signal is itself a
+  // signal — and info is the brand tint, for a row where every tile is meant to
+  // be readable as a set and a white gap would read as "this one is different".
+  // Keeping them apart from ok/warn/danger is what lets a red tile still mean
+  // "look here" on a screen where everything is coloured.
   const tones = {
     neutral: { tile: 'border-slate-200 bg-white', hover: 'hover:border-brand-300 hover:bg-brand-50/40', value: 'text-slate-900' },
+    info: { tile: 'border-brand-100 bg-brand-50', hover: 'hover:bg-brand-50/70', value: 'text-brand-700' },
     ok: { tile: 'border-ok-200 bg-ok-50', hover: 'hover:bg-ok-50/70', value: 'text-ok-700' },
     warn: { tile: 'border-warn-200 bg-warn-50', hover: 'hover:bg-warn-50/70', value: 'text-warn-700' },
     danger: { tile: 'border-danger-200 bg-danger-50', hover: 'hover:bg-danger-50/70', value: 'text-danger-700' },
