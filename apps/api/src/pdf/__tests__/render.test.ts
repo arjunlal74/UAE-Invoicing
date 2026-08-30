@@ -223,6 +223,21 @@ describe('report pdf', () => {
     truncated,
   });
 
+  it('badges a report that belongs to one module, and not one that spans both', async () => {
+    const ap = textByPage(await renderReportPdf(input(2))).join('\n');
+    // 'AP' narrows the document: it says which desk this belongs to.
+    expect(ap.split('\n')).toContain('AP');
+
+    const both = textByPage(await renderReportPdf({ ...input(2), module: 'BOTH' as const })).join(
+      '\n',
+    );
+    // 'BOTH' does not. A badge that is always true of the document it sits on
+    // is furniture, and the reader already knows which report they asked for.
+    expect(both.split('\n')).not.toContain('BOTH');
+    // The report is still identified — it is the chip that went, not the name.
+    expect(both).toContain('Purchase inbound AP log');
+  });
+
   it('repeats the column headers and the report name on every page', async () => {
     const pages = textByPage(await renderReportPdf(input(300)));
     expect(pages.length).toBeGreaterThan(1);
