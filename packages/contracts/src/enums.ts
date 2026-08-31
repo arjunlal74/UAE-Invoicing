@@ -36,6 +36,30 @@ export const TENANT_TYPE_LABELS: Record<TenantType, string> = {
 /** Tiers that file invoices under their own TRN. */
 export const FILING_TENANT_TYPES: TenantType[] = ['ENTERPRISE_TENANT', 'MANAGED_SUB_TENANT'];
 
+/**
+ * How a managed sub-tenant was provisioned, and therefore who works in it (§3).
+ *
+ * The distinction is not cosmetic: it decides whether an activation link is
+ * ever sent, whether the client holds a login at all, and whether a channel
+ * partner's own staff may sign into the account. Every other tier is
+ * COLLABORATIVE — a company the platform onboarded directly runs itself by
+ * definition — which is also why that is the default and the safe backfill.
+ */
+export const ProvisioningMode = z.enum(['COLLABORATIVE', 'FULLY_MANAGED_CUSTODY']);
+export type ProvisioningMode = z.infer<typeof ProvisioningMode>;
+
+export const PROVISIONING_MODE_LABELS: Record<ProvisioningMode, string> = {
+  COLLABORATIVE: 'Collaborative',
+  FULLY_MANAGED_CUSTODY: 'Fully managed custody',
+};
+
+export const PROVISIONING_MODE_DESCRIPTIONS: Record<ProvisioningMode, string> = {
+  COLLABORATIVE:
+    'The client is sent an activation link and works in the portal themselves.',
+  FULLY_MANAGED_CUSTODY:
+    'You hold the account. No activation link is sent; your authorised staff sign in and act for the client.',
+};
+
 export const IngestionSource = z.enum([
   'REST_API',
   'EXCEL_UPLOAD',

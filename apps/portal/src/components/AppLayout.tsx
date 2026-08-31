@@ -1,8 +1,9 @@
 import { ROLE_LABELS } from '@uae/contracts';
+import { useQueryClient } from '@tanstack/react-query';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { can, isPartnerUser, isPlatformUser, useAuthStore } from '../stores/auth';
-import { StatusBadge, cx } from './ui';
+import { Button, StatusBadge, cx } from './ui';
 
 interface NavItem {
   to: string;
@@ -127,6 +128,8 @@ const ADMIN_NAV: NavItem[] = [
 ];
 
 const PARTNER_NAV: NavItem[] = [
+  // Exact matching, or every /partner/* route would light the dashboard up too.
+  { to: '/partner', label: 'Dashboard', end: true },
   { to: '/partner/sub-tenants', label: 'Sub-tenants' },
   { to: '/partner/inventory', label: 'Data inventory' },
 ];
@@ -141,7 +144,9 @@ export function AppLayout() {
   const user = useAuthStore((s) => s.user);
   const refreshToken = useAuthStore((s) => s.refreshToken);
   const clear = useAuthStore((s) => s.clear);
+  const leaveCustody = useAuthStore((s) => s.leaveCustody);
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { pathname } = useLocation();
 
   const platform = isPlatformUser(user);
@@ -167,6 +172,29 @@ export function AppLayout() {
     merchant && activeModule && activeModule.items.length > 1
       ? activeModule.items
       : adminSection?.children;
+
+  /**
+   * Leave a custody client and go back to the partner console (§3).
+   *
+   * The custody session is ended server-side rather than merely dropped: it is
+   * a real session with a refresh token, and one left alive is one somebody
+   * could still be handed. The partner's own session was parked, not replaced,
+   * so putting it back is instant — and the cache is emptied first, because
+   * every query in it was answered for the client.
+   */
+  const leaveClient = async () => {
+    try {
+      if (refreshToken) await api('/api/v1/auth/logout', { method: 'POST', body: { refreshToken } });
+    } catch {
+      /* ignore — the session is being abandoned either way */
+    }
+    queryClient.clear();
+    if (leaveCustody()) navigate('/partner', { replace: true });
+    else {
+      clear();
+      navigate('/login', { replace: true });
+    }
+  };
 
   const signOut = async () => {
     // Best effort: the server-side revoke matters, but a network failure must
@@ -208,7 +236,7 @@ export function AppLayout() {
 
               {partner &&
                 PARTNER_NAV.map((item) => (
-                  <NavLink key={item.to} to={item.to} className={linkClass}>
+                  <NavLink key={item.to} to={item.to} end={item.end} className={linkClass}>
                     {item.label}
                   </NavLink>
                 ))}
@@ -271,6 +299,24 @@ export function AppLayout() {
           </div>
         )}
       </header>
+
+      {/* Custody (§3). Loud, and above everything else on the page: a person
+          who has forgotten which company they are inside is one keystroke away
+          from filing a tax document under the wrong TRN. */}
+      {user?.actingFor && (
+        <div className="border-b border-violet-300 bg-violet-100">
+          <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-2 text-sm text-violet-900">
+            <span>
+              You are working in <strong>{user.tenantName}</strong> as{' '}
+              {ROLE_LABELS[user.role]}, on behalf of {user.actingFor.partnerName}. Everything you do
+              here is recorded against your name.
+            </span>
+            <Button size="sm" onClick={leaveClient}>
+              Leave this account
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* A merchant whose account is not yet live needs to know before they
           spend an afternoon preparing invoices they cannot submit. */}

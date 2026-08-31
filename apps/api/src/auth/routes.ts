@@ -19,6 +19,7 @@ import {
   checkResetToken,
   confirmMfaEnrolment,
   disableMfa,
+  liveCustodyScope,
   login,
   refreshSession,
   requestPasswordReset,
@@ -82,7 +83,17 @@ export function registerAuthRoutes(app: FastifyInstance) {
     );
 
     if (!rows[0]) throw notFound('Account');
-    return reply.send(toSessionUser(rows[0]));
+
+    // A custody session must describe itself the same way here as it did when
+    // it was issued (§3): this row is the partner's staff member, whose own
+    // tenant is the partner, so without the overlay the portal would be told it
+    // is in the partner's console while every other request it makes is scoped
+    // to the client's books.
+    const custody = ctx.actingForTenantId && ctx.tenantId
+      ? await liveCustodyScope(ctx.userId, ctx.tenantId)
+      : null;
+
+    return reply.send(toSessionUser(rows[0], custody ?? undefined));
   });
 
   app.post('/api/v1/auth/change-password', { preHandler: requireAuth() }, async (request, reply) => {

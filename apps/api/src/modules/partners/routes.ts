@@ -41,6 +41,8 @@ interface SubTenantRow {
   trn: string | null;
   status: SubTenantSummary['status'];
   asp_status: SubTenantSummary['aspStatus'] | null;
+  provisioning_mode: SubTenantSummary['provisioningMode'];
+  custody_staff_count: string;
   invoice_count: string;
   user_count: string;
   created_at: Date;
@@ -54,6 +56,8 @@ function toSubTenant(row: SubTenantRow): SubTenantSummary {
     trn: row.trn,
     status: row.status,
     aspStatus: row.asp_status ?? 'NOT_CONFIGURED',
+    provisioningMode: row.provisioning_mode,
+    custodyStaffCount: Number(row.custody_staff_count ?? 0),
     invoiceCount: Number(row.invoice_count ?? 0),
     userCount: Number(row.user_count ?? 0),
     createdAt: row.created_at.toISOString(),
@@ -189,12 +193,24 @@ export function registerPartnerRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const ctx = requireContext(request);
       const tenantId = partnerTenantId(ctx);
-      const query = request.query as { q?: string; status?: string };
+      // The dashboard counts a kind of trouble and links here; without the same
+      // filters the partner lands on every client and has to find the rows the
+      // tile was counting, which is the work the tile was supposed to have done.
+      const query = request.query as {
+        q?: string;
+        status?: string;
+        aspStatus?: string;
+        invites?: string;
+        mode?: string;
+      };
 
       const rows = await withPlatformAccess(
         (tx) => tx<SubTenantRow[]>`
           SELECT t.id, t.company_code, t.legal_name_en, t.trn, t.status, t.created_at,
+                 t.provisioning_mode,
                  c.status AS asp_status,
+                 (SELECT count(*) FROM partner_custody_grants g
+                   WHERE g.tenant_id = t.id AND g.revoked_at IS NULL) AS custody_staff_count,
                  (SELECT count(*) FROM invoices i WHERE i.tenant_id = t.id AND i.direction = 'OUTBOUND_SALES_AR') AS invoice_count,
                  (SELECT count(*) FROM users u WHERE u.tenant_id = t.id) AS user_count
           FROM tenants t
@@ -205,6 +221,22 @@ export function registerPartnerRoutes(app: FastifyInstance) {
                  OR t.company_code ILIKE ${'%' + (query.q ?? '') + '%'}
                  OR coalesce(t.trn, '') ILIKE ${'%' + (query.q ?? '') + '%'})
             AND (${query.status ?? null}::text IS NULL OR t.status::text = ${query.status ?? null})
+            -- 'NOT_LIVE' is a connection that exists and is not live, which is
+            -- what the dashboard tile linking here counts. A sub-tenant is given
+            -- a configuration row the moment it is onboarded, so this reads the
+            -- same way for every client in the book.
+            AND (${query.aspStatus ?? null}::text IS NULL
+                 OR (${query.aspStatus ?? null} = 'NOT_LIVE'
+                     AND c.status IS NOT NULL AND c.status::text <> 'ACTIVE')
+                 OR c.status::text = ${query.aspStatus ?? null})
+            -- A client whose administrator never accepted the invitation. The
+            -- partner sent it, so the partner is who chases it.
+            AND (${query.invites ?? null}::text IS DISTINCT FROM 'pending'
+                 OR EXISTS (SELECT 1 FROM users u
+                            WHERE u.tenant_id = t.id AND u.password_hash IS NULL))
+            -- §3: which clients the partner runs itself, and which run themselves.
+            AND (${query.mode ?? null}::text IS NULL
+                 OR t.provisioning_mode::text = ${query.mode ?? null})
           ORDER BY t.created_at DESC
         `,
       );
@@ -245,11 +277,12 @@ export function registerPartnerRoutes(app: FastifyInstance) {
         const inserted = await tx<{ id: string }[]>`
           INSERT INTO tenants (
             tenant_type, parent_tenant_id, company_code, legal_name_en, legal_name_ar,
-            trn, registered_address, status
+            trn, registered_address, status, provisioning_mode
           ) VALUES (
             'MANAGED_SUB_TENANT', ${tenantId}, ${body.companyCode},
             ${body.legalNameEn}, ${body.legalNameAr}, ${body.trn},
-            ${jsonb(tx, body.registeredAddress)}, 'PENDING'
+            ${jsonb(tx, body.registeredAddress)}, 'PENDING',
+            ${body.provisioningMode}::provisioning_mode
           )
           RETURNING id
         `;
@@ -263,9 +296,17 @@ export function registerPartnerRoutes(app: FastifyInstance) {
                   'Not yet selected', 'NOT_CONFIGURED')
         `;
 
+        // §3: a custody client has no administrator of its own. Creating one
+        // "just in case" would leave a dormant login on an account the partner
+        // is supposed to be holding, and an invitation nobody was expecting is
+        // exactly the mail that gets reported as a phishing attempt.
+        if (body.provisioningMode === 'FULLY_MANAGED_CUSTODY') {
+          return { subTenantId, partnerName: partner.legal_name_en, invite: null };
+        }
+
         const users = await tx<{ id: string }[]>`
           INSERT INTO users (tenant_id, email, full_name, role, is_active)
-          VALUES (${subTenantId}, ${body.adminEmail}, ${body.adminFullName},
+          VALUES (${subTenantId}, ${body.adminEmail!}, ${body.adminFullName!},
                   'COMPANY_ADMIN', FALSE)
           RETURNING id
         `;
@@ -273,8 +314,7 @@ export function registerPartnerRoutes(app: FastifyInstance) {
         return {
           subTenantId,
           partnerName: partner.legal_name_en,
-          inviteUserId: users[0]!.id,
-          inviteToken: await createInvite(users[0]!.id, tx),
+          invite: { userId: users[0]!.id, token: await createInvite(users[0]!.id, tx) },
         };
       });
 
@@ -288,21 +328,36 @@ export function registerPartnerRoutes(app: FastifyInstance) {
           companyCode: body.companyCode,
           legalNameEn: body.legalNameEn,
           trn: body.trn,
+          provisioningMode: body.provisioningMode,
         },
       });
 
-      const inviteUrl = `${config().PORTAL_ORIGIN}/accept-invite?token=${result.inviteToken}`;
+      if (!result.invite) {
+        logger.info(
+          { subTenantId: result.subTenantId },
+          'custody sub-tenant created; no client administrator invited',
+        );
+        return reply.status(201).send({
+          id: result.subTenantId,
+          provisioningMode: body.provisioningMode,
+          inviteUrl: null,
+          emailed: false,
+          emailMessage: null,
+        });
+      }
+
+      const inviteUrl = `${config().PORTAL_ORIGIN}/accept-invite?token=${result.invite.token}`;
 
       // Template B rather than A: this client was provisioned by their
       // accountant, so the mail names the partner and points setup questions at
       // them instead of at a support desk that has never heard of the client.
       const mail = await queueActivation({
-        to: body.adminEmail,
-        contactName: body.adminFullName,
+        to: body.adminEmail!,
+        contactName: body.adminFullName!,
         companyName: body.legalNameEn,
         activationUrl: inviteUrl,
         partner: { name: result.partnerName, contactEmail: ctx.email },
-        userId: result.inviteUserId,
+        userId: result.invite.userId,
         tenantId: result.subTenantId,
       });
 
@@ -313,6 +368,7 @@ export function registerPartnerRoutes(app: FastifyInstance) {
 
       return reply.status(201).send({
         id: result.subTenantId,
+        provisioningMode: body.provisioningMode,
         inviteUrl,
         emailed: mail.queued,
         emailMessage: mail.reason ?? null,
@@ -375,7 +431,7 @@ export function registerPartnerRoutes(app: FastifyInstance) {
  * from the request, so a partner cannot reset an unrelated company's users by
  * guessing a user id.
  */
-async function assertUserUnderPartner(userId: string, partnerId: string): Promise<void> {
+export async function assertUserUnderPartner(userId: string, partnerId: string): Promise<void> {
   const rows = await withPlatformAccess(
     (tx) => tx<{ id: string }[]>`
       SELECT u.id FROM users u

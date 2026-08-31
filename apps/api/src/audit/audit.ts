@@ -45,6 +45,11 @@ export type AuditAction =
   | 'MAIL_ACCOUNT_DELETED'
   | 'MAIL_ACCOUNT_TESTED'
   | 'SUB_TENANT_CREATED'
+  // --- SRS §3: the two provisioning modes, and who may act in custody --------
+  | 'SUB_TENANT_MODE_CHANGED'
+  | 'CUSTODY_ACCESS_GRANTED'
+  | 'CUSTODY_ACCESS_REVOKED'
+  | 'CUSTODY_SESSION_STARTED'
   | 'WEBHOOK_RECEIVED'
   // --- SRS v2.7: the two modules ---------------------------------------------
   | 'CUSTOMER_CREATED'
@@ -119,7 +124,12 @@ export function actorFromContext(ctx: RequestContext): AuditActor {
 
   return {
     actorId: ctx.userId,
-    actorName: ctx.email,
+    // A channel partner's staff member working inside a client's books is
+    // recorded as exactly that (§3). The row's tenant already says whose books
+    // were touched; without the marker the name against it would read as one of
+    // the client's own people, which is the single most misleading thing this
+    // trail could say about a custody account.
+    actorName: ctx.actingForTenantId ? `${ctx.email} (partner custody)` : ctx.email,
     actorType: 'USER',
     ip: ctx.ip ?? null,
     userAgent: ctx.userAgent ?? null,

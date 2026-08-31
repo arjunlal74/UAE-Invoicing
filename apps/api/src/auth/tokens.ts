@@ -22,6 +22,18 @@ export interface AccessTokenClaims {
    * per-request lookup would buy nothing but latency.
    */
   mustRotatePassword?: boolean;
+  /**
+   * SRS §3 custody. Set when a channel partner's staff member is working inside
+   * a client's books: `tenantId` is then the client, and this is the partner
+   * the person actually belongs to.
+   *
+   * Carried in the token because everything downstream — row-level scoping, the
+   * audit actor, the guard that keeps a custody session out of the partner
+   * console — has to know within the request, and re-deriving it from the
+   * database on every call would be a join to answer a question the token
+   * already settled at issue time.
+   */
+  actingForTenantId?: string | null;
 }
 
 function accessKey(): Uint8Array {
@@ -35,6 +47,7 @@ export async function signAccessToken(claims: AccessTokenClaims): Promise<string
     role: claims.role,
     tenantId: claims.tenantId,
     mustRotatePassword: claims.mustRotatePassword ?? false,
+    actingForTenantId: claims.actingForTenantId ?? null,
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(claims.sub)
@@ -58,6 +71,7 @@ export async function verifyAccessToken(token: string): Promise<AccessTokenClaim
       role: payload.role as Role,
       tenantId: (payload.tenantId as string | null) ?? null,
       mustRotatePassword: payload.mustRotatePassword === true,
+      actingForTenantId: (payload.actingForTenantId as string | null) ?? null,
     };
   } catch {
     throw unauthorized('Your session has expired. Please sign in again.');

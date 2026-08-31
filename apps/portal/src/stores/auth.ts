@@ -13,21 +13,46 @@ import { persist } from 'zustand/middleware';
  * place every time they reload a 10,000-row grid.
  */
 
+/** A session set aside so another can be used, and swapped back afterwards. */
+interface ParkedSession {
+  accessToken: string;
+  refreshToken: string;
+  user: SessionUser;
+}
+
 interface AuthState {
   accessToken: string | null;
   refreshToken: string | null;
   user: SessionUser | null;
+  /**
+   * The partner's own session, parked while its staff member works inside a
+   * custody client (SRS §3).
+   *
+   * Parked rather than replaced: the two sessions are separate on the server —
+   * different tenants, different roles, separately revocable — and holding on
+   * to the partner's means leaving a client is instant, rather than a sign-in
+   * every time somebody looks at a second client.
+   */
+  parked: ParkedSession | null;
   setSession: (session: LoginResponse) => void;
   setUser: (user: SessionUser) => void;
+  /** Park the current session and take up a custody one. */
+  enterCustody: (session: LoginResponse) => void;
+  /** Put the parked session back. False if there was nothing parked. */
+  leaveCustody: () => boolean;
   clear: () => void;
 }
 
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       accessToken: null,
       refreshToken: null,
       user: null,
+      parked: null,
+      // Deliberately does not touch `parked`: this is what a token refresh
+      // calls, and a refresh of the custody session must not discard the
+      // partner session waiting behind it.
       setSession: (session) =>
         set({
           accessToken: session.accessToken,
@@ -35,7 +60,28 @@ export const useAuthStore = create<AuthState>()(
           user: session.user,
         }),
       setUser: (user) => set({ user }),
-      clear: () => set({ accessToken: null, refreshToken: null, user: null }),
+      enterCustody: (session) => {
+        const { accessToken, refreshToken, user } = get();
+        set({
+          parked:
+            accessToken && refreshToken && user ? { accessToken, refreshToken, user } : null,
+          accessToken: session.accessToken,
+          refreshToken: session.refreshToken,
+          user: session.user,
+        });
+      },
+      leaveCustody: () => {
+        const { parked } = get();
+        if (!parked) return false;
+        set({
+          accessToken: parked.accessToken,
+          refreshToken: parked.refreshToken,
+          user: parked.user,
+          parked: null,
+        });
+        return true;
+      },
+      clear: () => set({ accessToken: null, refreshToken: null, user: null, parked: null }),
     }),
     { name: 'uae-einvoice-session' },
   ),
@@ -60,6 +106,19 @@ export function isPartnerUser(user: SessionUser | null): boolean {
   return !!user && isPartnerRole(user.role);
 }
 
+/**
+ * Whether this session is a channel partner's staff member working inside a
+ * custody client (SRS §3).
+ *
+ * Read from the session rather than from the role: during custody the role is
+ * the one the authorisation carries inside the client's books, which is
+ * indistinguishable from the client's own staff — and that is the point. What
+ * makes it a custody session is who they came from, which is `actingFor`.
+ */
+export function isCustodySession(user: SessionUser | null): boolean {
+  return !!user?.actingFor;
+}
+
 /** Whether this user may change staged data. Approvers and auditors may not. */
 export function canEdit(user: SessionUser | null): boolean {
   return can(user, 'invoice.edit');
@@ -77,6 +136,8 @@ export function isCompanyAdmin(user: SessionUser | null): boolean {
 /** Where a user lands after signing in, which differs per tier. */
 export function homePathFor(user: SessionUser | null): string {
   if (isPlatformUser(user)) return '/admin';
-  if (isPartnerUser(user)) return '/partner/sub-tenants';
+  // The partner's dashboard, for the same reason the operator lands on theirs:
+  // "is anything waiting on me?" is the question they signed in with.
+  if (isPartnerUser(user)) return '/partner';
   return '/';
 }

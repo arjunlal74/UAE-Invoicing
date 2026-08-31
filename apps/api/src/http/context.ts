@@ -20,6 +20,14 @@ export interface RequestContext {
   /** SRS v2.3 §4.3: the account is held at the rotation gate. */
   mustRotatePassword: boolean;
   /**
+   * SRS §3 custody: the channel partner this caller belongs to, set only while
+   * they are working inside one of its clients. `tenantId` is the client, so
+   * every scoped query is already right; this exists so the audit trail can say
+   * the action was taken in custody rather than by the company itself, and so a
+   * custody session can be told apart from the client's own staff.
+   */
+  actingForTenantId?: string | null;
+  /**
    * Set when the caller is a machine on an API key (§1.2 channel 1). Its
    * presence is what distinguishes an ERP from a person for audit and rate
    * limiting; `role` is `API_CLIENT` and carries no permissions of its own.
@@ -98,6 +106,7 @@ export async function authenticate(request: FastifyRequest): Promise<void> {
     ip: request.ip,
     userAgent: request.headers['user-agent'],
     mustRotatePassword: claims.mustRotatePassword === true,
+    actingForTenantId: claims.actingForTenantId ?? null,
   };
 
   // §4.3: "the application restricts access to an isolated modal forcing the

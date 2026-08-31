@@ -1,13 +1,15 @@
 import type {
   BalanceResponse,
   BundleSummary,
+  LoginResponse,
   PaginatedResult,
   PartnerOverview,
   SubTenantSummary,
 } from '@uae/contracts';
+import { PROVISIONING_MODE_LABELS } from '@uae/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { EMIRATES } from '@uae/domain';
 import { useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -15,25 +17,59 @@ import {
   EmptyState,
   Field,
   Modal,
+  PageHeader,
   Spinner,
   StatusBadge,
+  cx,
   formatDate,
   inputClass,
 } from '../../components/ui';
+import { CreateSubTenantModal } from '../../components/SubTenantFormModal';
+import { CustodyStaffModal } from '../../components/CustodyStaffModal';
+import { ProvisioningModeModal } from '../../components/ProvisioningModeModal';
 import { ApiError, api, queryString } from '../../lib/api';
+import { useAuthStore } from '../../stores/auth';
 
 /**
- * The channel partner portal (SRS v2.1 §2).
+ * The channel partner's book of clients (SRS v2.1 §2).
  *
  * A partner sees who is onboarded underneath it and how much they are filing —
  * never the invoices themselves. The API enforces that boundary; this screen
  * simply has nothing that would ask for them.
+ *
+ * A list, and only a list. Onboarding is a dialog rather than a panel above the
+ * table, because the two are different visits: a partner arrives here far more
+ * often to look somebody up than to add somebody, and the form used to push the
+ * rows they came for off the bottom of the screen. The roll-up figures moved to
+ * the dashboard for the same reason.
  */
 export function PartnerSubTenantsPage() {
-  const [search, setSearch] = useState('');
+  // Seeded from the URL so a dashboard tile lands on the rows it counted rather
+  // than on every client with the question discarded.
+  const [params, setParams] = useSearchParams();
+  const [search, setSearch] = useState(params.get('q') ?? '');
+  const statusFilter = params.get('status') ?? '';
+  const aspFilter = params.get('aspStatus') ?? '';
+  const invitesFilter = params.get('invites') ?? '';
+
+  const modeFilter = params.get('mode') ?? '';
+
   const [creating, setCreating] = useState(false);
   const [allocatingTo, setAllocatingTo] = useState<SubTenantSummary | null>(null);
+  const [staffFor, setStaffFor] = useState<SubTenantSummary | null>(null);
+  const [changingMode, setChangingMode] = useState<SubTenantSummary | null>(null);
+  const [custodyError, setCustodyError] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const enterCustody = useAuthStore((s) => s.enterCustody);
+
+  /** Filters live in the URL, so the screen a partner is looking at can be sent. */
+  const setFilter = (key: string, value: string) => {
+    const next = new URLSearchParams(params);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setParams(next, { replace: true });
+  };
 
   const overview = useQuery({
     queryKey: ['partner-overview'],
@@ -52,41 +88,60 @@ export function PartnerSubTenantsPage() {
     .filter((pool) => pool.status === 'ACTIVE')
     .reduce((sum, pool) => sum + pool.unallocatedUnits, 0);
 
+  const listQuery = queryString({
+    q: search,
+    status: statusFilter,
+    aspStatus: aspFilter,
+    invites: invitesFilter,
+    mode: modeFilter,
+  });
+
   const { data, isLoading } = useQuery({
-    queryKey: ['partner-sub-tenants', search],
+    queryKey: ['partner-sub-tenants', search, statusFilter, aspFilter, invitesFilter, modeFilter],
     queryFn: () =>
-      api<PaginatedResult<SubTenantSummary>>(
-        `/api/v1/partner/sub-tenants${queryString({ q: search })}`,
+      api<PaginatedResult<SubTenantSummary>>(`/api/v1/partner/sub-tenants${listQuery}`),
+  });
+
+  const filtered = Boolean(statusFilter || aspFilter || invitesFilter || modeFilter || search);
+
+  /**
+   * Opening a client's books (§3).
+   *
+   * The session that comes back belongs to the client, not to the partner, so
+   * the cache is emptied before landing in it: every query already in memory
+   * was answered for the partner, and a stale one rendered under the client's
+   * name would be showing one company another's figures.
+   */
+  const openCustody = useMutation({
+    mutationFn: (tenant: SubTenantSummary) =>
+      api<LoginResponse>(`/api/v1/partner/sub-tenants/${tenant.id}/custody-session`, {
+        method: 'POST',
+      }),
+    onSuccess: (session) => {
+      setCustodyError(null);
+      queryClient.clear();
+      enterCustody(session);
+      navigate('/');
+    },
+    onError: (err) =>
+      setCustodyError(
+        err instanceof ApiError ? err.message : 'That account could not be opened.',
       ),
   });
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-slate-900">
-            {overview.data?.partnerName ?? 'Sub-tenants'}
-          </h1>
-          <p className="text-sm text-slate-500">
-            Companies you onboard and manage on the platform.
-          </p>
-        </div>
-        <Button variant="primary" onClick={() => setCreating((v) => !v)}>
-          {creating ? 'Cancel' : 'Onboard a sub-tenant'}
-        </Button>
-      </div>
+      <PageHeader
+        title={overview.data?.partnerName ?? 'Sub-tenants'}
+        description="Companies you onboard and manage on the platform."
+        actions={
+          <Button variant="primary" onClick={() => setCreating(true)}>
+            Onboard a sub-tenant
+          </Button>
+        }
+      />
 
-      {overview.data && (
-        <div className="grid gap-3 sm:grid-cols-5">
-          <Stat label="Sub-tenants" value={overview.data.subTenantCount} />
-          <Stat label="Active" value={overview.data.activeSubTenantCount} />
-          <Stat label="Invoices prepared" value={overview.data.invoiceCount} />
-          <Stat label="Cleared by the FTA" value={overview.data.acceptedInvoiceCount} />
-          {/* §15.4: what is left to promise a client, which is a different
-              figure from what is left to file — see the allocation dialog. */}
-          <Stat label="Units to allocate" value={unallocated} />
-        </div>
-      )}
+      {custodyError && <Alert kind="danger">{custodyError}</Alert>}
 
       {pools.length > 0 && unallocated === 0 && (
         <Alert kind="warn" title="Your master pool is fully allocated">
@@ -95,18 +150,69 @@ export function PartnerSubTenantsPage() {
         </Alert>
       )}
 
-      {creating && <CreateSubTenantForm onDone={() => setCreating(false)} />}
-
       <Card>
-        <input
-          className={`${inputClass} max-w-xs`}
-          placeholder="Search by name, code or TRN"
-          defaultValue={search}
-          onBlur={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') setSearch((e.target as HTMLInputElement).value);
-          }}
-        />
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            className={`${inputClass} max-w-xs`}
+            placeholder="Search by name, code or TRN"
+            defaultValue={search}
+            onBlur={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') setSearch((e.target as HTMLInputElement).value);
+            }}
+          />
+          <select
+            className={`${inputClass} max-w-[12rem]`}
+            value={statusFilter}
+            onChange={(e) => setFilter('status', e.target.value)}
+          >
+            <option value="">All statuses</option>
+            <option value="PENDING">Pending</option>
+            <option value="ACTIVE">Active</option>
+            <option value="SUSPENDED">Suspended</option>
+            <option value="ARCHIVED">Archived</option>
+          </select>
+          <select
+            className={`${inputClass} max-w-[16rem]`}
+            value={aspFilter}
+            onChange={(e) => setFilter('aspStatus', e.target.value)}
+          >
+            <option value="">Any provider connection</option>
+            <option value="NOT_LIVE">Connection not live</option>
+            <option value="ACTIVE">Connection active</option>
+          </select>
+          <select
+            className={`${inputClass} max-w-[16rem]`}
+            value={modeFilter}
+            onChange={(e) => setFilter('mode', e.target.value)}
+          >
+            <option value="">Both provisioning modes</option>
+            <option value="FULLY_MANAGED_CUSTODY">
+              {PROVISIONING_MODE_LABELS.FULLY_MANAGED_CUSTODY}
+            </option>
+            <option value="COLLABORATIVE">{PROVISIONING_MODE_LABELS.COLLABORATIVE}</option>
+          </select>
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-slate-300"
+              checked={invitesFilter === 'pending'}
+              onChange={(e) => setFilter('invites', e.target.checked ? 'pending' : '')}
+            />
+            Invitation not accepted
+          </label>
+          {filtered && (
+            <Button
+              size="sm"
+              onClick={() => {
+                setSearch('');
+                setParams(new URLSearchParams(), { replace: true });
+              }}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
       </Card>
 
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -116,8 +222,12 @@ export function PartnerSubTenantsPage() {
           </div>
         ) : !data || data.items.length === 0 ? (
           <EmptyState
-            title="No sub-tenants yet"
-            description="Onboard your first client to start filing on their behalf."
+            title={filtered ? 'No sub-tenants match' : 'No sub-tenants yet'}
+            description={
+              filtered
+                ? 'Nothing in your book answers that. Clear the filters to see every client.'
+                : 'Onboard your first client to start filing on their behalf.'
+            }
           />
         ) : (
           <table className="w-full text-sm">
@@ -125,12 +235,13 @@ export function PartnerSubTenantsPage() {
               <tr>
                 <th className="px-4 py-2 font-medium">Company</th>
                 <th className="px-4 py-2 font-medium">TRN</th>
+                <th className="px-4 py-2 font-medium">Provisioning</th>
                 <th className="px-4 py-2 font-medium">Account</th>
                 <th className="px-4 py-2 font-medium">Provider</th>
                 <th className="px-4 py-2 text-right font-medium">Users</th>
                 <th className="px-4 py-2 text-right font-medium">Invoices</th>
                 <th className="px-4 py-2 font-medium">Onboarded</th>
-                <th className="px-4 py-2 text-right font-medium">Data units</th>
+                <th className="px-4 py-2 text-right font-medium">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -142,6 +253,9 @@ export function PartnerSubTenantsPage() {
                   </td>
                   <td className="px-4 py-2 font-mono text-xs">{tenant.trn ?? '—'}</td>
                   <td className="px-4 py-2">
+                    <ModeCell tenant={tenant} />
+                  </td>
+                  <td className="px-4 py-2">
                     <StatusBadge status={tenant.status} />
                   </td>
                   <td className="px-4 py-2">
@@ -150,10 +264,32 @@ export function PartnerSubTenantsPage() {
                   <td className="px-4 py-2 text-right tabular-nums">{tenant.userCount}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{tenant.invoiceCount}</td>
                   <td className="px-4 py-2 text-slate-500">{formatDate(tenant.createdAt)}</td>
-                  <td className="px-4 py-2 text-right">
-                    <Button size="sm" onClick={() => setAllocatingTo(tenant)}>
-                      Allocate
-                    </Button>
+                  <td className="px-4 py-2">
+                    <div className="flex justify-end gap-1.5">
+                      {/* Custody only: there are no books of somebody else's to
+                          open when the client runs its own account. */}
+                      {tenant.provisioningMode === 'FULLY_MANAGED_CUSTODY' && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            disabled={openCustody.isPending}
+                            onClick={() => openCustody.mutate(tenant)}
+                          >
+                            Open books
+                          </Button>
+                          <Button size="sm" onClick={() => setStaffFor(tenant)}>
+                            Staff
+                          </Button>
+                        </>
+                      )}
+                      <Button size="sm" onClick={() => setChangingMode(tenant)}>
+                        Mode
+                      </Button>
+                      <Button size="sm" onClick={() => setAllocatingTo(tenant)}>
+                        Allocate
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -161,6 +297,14 @@ export function PartnerSubTenantsPage() {
           </table>
         )}
       </div>
+
+      {creating && <CreateSubTenantModal onClose={() => setCreating(false)} />}
+      {staffFor && (
+        <CustodyStaffModal subTenant={staffFor} onClose={() => setStaffFor(null)} />
+      )}
+      {changingMode && (
+        <ProvisioningModeModal subTenant={changingMode} onClose={() => setChangingMode(null)} />
+      )}
 
       {allocatingTo && (
         <AllocateSliceModal
@@ -171,6 +315,7 @@ export function PartnerSubTenantsPage() {
             setAllocatingTo(null);
             queryClient.invalidateQueries({ queryKey: ['partner-balance'] });
             queryClient.invalidateQueries({ queryKey: ['partner-overview'] });
+            queryClient.invalidateQueries({ queryKey: ['partner-dashboard'] });
           }}
         />
       )}
@@ -178,182 +323,42 @@ export function PartnerSubTenantsPage() {
   );
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-      <div className="text-xs uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="mt-1 text-2xl font-semibold tabular-nums text-slate-900">{value}</div>
-    </div>
-  );
-}
-
-function CreateSubTenantForm({ onDone }: { onDone: () => void }) {
-  const queryClient = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
-  const [inviteUrl, setInviteUrl] = useState<string | null>(null);
-
-  const [form, setForm] = useState({
-    companyCode: '',
-    legalNameEn: '',
-    legalNameAr: '',
-    trn: '',
-    street: '',
-    emirate: 'Dubai',
-    adminEmail: '',
-    adminFullName: '',
-  });
-
-  const create = useMutation({
-    mutationFn: () =>
-      api<{ id: string; inviteUrl: string }>('/api/v1/partner/sub-tenants', {
-        method: 'POST',
-        body: {
-          companyCode: form.companyCode,
-          legalNameEn: form.legalNameEn,
-          legalNameAr: form.legalNameAr,
-          trn: form.trn,
-          registeredAddress: {
-            street: form.street,
-            city: form.emirate,
-            emirate: form.emirate,
-            postalCode: '',
-            countryCode: 'AE',
-          },
-          adminEmail: form.adminEmail,
-          adminFullName: form.adminFullName,
-        },
-      }),
-    onSuccess: (result) => {
-      setError(null);
-      setInviteUrl(result.inviteUrl);
-      queryClient.invalidateQueries({ queryKey: ['partner-sub-tenants'] });
-      queryClient.invalidateQueries({ queryKey: ['partner-overview'] });
-    },
-    onError: (err) =>
-      setError(err instanceof ApiError ? err.message : 'That sub-tenant could not be created.'),
-  });
-
-  if (inviteUrl) {
-    return (
-      <Card title="Sub-tenant created">
-        <Alert kind="ok" title="Send this invitation to their administrator">
-          <p className="mt-2 break-all rounded bg-white/60 p-2 font-mono text-xs">{inviteUrl}</p>
-          <p className="mt-2 text-xs">
-            The sub-tenant starts in <strong>Pending</strong> and cannot file until the platform
-            activates their provider connection.
-          </p>
-        </Alert>
-        <div className="mt-4">
-          <Button onClick={onDone}>Done</Button>
-        </div>
-      </Card>
-    );
-  }
+/**
+ * Which of the two modes a client is in, and — for a custody client — whether
+ * anyone can actually work in it (§3).
+ *
+ * The staff count is on the same line as the mode rather than in a column of
+ * its own because it only means anything for one of the two, and a column that
+ * is empty on half the rows reads as missing data. Zero is called out: a
+ * custody client nobody is authorised for is an account whose filing has
+ * stopped, not a quiet one.
+ */
+function ModeCell({ tenant }: { tenant: SubTenantSummary }) {
+  const custody = tenant.provisioningMode === 'FULLY_MANAGED_CUSTODY';
 
   return (
-    <Card title="Onboard a sub-tenant">
-      {error && (
-        <div className="mb-4">
-          <Alert kind="danger">{error}</Alert>
+    <div>
+      <span
+        className={cx(
+          'inline-block rounded px-1.5 py-0.5 text-xs font-medium',
+          custody ? 'bg-violet-100 text-violet-800' : 'bg-slate-100 text-slate-600',
+        )}
+      >
+        {custody ? 'Custody' : 'Collaborative'}
+      </span>
+      {custody && (
+        <div
+          className={cx(
+            'mt-0.5 text-xs',
+            tenant.custodyStaffCount === 0 ? 'font-medium text-warn-700' : 'text-slate-500',
+          )}
+        >
+          {tenant.custodyStaffCount === 0
+            ? 'nobody authorised'
+            : `${tenant.custodyStaffCount} authorised`}
         </div>
       )}
-
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Field label="Company code" hint="Short identifier, used in batch references." required>
-          <input
-            className={inputClass}
-            value={form.companyCode}
-            onChange={(e) => setForm({ ...form, companyCode: e.target.value.toUpperCase() })}
-          />
-        </Field>
-
-        <Field label="TRN" hint="15 digits, starting with 1." required>
-          <input
-            className={`${inputClass} font-mono`}
-            maxLength={15}
-            value={form.trn}
-            onChange={(e) => setForm({ ...form, trn: e.target.value.replace(/\D/g, '') })}
-          />
-        </Field>
-
-        <Field label="Emirate" required>
-          <select
-            className={inputClass}
-            value={form.emirate}
-            onChange={(e) => setForm({ ...form, emirate: e.target.value })}
-          >
-            {EMIRATES.map((emirate) => (
-              <option key={emirate} value={emirate}>
-                {emirate}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        <Field label="Legal name (English)" required>
-          <input
-            className={inputClass}
-            value={form.legalNameEn}
-            onChange={(e) => setForm({ ...form, legalNameEn: e.target.value })}
-          />
-        </Field>
-
-        <Field label="Legal name (Arabic)" hint="Required on UAE tax invoices." required>
-          <input
-            className={`${inputClass} arabic`}
-            lang="ar"
-            value={form.legalNameAr}
-            onChange={(e) => setForm({ ...form, legalNameAr: e.target.value })}
-          />
-        </Field>
-
-        <Field label="Street address">
-          <input
-            className={inputClass}
-            value={form.street}
-            onChange={(e) => setForm({ ...form, street: e.target.value })}
-          />
-        </Field>
-
-        <Field label="Administrator name" hint="Invited as their company administrator." required>
-          <input
-            className={inputClass}
-            value={form.adminFullName}
-            onChange={(e) => setForm({ ...form, adminFullName: e.target.value })}
-          />
-        </Field>
-
-        <Field label="Administrator email" required>
-          <input
-            className={inputClass}
-            type="email"
-            value={form.adminEmail}
-            onChange={(e) => setForm({ ...form, adminEmail: e.target.value })}
-          />
-        </Field>
-      </div>
-
-      <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
-        <p className="text-xs text-slate-500">
-          Their invoices are metered against your master bundle once billing is switched on.
-        </p>
-        <Button
-          variant="primary"
-          onClick={() => create.mutate()}
-          disabled={
-            create.isPending ||
-            !form.companyCode ||
-            !form.legalNameEn ||
-            !form.legalNameAr ||
-            !form.adminEmail ||
-            !form.adminFullName ||
-            form.trn.length !== 15
-          }
-        >
-          {create.isPending ? 'Creating…' : 'Create sub-tenant'}
-        </Button>
-      </div>
-    </Card>
+    </div>
   );
 }
 
@@ -536,4 +541,3 @@ function AllocateSliceModal({
     </Modal>
   );
 }
-

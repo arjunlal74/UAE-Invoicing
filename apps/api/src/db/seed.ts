@@ -229,6 +229,47 @@ async function seed() {
       `;
     }
 
+    // --- The other kind of sub-tenant: one held in custody (§3) -------------
+    //
+    // Desert Logistics above is collaborative — it has its own administrator and
+    // its own CFO, and files for itself. This one has neither, by design: the
+    // partner's staff open its books and file for it. Both are seeded because
+    // the difference between them is the thing most easily got wrong, and a
+    // fixture with only the familiar half would let it go unnoticed.
+    const custodyClient = await tx<{ id: string }[]>`
+      INSERT INTO tenants (
+        tenant_type, parent_tenant_id, company_code, legal_name_en, legal_name_ar,
+        trn, is_vat_group, registered_address, status, provisioning_mode
+      ) VALUES (
+        'MANAGED_SUB_TENANT', ${partnerId}, 'GULFMARINE', 'Gulf Marine Services LLC',
+        'الخليج للخدمات البحرية ذ.م.م',
+        '100583920100004', FALSE,
+        ${jsonb(tx, {
+          street: 'Mina Zayed',
+          city: 'Abu Dhabi',
+          emirate: 'Abu Dhabi',
+          postalCode: '00000',
+          countryCode: 'AE',
+        })},
+        'ACTIVE', 'FULLY_MANAGED_CUSTODY'
+      )
+      RETURNING id
+    `;
+    const custodyClientId = custodyClient[0]!.id;
+
+    await tx`
+      INSERT INTO tenant_asp_configs (tenant_id, provider_type, display_name, status)
+      VALUES (${custodyClientId}, 'MOCK', 'Not yet selected', 'NOT_CONFIGURED')
+    `;
+
+    // Layla runs this client's books herself, as its company administrator —
+    // the authority is on the grant, not on her partner role.
+    await tx`
+      INSERT INTO partner_custody_grants (tenant_id, user_id, role, granted_by_user_id)
+      SELECT ${custodyClientId}, u.id, 'COMPANY_ADMIN', u.id
+      FROM users u WHERE u.email = 'partner@gulfadvisory.local'
+    `;
+
     // ======================================================================
     // SRS v2.7 — the two modules
     // ======================================================================
@@ -558,9 +599,13 @@ async function seed() {
   Gulf Advisory Partners — channel partner
     PARTNER ADMIN      partner@gulfadvisory.local
 
-  Desert Logistics — managed sub-tenant of Gulf Advisory, ACTIVE
+  Desert Logistics — managed sub-tenant of Gulf Advisory, COLLABORATIVE
     COMPANY ADMIN      admin@desertlog.local
     TAX APPROVER/CFO   cfo@desertlog.local
+
+  Gulf Marine Services — managed sub-tenant of Gulf Advisory, FULLY MANAGED CUSTODY
+    No logins of its own. Layla (partner@gulfadvisory.local) is authorised as
+    its Company Admin, so she can open its books from the partner console.
 
   Al-Bahar has 4 customers (AR), 1 supplier (AP) and a 10,000-document bundle;
   Gulf Tech has 5,000. Gulf Advisory holds a 100,000 master pool with a 5,000

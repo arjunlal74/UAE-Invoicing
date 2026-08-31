@@ -11,6 +11,7 @@ import {
   InvoiceDirection,
   InvoiceStatus,
   InvoiceTypeDb,
+  ProvisioningMode,
   RejectionReasonCode,
   ResponseStatusCode,
   ReversalMode,
@@ -67,6 +68,25 @@ export const SessionUser = z.object({
    * API refuses everything but signing out and setting a new password.
    */
   mustRotatePassword: z.boolean(),
+  /**
+   * Set when this is a channel partner's staff member working inside a custody
+   * client (§3). `tenantId` above is then the *client* — every screen, query and
+   * row-level policy correctly treats the session as belonging to the books
+   * being worked in — and this names the partner they actually come from, which
+   * is what the portal puts in the banner and what makes leaving possible.
+   *
+   * Null on every ordinary session, which is all of them until a partner opens
+   * one deliberately.
+   */
+  actingFor: z
+    .object({
+      partnerTenantId: uuid,
+      partnerName: z.string(),
+      /** Their own role at the partner, which the custody role replaced. */
+      homeRole: Role,
+    })
+    .nullable()
+    .default(null),
 });
 export type SessionUser = z.infer<typeof SessionUser>;
 
@@ -706,27 +726,108 @@ export const SubTenantSummary = z.object({
   trn: z.string().nullable(),
   status: TenantStatus,
   aspStatus: AspConnectionStatus,
+  /** §3: collaborative, or held in the partner's custody. */
+  provisioningMode: ProvisioningMode,
+  /** Members of the partner's staff currently authorised to act for a custody client. */
+  custodyStaffCount: z.number(),
   invoiceCount: z.number(),
   userCount: z.number(),
   createdAt: z.string(),
 });
 export type SubTenantSummary = z.infer<typeof SubTenantSummary>;
 
-export const CreateSubTenantRequest = z.object({
-  companyCode: z
-    .string()
-    .trim()
-    .min(2)
-    .max(50)
-    .regex(/^[A-Za-z0-9_-]+$/, 'Use letters, digits, hyphen and underscore only'),
-  legalNameEn: z.string().trim().min(1).max(255),
-  legalNameAr: z.string().trim().min(1).max(255),
-  trn,
-  registeredAddress: AddressSchema,
-  adminEmail: z.string().trim().toLowerCase().email(),
-  adminFullName: z.string().trim().min(1).max(200),
-});
+/**
+ * Onboarding a client under a channel partner (§3).
+ *
+ * The administrator fields are optional because a custody client has no
+ * administrator of its own — that is the whole difference between the two
+ * modes — and required in the collaborative mode, where an activation link
+ * with nobody to send it to would leave an account nobody can ever reach. The
+ * refinement below is what makes "optional" mean "optional in one mode" rather
+ * than "optional always", and it is enforced here so the API and the portal
+ * cannot drift on which fields a mode needs.
+ */
+export const CreateSubTenantRequest = z
+  .object({
+    companyCode: z
+      .string()
+      .trim()
+      .min(2)
+      .max(50)
+      .regex(/^[A-Za-z0-9_-]+$/, 'Use letters, digits, hyphen and underscore only'),
+    legalNameEn: z.string().trim().min(1).max(255),
+    legalNameAr: z.string().trim().min(1).max(255),
+    trn,
+    registeredAddress: AddressSchema,
+    provisioningMode: ProvisioningMode.default('COLLABORATIVE'),
+    adminEmail: z.string().trim().toLowerCase().email().optional(),
+    adminFullName: z.string().trim().min(1).max(200).optional(),
+  })
+  .refine(
+    (body) =>
+      body.provisioningMode === 'FULLY_MANAGED_CUSTODY' ||
+      (!!body.adminEmail && !!body.adminFullName),
+    {
+      message:
+        'A collaborative sub-tenant needs an administrator to invite. Choose fully managed custody if the client is not to have a login.',
+      path: ['adminEmail'],
+    },
+  );
 export type CreateSubTenantRequest = z.infer<typeof CreateSubTenantRequest>;
+
+/**
+ * Moving a client between the two modes (§3).
+ *
+ * Both directions are allowed and both are audited. Handing an account over
+ * needs somebody to hand it to, so the administrator fields are required going
+ * to collaborative unless the client already has an administrator from an
+ * earlier life — the API decides which of those is the case, not the caller.
+ */
+export const ChangeProvisioningModeRequest = z.object({
+  provisioningMode: ProvisioningMode,
+  adminEmail: z.string().trim().toLowerCase().email().optional(),
+  adminFullName: z.string().trim().min(1).max(200).optional(),
+});
+export type ChangeProvisioningModeRequest = z.infer<typeof ChangeProvisioningModeRequest>;
+
+/** A member of the channel partner's own staff, for the authorisation picker. */
+export const PartnerStaffMember = z.object({
+  id: uuid,
+  email: z.string(),
+  fullName: z.string(),
+  role: Role,
+  isActive: z.boolean(),
+  /** False until they accept their invitation; they cannot act for anyone yet. */
+  hasSignedIn: z.boolean(),
+});
+export type PartnerStaffMember = z.infer<typeof PartnerStaffMember>;
+
+/**
+ * One member of staff's authority inside one custody client.
+ *
+ * The role is the one they hold *in the client's books*, which is a different
+ * question from their role at the partner: an auditing firm puts juniors on
+ * preparation and keeps submission with a signatory, and that is the same
+ * distinction ACCOUNTANT and TAX_APPROVER_CFO already draw inside a tenant.
+ */
+export const CustodyGrant = z.object({
+  id: uuid,
+  tenantId: uuid,
+  userId: uuid,
+  userName: z.string(),
+  userEmail: z.string(),
+  role: Role,
+  grantedByName: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type CustodyGrant = z.infer<typeof CustodyGrant>;
+
+export const GrantCustodyAccessRequest = z.object({
+  userId: uuid,
+  /** Only the four roles that mean something inside a tenant's books. */
+  role: z.enum(['COMPANY_ADMIN', 'ACCOUNTANT', 'TAX_APPROVER_CFO', 'AUDITOR']),
+});
+export type GrantCustodyAccessRequest = z.infer<typeof GrantCustodyAccessRequest>;
 
 export const PartnerOverview = z.object({
   partnerName: z.string(),
@@ -736,6 +837,98 @@ export const PartnerOverview = z.object({
   acceptedInvoiceCount: z.number(),
 });
 export type PartnerOverview = z.infer<typeof PartnerOverview>;
+
+/**
+ * The channel partner's landing page.
+ *
+ * The platform operator's dashboard asked at the platform's scale; this one
+ * asks the same question — "is anything broken, and is anyone waiting on me?" —
+ * at a partner's, where the answer is bounded by its own book of clients. The
+ * shape deliberately mirrors AdminDashboardResponse so the two screens read
+ * alike, but a partner never sees another partner's clients and never sees an
+ * invoice: every figure here is a count over tenants it owns.
+ */
+export const PartnerDashboardResponse = z.object({
+  partnerName: z.string(),
+  subTenants: z.object({
+    total: z.number(),
+    byStatus: z.record(TenantStatus, z.number()),
+    /** §3: how many clients run themselves, and how many the partner holds. */
+    byMode: z.record(ProvisioningMode, z.number()),
+  }),
+  users: z.object({
+    total: z.number(),
+    active: z.number(),
+    /** Invited as a client's administrator and never signed in. */
+    pendingInvites: z.number(),
+  }),
+  /**
+   * What the book has filed, all time. Outbound only: a partner's roll-up is
+   * about what its clients sent to the FTA, which is also what draws down the
+   * master pool it bought.
+   */
+  invoices: z.object({
+    total: z.number(),
+    accepted: z.number(),
+    rejected: z.number(),
+    last30Days: z.number(),
+  }),
+  /**
+   * The master pool, as a partner has to think about it: what is left to
+   * *promise* a client is a different figure from what is left to *file*, and
+   * a partner can have allocated every unit it owns while barely any have been
+   * spent. Both are here because leaving one out answers the wrong question
+   * half the time.
+   */
+  inventory: z.object({
+    purchasedUnits: z.number(),
+    allocatedUnits: z.number(),
+    unallocatedUnits: z.number(),
+    consumedUnits: z.number(),
+    remainingUnits: z.number(),
+  }),
+  needsAttention: z.object({
+    subTenantsPendingActivation: z.number(),
+    aspNotConfigured: z.number(),
+    pendingInvites: z.number(),
+    /** Onboarded, but never given a slice — they cannot file at all. */
+    subTenantsWithoutUnits: z.number(),
+    /** Their slice has fallen under the floor the partner set on it. */
+    subTenantsBelowBuffer: z.number(),
+    /**
+     * §3: a client held in custody that nobody is authorised to work in. The
+     * partner is responsible for its filing and no member of staff can open it,
+     * which is a standstill rather than a slow month.
+     */
+    custodyWithoutStaff: z.number(),
+    rejectedByFta: z.number(),
+    stuckTransmissions: z.number(),
+    validationFailed: z.number(),
+    /** Every unit owned has been promised to a client. */
+    poolFullyAllocated: z.boolean(),
+  }),
+  topSubTenants: z.array(
+    z.object({
+      tenantId: uuid,
+      tenantName: z.string(),
+      status: TenantStatus,
+      invoices: z.number(),
+      accepted: z.number(),
+      rejected: z.number(),
+      valueAed: z.string(),
+    }),
+  ),
+  recentActivity: z.array(
+    z.object({
+      id: z.string(),
+      action: z.string(),
+      actorName: z.string().nullable(),
+      tenantName: z.string().nullable(),
+      createdAt: z.string(),
+    }),
+  ),
+});
+export type PartnerDashboardResponse = z.infer<typeof PartnerDashboardResponse>;
 
 // --- Dashboard --------------------------------------------------------------
 

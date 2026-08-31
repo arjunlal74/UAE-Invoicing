@@ -97,7 +97,50 @@ async function findUserByEmail(email: string): Promise<UserRow | null> {
   return rows[0] ?? null;
 }
 
-export function toSessionUser(row: UserRow): SessionUser {
+/**
+ * A channel partner's staff member working inside a custody client (SRS §3).
+ *
+ * Everything in here is read from the database at the moment the session is
+ * opened — the client, the live grant, the partner it hangs off — so a session
+ * can never be built from a tenant id and a role the caller supplied.
+ */
+export interface CustodyScope {
+  /** The client whose books are being worked in. Becomes the session's tenant. */
+  tenantId: string;
+  tenantName: string;
+  tenantStatus: string | null;
+  /** The authority the grant carries inside that client, not the person's own. */
+  role: Role;
+  /** The partner they belong to, which is where "leave" takes them back to. */
+  partnerTenantId: string;
+  partnerName: string;
+}
+
+export function toSessionUser(row: UserRow, custody?: CustodyScope): SessionUser {
+  // A custody session is presented as what it is: the tenant is the client, so
+  // every screen and every query scopes to the books being worked in, and the
+  // partner is named separately rather than substituted. Showing the partner as
+  // the tenant would put the wrong company's name above somebody else's
+  // invoices, which is the one mistake this feature must not make.
+  if (custody) {
+    return {
+      id: row.id,
+      email: row.email,
+      fullName: row.full_name,
+      role: custody.role,
+      tenantId: custody.tenantId,
+      tenantName: custody.tenantName,
+      tenantStatus: (custody.tenantStatus as SessionUser['tenantStatus']) ?? null,
+      mfaEnabled: row.mfa_enabled,
+      mustRotatePassword: row.must_rotate_password,
+      actingFor: {
+        partnerTenantId: custody.partnerTenantId,
+        partnerName: custody.partnerName,
+        homeRole: row.role,
+      },
+    };
+  }
+
   return {
     id: row.id,
     email: row.email,
@@ -108,6 +151,7 @@ export function toSessionUser(row: UserRow): SessionUser {
     tenantStatus: (row.tenant_status as SessionUser['tenantStatus']) ?? null,
     mfaEnabled: row.mfa_enabled,
     mustRotatePassword: row.must_rotate_password,
+    actingFor: null,
   };
 }
 
@@ -216,31 +260,127 @@ export async function login(
   return { kind: 'success', session };
 }
 
-async function issueSession(user: UserRow, context: { ip?: string; userAgent?: string }) {
+async function issueSession(
+  user: UserRow,
+  context: { ip?: string; userAgent?: string },
+  custody?: CustodyScope,
+) {
   const cfg = config();
   const accessToken = await signAccessToken({
     sub: user.id,
     email: user.email,
-    role: user.role,
-    tenantId: user.tenant_id,
+    role: custody?.role ?? user.role,
+    tenantId: custody?.tenantId ?? user.tenant_id,
     mustRotatePassword: user.must_rotate_password,
+    actingForTenantId: custody?.partnerTenantId ?? null,
   });
 
   const { token: refreshToken, hash } = generateToken(48);
   const expiresAt = new Date(Date.now() + cfg.JWT_REFRESH_TTL * 1000);
 
+  // The acting tenant is recorded on the refresh row, not only in the access
+  // token: without it the fifteen-minute expiry would hand back a partner
+  // session while the user was still apparently inside a client's books.
   await sql()`
-    INSERT INTO refresh_tokens (user_id, token_hash, expires_at, user_agent, ip_address)
+    INSERT INTO refresh_tokens (user_id, token_hash, expires_at, user_agent, ip_address,
+                                acting_tenant_id)
     VALUES (${user.id}, ${hash}, ${expiresAt}, ${context.userAgent ?? null},
-            ${context.ip ?? null}::inet)
+            ${context.ip ?? null}::inet, ${custody?.tenantId ?? null})
   `;
 
   return {
     accessToken,
     refreshToken,
     expiresIn: cfg.JWT_ACCESS_TTL,
-    user: toSessionUser(user),
+    user: toSessionUser(user, custody),
   };
+}
+
+/**
+ * Open a custody session. The caller has already established the grant.
+ *
+ * Exported rather than inlined in the route so that the one place that mints
+ * tokens stays the one place that mints tokens.
+ */
+export async function issueCustodySession(
+  userId: string,
+  custody: CustodyScope,
+  context: { ip?: string; userAgent?: string },
+) {
+  const user = await findUserById(userId);
+  if (!user || !user.is_active) throw unauthorized('This account is no longer active.');
+  return issueSession(user, context, custody);
+}
+
+/**
+ * The custody scope still standing behind a session, or null if there is none
+ * left and the user should fall back to their own.
+ *
+ * Re-read on every refresh and every identity check rather than trusted from
+ * the stored id: an authorisation withdrawn while somebody is working must stop
+ * working, and the longest they should keep it is the life of one access token.
+ * A revoked grant quietly returns them to their own session — they are still
+ * legitimately signed in as themselves, and dropping them at the login screen
+ * would be a harsher answer than the situation calls for.
+ */
+export async function liveCustodyScope(
+  userId: string,
+  actingTenantId: string,
+): Promise<CustodyScope | null> {
+  // Platform access, not a bare connection: `partner_custody_grants` is scoped
+  // by row-level security to the client it concerns, and this question is asked
+  // before any tenant has been established for the request — which is the whole
+  // point of asking it. On a bare connection the policy sees no current tenant,
+  // returns nothing, and the session quietly reverts to the partner's own.
+  const rows = await withPlatformAccess(
+    (tx) => tx<
+      {
+        role: Role;
+        tenant_name: string;
+        tenant_status: string;
+        partner_tenant_id: string;
+        partner_name: string;
+      }[]
+    >`
+      SELECT g.role, c.legal_name_en AS tenant_name, c.status::text AS tenant_status,
+             p.id AS partner_tenant_id, p.legal_name_en AS partner_name
+      FROM partner_custody_grants g
+      JOIN tenants c ON c.id = g.tenant_id
+      JOIN tenants p ON p.id = c.parent_tenant_id
+      WHERE g.tenant_id = ${actingTenantId}
+        AND g.user_id = ${userId}
+        AND g.revoked_at IS NULL
+        AND c.provisioning_mode = 'FULLY_MANAGED_CUSTODY'
+    `,
+  );
+
+  const row = rows[0];
+  if (!row) {
+    logger.info(
+      { userId, actingTenantId },
+      'custody session refreshed after the grant ended; returning the home session',
+    );
+    return null;
+  }
+
+  return {
+    tenantId: actingTenantId,
+    tenantName: row.tenant_name,
+    tenantStatus: row.tenant_status,
+    role: row.role,
+    partnerTenantId: row.partner_tenant_id,
+    partnerName: row.partner_name,
+  };
+}
+
+async function findUserById(userId: string): Promise<UserRow | null> {
+  const rows = await sql().unsafe<UserRow[]>(
+    `SELECT ${SESSION_USER_COLUMNS}
+     FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
+     WHERE u.id = $1`,
+    [userId],
+  );
+  return rows[0] ?? null;
 }
 
 /**
@@ -255,8 +395,16 @@ export async function refreshSession(
 ) {
   const hash = sha256Hex(refreshToken);
 
-  const rows = await sql()<{ id: string; user_id: string; expires_at: Date; revoked_at: Date | null }[]>`
-    SELECT id, user_id, expires_at, revoked_at
+  const rows = await sql()<
+    {
+      id: string;
+      user_id: string;
+      expires_at: Date;
+      revoked_at: Date | null;
+      acting_tenant_id: string | null;
+    }[]
+  >`
+    SELECT id, user_id, expires_at, revoked_at, acting_tenant_id
     FROM refresh_tokens
     WHERE token_hash = ${hash}
   `;
@@ -268,17 +416,16 @@ export async function refreshSession(
 
   await sql()`UPDATE refresh_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE id = ${stored.id}`;
 
-  const users = await sql().unsafe<UserRow[]>(
-    `SELECT ${SESSION_USER_COLUMNS}
-     FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
-     WHERE u.id = $1`,
-    [stored.user_id],
-  );
-
-  const user = users[0];
+  const user = await findUserById(stored.user_id);
   if (!user || !user.is_active) throw unauthorized('This account is no longer active.');
 
-  return issueSession(user, context);
+  // A custody session refreshes as a custody session, provided the grant is
+  // still live — see liveCustodyScope.
+  const custody = stored.acting_tenant_id
+    ? await liveCustodyScope(stored.user_id, stored.acting_tenant_id)
+    : null;
+
+  return issueSession(user, context, custody ?? undefined);
 }
 
 export async function revokeSession(refreshToken: string): Promise<void> {
