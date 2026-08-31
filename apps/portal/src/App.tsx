@@ -26,6 +26,7 @@ import { AdminTenantDetailPage } from './pages/admin/AdminTenantDetailPage';
 import { AdminTenantsPage } from './pages/admin/AdminTenantsPage';
 import { AdminTransmissionsPage } from './pages/admin/AdminTransmissionsPage';
 import { PartnerDashboardPage } from './pages/partner/PartnerDashboardPage';
+import { PartnerStaffPage } from './pages/partner/PartnerStaffPage';
 import { PartnerSubTenantsPage } from './pages/partner/PartnerSubTenantsPage';
 import { ApDisputesPage } from './pages/ap/ApDisputesPage';
 import { ApOverviewPage } from './pages/ap/ApOverviewPage';
@@ -312,6 +313,7 @@ export function App() {
         >
           <Route path="/partner" element={<PartnerDashboardPage />} />
           <Route path="/partner/sub-tenants" element={<PartnerSubTenantsPage />} />
+          <Route path="/partner/staff" element={<PartnerStaffPage />} />
           <Route path="/partner/inventory" element={<PartnerInventoryPage />} />
         </Route>
 

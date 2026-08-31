@@ -820,17 +820,50 @@ export const ChangeProvisioningModeRequest = z.object({
 });
 export type ChangeProvisioningModeRequest = z.infer<typeof ChangeProvisioningModeRequest>;
 
-/** A member of the channel partner's own staff, for the authorisation picker. */
+/**
+ * A member of the channel partner's own staff.
+ *
+ * One shape for the two places these people appear: the staff list the firm
+ * manages, and the picker that authorises them for a custody client. A second
+ * shape for the same rows would be a second thing to keep in step.
+ */
 export const PartnerStaffMember = z.object({
   id: uuid,
   email: z.string(),
   fullName: z.string(),
   role: Role,
+  /**
+   * False when the account is locked out. The same flag every other screen
+   * calls "deactivated": there is one switch on a login and this is it.
+   */
   isActive: z.boolean(),
   /** False until they accept their invitation; they cannot act for anyone yet. */
   hasSignedIn: z.boolean(),
+  mfaEnabled: z.boolean(),
+  lastLoginAt: z.string().nullable(),
+  createdAt: z.string(),
 });
 export type PartnerStaffMember = z.infer<typeof PartnerStaffMember>;
+
+export const CreatePartnerStaffRequest = z.object({
+  email: z.string().trim().toLowerCase().email(),
+  fullName: z.string().trim().min(1).max(200),
+});
+export type CreatePartnerStaffRequest = z.infer<typeof CreatePartnerStaffRequest>;
+
+/**
+ * What a partner may change about one of its own people.
+ *
+ * The address is editable only while the invitation is unaccepted, which the
+ * API enforces rather than the form: before they have signed in it is a typo to
+ * be fixed, and afterwards it is the credential they sign in with and the
+ * address every notification has gone to.
+ */
+export const UpdatePartnerStaffRequest = z.object({
+  fullName: z.string().trim().min(1).max(200).optional(),
+  email: z.string().trim().toLowerCase().email().optional(),
+});
+export type UpdatePartnerStaffRequest = z.infer<typeof UpdatePartnerStaffRequest>;
 
 /**
  * One member of staff's authority inside one custody client.

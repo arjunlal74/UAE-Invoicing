@@ -131,6 +131,7 @@ const PARTNER_NAV: NavItem[] = [
   // Exact matching, or every /partner/* route would light the dashboard up too.
   { to: '/partner', label: 'Dashboard', end: true },
   { to: '/partner/sub-tenants', label: 'Sub-tenants' },
+  { to: '/partner/staff', label: 'Staff' },
   { to: '/partner/inventory', label: 'Data inventory' },
 ];
 

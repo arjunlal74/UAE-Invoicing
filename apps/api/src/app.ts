@@ -28,6 +28,7 @@ import { registerMailRoutes } from './modules/mail/routes.js';
 import { registerPartnerCustodyRoutes } from './modules/partners/custody.js';
 import { registerPartnerDashboardRoutes } from './modules/partners/dashboard.js';
 import { registerPartnerRoutes } from './modules/partners/routes.js';
+import { registerPartnerStaffRoutes } from './modules/partners/staff.js';
 import { registerStagingRoutes } from './modules/staging/routes.js';
 import { registerTemplateRoutes } from './modules/templates/routes.js';
 import { registerTenantRoutes } from './modules/tenants/routes.js';
@@ -109,6 +110,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerPartnerRoutes(app);
   registerPartnerDashboardRoutes(app);
   registerPartnerCustodyRoutes(app);
+  registerPartnerStaffRoutes(app);
   registerDashboardRoutes(app);
 
   // SRS v2.7 — the two modules. Registered as a block so the split is visible

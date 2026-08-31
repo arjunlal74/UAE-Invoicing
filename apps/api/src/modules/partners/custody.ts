@@ -79,42 +79,6 @@ function assertCustody(client: SubTenantRecord): void {
 }
 
 export function registerPartnerCustodyRoutes(app: FastifyInstance) {
-  // --- The partner's own staff, for the authorisation picker ---------------
-  app.get('/api/v1/partner/staff', { preHandler: requirePartner() }, async (request, reply) => {
-    const ctx = requireContext(request);
-    const partnerId = partnerTenantId(ctx);
-
-    const rows = await withPlatformAccess(
-      (tx) => tx<
-        {
-          id: string;
-          email: string;
-          full_name: string;
-          role: Role;
-          is_active: boolean;
-          has_signed_in: boolean;
-        }[]
-      >`
-        SELECT id, email, full_name, role, is_active,
-               password_hash IS NOT NULL AS has_signed_in
-        FROM users
-        WHERE tenant_id = ${partnerId}
-        ORDER BY full_name
-      `,
-    );
-
-    const items: PartnerStaffMember[] = rows.map((row) => ({
-      id: row.id,
-      email: row.email,
-      fullName: row.full_name,
-      role: row.role,
-      isActive: row.is_active,
-      hasSignedIn: row.has_signed_in,
-    }));
-
-    return reply.send({ items, total: items.length, page: 1, pageSize: items.length });
-  });
-
   // --- A client's own users ------------------------------------------------
   //
   // Read by the dialog that moves a client into custody: taking an account over
@@ -139,15 +103,22 @@ export function registerPartnerCustodyRoutes(app: FastifyInstance) {
             role: Role;
             is_active: boolean;
             has_signed_in: boolean;
+            mfa_enabled: boolean;
+            last_login_at: Date | null;
+            created_at: Date;
           }[]
         >`
           SELECT id, email, full_name, role, is_active,
-                 password_hash IS NOT NULL AS has_signed_in
+                 password_hash IS NOT NULL AS has_signed_in,
+                 mfa_enabled, last_login_at, created_at
           FROM users WHERE tenant_id = ${id}
           ORDER BY full_name
         `,
       );
 
+      // The client's people, in the same shape as the partner's own: this list
+      // is read beside that one, and two shapes for "a person with a login"
+      // would be two things to keep in step.
       const items: PartnerStaffMember[] = rows.map((row) => ({
         id: row.id,
         email: row.email,
@@ -155,6 +126,9 @@ export function registerPartnerCustodyRoutes(app: FastifyInstance) {
         role: row.role,
         isActive: row.is_active,
         hasSignedIn: row.has_signed_in,
+        mfaEnabled: row.mfa_enabled,
+        lastLoginAt: row.last_login_at ? row.last_login_at.toISOString() : null,
+        createdAt: row.created_at.toISOString(),
       }));
 
       return reply.send({ items, total: items.length, page: 1, pageSize: items.length });
