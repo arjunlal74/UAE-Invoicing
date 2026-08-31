@@ -3,7 +3,7 @@ import { PROVISIONING_MODE_DESCRIPTIONS, PROVISIONING_MODE_LABELS } from '@uae/c
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { EMIRATES } from '@uae/domain';
 import { useState } from 'react';
-import { Alert, Button, Field, Modal, StatusBadge, formatDate, inputClass } from './ui';
+import { Alert, Button, Field, Modal, formatDate, inputClass, statusLabel } from './ui';
 import { ApiError, api } from '../lib/api';
 
 /**
@@ -150,52 +150,81 @@ export function SubTenantRecordModal({
               ))}
             </select>
           </Field>
+
+          <Field
+            label="Peppol participant id"
+            hint="This client's address on the network. Registered by the provider."
+          >
+            <input
+              className={`${inputClass} font-mono`}
+              disabled
+              value={subTenant.peppolParticipantId ?? '—'}
+            />
+          </Field>
+
+          {/* The rest of the record, in the same grid rather than a panel
+              underneath it. These are read here and set elsewhere — the mode
+              has its own dialog, the two statuses are the platform's to change
+              — but a fact you cannot edit is still a fact you came to read, and
+              splitting the two apart made the form look like it stopped at the
+              address. */}
+          <Field label="Provisioning" hint={PROVISIONING_MODE_DESCRIPTIONS[subTenant.provisioningMode]}>
+            <input
+              className={inputClass}
+              disabled
+              value={PROVISIONING_MODE_LABELS[subTenant.provisioningMode]}
+            />
+          </Field>
+
+          <Field
+            label={custody ? 'Authorised staff' : 'Their own users'}
+            hint={
+              custody
+                ? 'People at your firm who may act for this client.'
+                : 'Logins belonging to the client.'
+            }
+          >
+            <input
+              className={inputClass}
+              disabled
+              value={(custody ? subTenant.custodyStaffCount : subTenant.userCount).toLocaleString()}
+            />
+          </Field>
+
+          <Field label="Account">
+            <input
+              className={inputClass}
+              disabled
+              value={`${statusLabel(subTenant.status)}${
+                subTenant.isLocked ? ' · record locked' : ''
+              }`}
+            />
+          </Field>
+
+          <Field label="Provider connection">
+            <input className={inputClass} disabled value={statusLabel(subTenant.aspStatus)} />
+          </Field>
+
+          <Field label="Invoices filed">
+            <input
+              className={inputClass}
+              disabled
+              value={subTenant.invoiceCount.toLocaleString()}
+            />
+          </Field>
+
+          <Field label="Onboarded">
+            <input className={inputClass} disabled value={formatDate(subTenant.createdAt)} />
+          </Field>
         </div>
 
-        {/* The state of the account, which is read rather than set here: the
-            provisioning mode has its own dialog, and the two status badges are
-            the platform's to change. */}
-        <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-          <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
-            <div className="flex items-center justify-between gap-3">
-              <dt className="text-slate-500">Account</dt>
-              <dd>
-                <StatusBadge status={subTenant.status} />
-              </dd>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <dt className="text-slate-500">Provider connection</dt>
-              <dd>
-                <StatusBadge status={subTenant.aspStatus} />
-              </dd>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <dt className="text-slate-500">Provisioning</dt>
-              <dd className="font-medium text-slate-800">
-                {PROVISIONING_MODE_LABELS[subTenant.provisioningMode]}
-              </dd>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <dt className="text-slate-500">
-                {custody ? 'Authorised staff' : 'Their own users'}
-              </dt>
-              <dd className="tabular-nums text-slate-800">
-                {custody ? subTenant.custodyStaffCount : subTenant.userCount}
-              </dd>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <dt className="text-slate-500">Invoices filed</dt>
-              <dd className="tabular-nums text-slate-800">{subTenant.invoiceCount}</dd>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <dt className="text-slate-500">Onboarded</dt>
-              <dd className="text-slate-800">{formatDate(subTenant.createdAt)}</dd>
-            </div>
-          </dl>
-          <p className="mt-2 text-xs text-slate-500">
-            {PROVISIONING_MODE_DESCRIPTIONS[subTenant.provisioningMode]}
+        {!readOnly && (
+          <p className="text-xs text-slate-500">
+            The TRN and company code identify this client on every document already filed under
+            it, so they are not editable here. The provisioning mode has its own dialog, and the
+            two statuses are set by the platform.
           </p>
-        </div>
+        )}
 
         {subTenant.isLocked && (
           <Alert kind="warn" title="This record is locked by the platform">

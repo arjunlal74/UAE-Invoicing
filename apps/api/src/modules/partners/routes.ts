@@ -42,6 +42,7 @@ interface SubTenantRow {
   legal_name_ar: string | null;
   registered_address: SubTenantSummary['registeredAddress'];
   trn: string | null;
+  peppol_participant_id: string | null;
   status: SubTenantSummary['status'];
   is_locked: boolean;
   asp_status: SubTenantSummary['aspStatus'] | null;
@@ -60,6 +61,7 @@ function toSubTenant(row: SubTenantRow): SubTenantSummary {
     legalNameAr: row.legal_name_ar,
     registeredAddress: row.registered_address,
     trn: row.trn,
+    peppolParticipantId: row.peppol_participant_id,
     status: row.status,
     isLocked: row.is_locked,
     aspStatus: row.asp_status ?? 'NOT_CONFIGURED',
@@ -214,8 +216,8 @@ export function registerPartnerRoutes(app: FastifyInstance) {
       const rows = await withPlatformAccess(
         (tx) => tx<SubTenantRow[]>`
           SELECT t.id, t.company_code, t.legal_name_en, t.legal_name_ar, t.trn,
-                 t.registered_address, t.status, t.is_locked, t.created_at,
-                 t.provisioning_mode,
+                 t.peppol_participant_id, t.registered_address, t.status, t.is_locked,
+                 t.created_at, t.provisioning_mode,
                  c.status AS asp_status,
                  (SELECT count(*) FROM partner_custody_grants g
                    WHERE g.tenant_id = t.id AND g.revoked_at IS NULL) AS custody_staff_count,

@@ -69,6 +69,7 @@ const subTenants = {
         countryCode: 'AE',
       },
       trn: '100583920100003',
+      peppolParticipantId: '0235:100583920100003',
       status: 'ACTIVE',
       isLocked: false,
       aspStatus: 'ACTIVE',
@@ -91,6 +92,7 @@ const subTenants = {
         countryCode: 'AE',
       },
       trn: '100583920100004',
+      peppolParticipantId: null,
       status: 'ACTIVE',
       // Locked by the platform, so this row's edit must be refused on the row.
       isLocked: true,
@@ -235,5 +237,29 @@ describe('partner console', () => {
     expect(screen.getByDisplayValue('Desert Logistics LLC')).toBeDisabled();
     expect(screen.getByDisplayValue('100583920100003')).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull();
+
+    // Scoped to the dialog: the list behind it has a Provisioning column of
+    // its own, and an unscoped query would match the header just as happily.
+    const panel = within(dialog.closest('header')!.parentElement!);
+
+    // The whole record, not the four editable fields: a fact you cannot change
+    // is still a fact somebody opened the row to read.
+    for (const label of [
+      'Legal name (English)',
+      'Legal name (Arabic)',
+      'Company code',
+      'TRN',
+      'Street address',
+      'Emirate',
+      'Peppol participant id',
+      'Provisioning',
+      'Their own users',
+      'Account',
+      'Provider connection',
+      'Invoices filed',
+      'Onboarded',
+    ]) {
+      expect(panel.getByText(label)).toBeInTheDocument();
+    }
   });
 });

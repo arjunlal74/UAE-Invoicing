@@ -733,6 +733,8 @@ export const SubTenantSummary = z.object({
   legalNameAr: z.string().nullable(),
   registeredAddress: AddressSchema,
   trn: z.string().nullable(),
+  /** The client's address on the network, registered by the provider. */
+  peppolParticipantId: z.string().nullable(),
   status: TenantStatus,
   /** Locked by the platform: the record is frozen against edits, filing is not. */
   isLocked: z.boolean(),
