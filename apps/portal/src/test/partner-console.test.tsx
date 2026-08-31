@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -59,8 +60,17 @@ const subTenants = {
       id: 't1',
       companyCode: 'DESERTLOG',
       legalNameEn: 'Desert Logistics LLC',
+      legalNameAr: 'الصحراء للخدمات اللوجستية',
+      registeredAddress: {
+        street: 'Jebel Ali',
+        city: 'Dubai',
+        emirate: 'Dubai',
+        postalCode: '',
+        countryCode: 'AE',
+      },
       trn: '100583920100003',
       status: 'ACTIVE',
+      isLocked: false,
       aspStatus: 'ACTIVE',
       provisioningMode: 'COLLABORATIVE',
       custodyStaffCount: 0,
@@ -72,8 +82,18 @@ const subTenants = {
       id: 't2',
       companyCode: 'GULFMARINE',
       legalNameEn: 'Gulf Marine Services',
+      legalNameAr: 'الخليج للخدمات البحرية',
+      registeredAddress: {
+        street: 'Mina Zayed',
+        city: 'Abu Dhabi',
+        emirate: 'Abu Dhabi',
+        postalCode: '',
+        countryCode: 'AE',
+      },
       trn: '100583920100004',
       status: 'ACTIVE',
+      // Locked by the platform, so this row's edit must be refused on the row.
+      isLocked: true,
       aspStatus: 'ACTIVE',
       provisioningMode: 'FULLY_MANAGED_CUSTODY',
       custodyStaffCount: 0,
@@ -169,14 +189,51 @@ describe('partner console', () => {
 
     expect(within(custodyRow).getByText('Custody')).toBeInTheDocument();
     expect(within(custodyRow).getByRole('button', { name: 'Open books' })).toBeInTheDocument();
-    expect(within(custodyRow).getByRole('button', { name: 'Staff' })).toBeInTheDocument();
+    expect(
+      within(custodyRow).getByRole('button', { name: 'Authorised staff' }),
+    ).toBeInTheDocument();
     // Nobody authorised is called out on the row, not left to be inferred.
     expect(within(custodyRow).getByText('nobody authorised')).toBeInTheDocument();
 
     expect(within(collaborativeRow).getByText('Collaborative')).toBeInTheDocument();
     expect(within(collaborativeRow).queryByRole('button', { name: 'Open books' })).toBeNull();
-    expect(within(collaborativeRow).queryByRole('button', { name: 'Staff' })).toBeNull();
+    expect(within(collaborativeRow).queryByRole('button', { name: 'Authorised staff' })).toBeNull();
     // Both can move between modes.
-    expect(within(collaborativeRow).getByRole('button', { name: 'Mode' })).toBeInTheDocument();
+    expect(
+      within(collaborativeRow).getByRole('button', { name: 'Change provisioning mode' }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The actions are glyphs, so their accessible names are the only thing a
+   * screen reader or a keyboard user has to go on — and a locked record must
+   * refuse the edit on the row rather than at the server.
+   */
+  it('names every icon action, and refuses to edit a locked record', async () => {
+    mount(<PartnerSubTenantsPage />, '/partner/sub-tenants');
+
+    const row = (await screen.findByText('Desert Logistics LLC')).closest('tr')!;
+    expect(within(row).getByRole('button', { name: 'View' })).toBeEnabled();
+    expect(within(row).getByRole('button', { name: 'Edit' })).toBeEnabled();
+    expect(within(row).getByRole('button', { name: 'Allocate units' })).toBeInTheDocument();
+
+    const locked = screen.getByText('Gulf Marine Services').closest('tr')!;
+    expect(within(locked).getByRole('button', { name: 'View' })).toBeEnabled();
+    expect(within(locked).getByRole('button', { name: 'Edit' })).toBeDisabled();
+  });
+
+  it('opens a client record read-only from the view action', async () => {
+    const user = userEvent.setup();
+    mount(<PartnerSubTenantsPage />, '/partner/sub-tenants');
+
+    const row = (await screen.findByText('Desert Logistics LLC')).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: 'View' }));
+
+    const dialog = await screen.findByRole('heading', { name: 'Desert Logistics LLC' });
+    expect(dialog).toBeInTheDocument();
+    // Read-only: the names are shown, and none of them can be typed into.
+    expect(screen.getByDisplayValue('Desert Logistics LLC')).toBeDisabled();
+    expect(screen.getByDisplayValue('100583920100003')).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull();
   });
 });

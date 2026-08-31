@@ -210,6 +210,40 @@ const ICON_PATHS = {
       <path d="M3 3.2v3.4h3.4" />
     </>
   ),
+  // SRS §3 custody. An open ledger, for going into a client's books — not a
+  // door or an arrow, which would read as navigation rather than as entering
+  // somebody else's accounts.
+  books: (
+    <>
+      <path d="M10 6.1C8.5 5.1 6.6 4.7 4.6 4.8v9.4c2-.1 3.9.3 5.4 1.3 1.5-1 3.4-1.4 5.4-1.3V4.8c-2-.1-3.9.3-5.4 1.3Z" />
+      <path d="M10 6.1v9.4" />
+    </>
+  ),
+  // Who is authorised: two people, not one, because the question is always
+  // "which of my staff", never "this person".
+  staff: (
+    <>
+      <circle cx="7.8" cy="7.4" r="2.5" />
+      <path d="M3.5 15.8a4.4 4.4 0 0 1 8.6 0" />
+      <path d="M13.1 5.3a2.5 2.5 0 0 1 0 4.2" />
+      <path d="M14.2 11.8a4.4 4.4 0 0 1 2.7 4" />
+    </>
+  ),
+  // Two arrows passing: the account changes hands in one direction or the
+  // other, which is exactly what the provisioning modes do.
+  swap: (
+    <>
+      <path d="M3.4 7.6h11.2l-2.6-2.6" />
+      <path d="M16.6 12.4H5.4l2.6 2.6" />
+    </>
+  ),
+  // Units cut out of the master pool and given to a client.
+  allocate: (
+    <>
+      <circle cx="10" cy="10" r="7.2" />
+      <path d="M10 6.6v6.8M6.6 10h6.8" />
+    </>
+  ),
 } as const;
 
 export function Card({

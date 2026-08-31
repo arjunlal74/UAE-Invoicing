@@ -16,6 +16,7 @@ import {
   Card,
   EmptyState,
   Field,
+  Icon,
   Modal,
   PageHeader,
   Spinner,
@@ -27,6 +28,7 @@ import {
 import { CreateSubTenantModal } from '../../components/SubTenantFormModal';
 import { CustodyStaffModal } from '../../components/CustodyStaffModal';
 import { ProvisioningModeModal } from '../../components/ProvisioningModeModal';
+import { SubTenantRecordModal } from '../../components/SubTenantRecordModal';
 import { ApiError, api, queryString } from '../../lib/api';
 import { useAuthStore } from '../../stores/auth';
 
@@ -55,6 +57,8 @@ export function PartnerSubTenantsPage() {
   const modeFilter = params.get('mode') ?? '';
 
   const [creating, setCreating] = useState(false);
+  const [viewing, setViewing] = useState<SubTenantSummary | null>(null);
+  const [editing, setEditing] = useState<SubTenantSummary | null>(null);
   const [allocatingTo, setAllocatingTo] = useState<SubTenantSummary | null>(null);
   const [staffFor, setStaffFor] = useState<SubTenantSummary | null>(null);
   const [changingMode, setChangingMode] = useState<SubTenantSummary | null>(null);
@@ -265,29 +269,73 @@ export function PartnerSubTenantsPage() {
                   <td className="px-4 py-2 text-right tabular-nums">{tenant.invoiceCount}</td>
                   <td className="px-4 py-2 text-slate-500">{formatDate(tenant.createdAt)}</td>
                   <td className="px-4 py-2">
-                    <div className="flex justify-end gap-1.5">
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        size="sm"
+                        className={ACTION}
+                        label="View"
+                        onClick={() => setViewing(tenant)}
+                      >
+                        <Icon name="view" />
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        className={ACTION}
+                        label="Edit"
+                        disabled={tenant.isLocked}
+                        title={
+                          tenant.isLocked
+                            ? 'Locked by the platform. Ask them to unlock it to edit.'
+                            : 'Edit'
+                        }
+                        onClick={() => setEditing(tenant)}
+                      >
+                        <Icon name="edit" />
+                      </Button>
+
                       {/* Custody only: there are no books of somebody else's to
-                          open when the client runs its own account. */}
+                          open, and nobody to authorise, when the client runs its
+                          own account. */}
                       {tenant.provisioningMode === 'FULLY_MANAGED_CUSTODY' && (
                         <>
                           <Button
                             size="sm"
                             variant="primary"
+                            className={ACTION}
+                            label="Open books"
                             disabled={openCustody.isPending}
                             onClick={() => openCustody.mutate(tenant)}
                           >
-                            Open books
+                            <Icon name="books" />
                           </Button>
-                          <Button size="sm" onClick={() => setStaffFor(tenant)}>
-                            Staff
+                          <Button
+                            size="sm"
+                            className={ACTION}
+                            label="Authorised staff"
+                            onClick={() => setStaffFor(tenant)}
+                          >
+                            <Icon name="staff" />
                           </Button>
                         </>
                       )}
-                      <Button size="sm" onClick={() => setChangingMode(tenant)}>
-                        Mode
+
+                      <Button
+                        size="sm"
+                        className={ACTION}
+                        label="Change provisioning mode"
+                        onClick={() => setChangingMode(tenant)}
+                      >
+                        <Icon name="swap" />
                       </Button>
-                      <Button size="sm" onClick={() => setAllocatingTo(tenant)}>
-                        Allocate
+
+                      <Button
+                        size="sm"
+                        className={ACTION}
+                        label="Allocate units"
+                        onClick={() => setAllocatingTo(tenant)}
+                      >
+                        <Icon name="allocate" />
                       </Button>
                     </div>
                   </td>
@@ -299,6 +347,12 @@ export function PartnerSubTenantsPage() {
       </div>
 
       {creating && <CreateSubTenantModal onClose={() => setCreating(false)} />}
+      {viewing && (
+        <SubTenantRecordModal subTenant={viewing} readOnly onClose={() => setViewing(null)} />
+      )}
+      {editing && (
+        <SubTenantRecordModal subTenant={editing} onClose={() => setEditing(null)} />
+      )}
       {staffFor && (
         <CustodyStaffModal subTenant={staffFor} onClose={() => setStaffFor(null)} />
       )}
@@ -322,6 +376,17 @@ export function PartnerSubTenantsPage() {
     </div>
   );
 }
+
+/**
+ * Every verb the same width, so the column reads as a column.
+ *
+ * Icons rather than words, on the same reasoning as the platform's tenant list:
+ * a custody row carries six actions, and six labelled buttons took more of the
+ * row than the figures did. Each keeps its verb as an accessible name and a
+ * tooltip — a glyph is shorthand for someone who already knows what it means,
+ * never the only way to find out.
+ */
+const ACTION = 'w-9 justify-center';
 
 /**
  * Which of the two modes a client is in, and — for a custody client — whether

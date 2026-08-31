@@ -723,8 +723,19 @@ export const SubTenantSummary = z.object({
   id: uuid,
   companyCode: z.string(),
   legalNameEn: z.string(),
+  /**
+   * Carried on the row rather than fetched when a record is opened. A partner's
+   * book is a page of clients, not a directory of thousands, and the record
+   * dialog is opened from the row it describes — a second request to fill in
+   * two fields the list could have brought with it buys a spinner and nothing
+   * else.
+   */
+  legalNameAr: z.string().nullable(),
+  registeredAddress: AddressSchema,
   trn: z.string().nullable(),
   status: TenantStatus,
+  /** Locked by the platform: the record is frozen against edits, filing is not. */
+  isLocked: z.boolean(),
   aspStatus: AspConnectionStatus,
   /** §3: collaborative, or held in the partner's custody. */
   provisioningMode: ProvisioningMode,
@@ -774,6 +785,23 @@ export const CreateSubTenantRequest = z
     },
   );
 export type CreateSubTenantRequest = z.infer<typeof CreateSubTenantRequest>;
+
+/**
+ * What a channel partner may change on a client's record.
+ *
+ * The names and the address, and nothing else. The TRN and the company code
+ * identify this company to the tax authority and appear on every document
+ * already filed under it, so changing one is not an edit but a different
+ * company — the same reason the platform's own tenant form refuses them. The
+ * tier, the lock and the Peppol identifier are the platform's business, not a
+ * reseller's.
+ */
+export const UpdateSubTenantRequest = z.object({
+  legalNameEn: z.string().trim().min(1).max(255).optional(),
+  legalNameAr: z.string().trim().min(1).max(255).optional(),
+  registeredAddress: AddressSchema.optional(),
+});
+export type UpdateSubTenantRequest = z.infer<typeof UpdateSubTenantRequest>;
 
 /**
  * Moving a client between the two modes (§3).

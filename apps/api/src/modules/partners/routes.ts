@@ -1,5 +1,6 @@
 import {
   CreateSubTenantRequest,
+  UpdateSubTenantRequest,
   type PartnerOverview,
   type SubTenantSummary,
 } from '@uae/contracts';
@@ -38,8 +39,11 @@ interface SubTenantRow {
   id: string;
   company_code: string;
   legal_name_en: string;
+  legal_name_ar: string | null;
+  registered_address: SubTenantSummary['registeredAddress'];
   trn: string | null;
   status: SubTenantSummary['status'];
+  is_locked: boolean;
   asp_status: SubTenantSummary['aspStatus'] | null;
   provisioning_mode: SubTenantSummary['provisioningMode'];
   custody_staff_count: string;
@@ -53,8 +57,11 @@ function toSubTenant(row: SubTenantRow): SubTenantSummary {
     id: row.id,
     companyCode: row.company_code,
     legalNameEn: row.legal_name_en,
+    legalNameAr: row.legal_name_ar,
+    registeredAddress: row.registered_address,
     trn: row.trn,
     status: row.status,
+    isLocked: row.is_locked,
     aspStatus: row.asp_status ?? 'NOT_CONFIGURED',
     provisioningMode: row.provisioning_mode,
     custodyStaffCount: Number(row.custody_staff_count ?? 0),
@@ -206,7 +213,8 @@ export function registerPartnerRoutes(app: FastifyInstance) {
 
       const rows = await withPlatformAccess(
         (tx) => tx<SubTenantRow[]>`
-          SELECT t.id, t.company_code, t.legal_name_en, t.trn, t.status, t.created_at,
+          SELECT t.id, t.company_code, t.legal_name_en, t.legal_name_ar, t.trn,
+                 t.registered_address, t.status, t.is_locked, t.created_at,
                  t.provisioning_mode,
                  c.status AS asp_status,
                  (SELECT count(*) FROM partner_custody_grants g
@@ -373,6 +381,80 @@ export function registerPartnerRoutes(app: FastifyInstance) {
         emailed: mail.queued,
         emailMessage: mail.reason ?? null,
       });
+    },
+  );
+
+  // --- Correcting a client's record ----------------------------------------
+  //
+  // A partner keeps its clients' details up to date — a company renames itself,
+  // an office moves — without going through the platform for it. What it cannot
+  // touch is the TRN or the company code: those identify the company on every
+  // document already filed under it, so changing one is not a correction but a
+  // different company, and the contract does not carry them.
+  app.patch(
+    '/api/v1/partner/sub-tenants/:id',
+    { preHandler: requirePartner() },
+    async (request, reply) => {
+      const ctx = requireContext(request);
+      const partnerId = partnerTenantId(ctx);
+      const { id } = request.params as { id: string };
+      const body = UpdateSubTenantRequest.parse(request.body);
+
+      const changes = await withPlatformAccess(async (tx) => {
+        const rows = await tx<
+          {
+            legal_name_en: string;
+            legal_name_ar: string;
+            registered_address: unknown;
+            is_locked: boolean;
+          }[]
+        >`
+          SELECT legal_name_en, legal_name_ar, registered_address, is_locked
+          FROM tenants
+          WHERE id = ${id} AND parent_tenant_id = ${partnerId}
+        `;
+        const before = rows[0];
+        if (!before) throw notFound('Sub-tenant');
+
+        // The platform's lock freezes the record against everyone, including
+        // the partner that owns the client. A reseller cannot unlock it either
+        // — that is the point of a lock the platform put on.
+        if (before.is_locked) {
+          throw badRequest(
+            `${before.legal_name_en} is locked by the platform. Ask them to unlock it before editing.`,
+          );
+        }
+
+        await tx`
+          UPDATE tenants SET
+            legal_name_en      = ${body.legalNameEn ?? before.legal_name_en},
+            legal_name_ar      = ${body.legalNameAr ?? before.legal_name_ar},
+            registered_address = ${jsonb(tx, body.registeredAddress ?? before.registered_address)}
+          WHERE id = ${id}
+        `;
+
+        return {
+          legalNameEn:
+            body.legalNameEn && body.legalNameEn !== before.legal_name_en
+              ? { from: before.legal_name_en, to: body.legalNameEn }
+              : undefined,
+          legalNameAr:
+            body.legalNameAr && body.legalNameAr !== before.legal_name_ar
+              ? { from: before.legal_name_ar, to: body.legalNameAr }
+              : undefined,
+          registeredAddress: body.registeredAddress ?? undefined,
+        };
+      });
+
+      await audit(actorFromContext(ctx), {
+        action: 'TENANT_UPDATED',
+        resourceType: 'TENANT',
+        resourceId: id,
+        tenantId: id,
+        changes: { by: 'channel partner', ...changes },
+      });
+
+      return reply.status(204).send();
     },
   );
 
